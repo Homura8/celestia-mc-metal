@@ -218,6 +218,15 @@ public final class MetalNative {
         throw new IOException("Bundled native library missing: " + LIB_RESOURCE);
     }
 
+    /**
+     * Binds a symbol of libcelestiametal for a shader-suite module (e.g. {@code dev.celestia.metal.shade.light}). Modules keep
+     * their handles in their own {@code static final} fields so C2 can inline them.
+     */
+    public static MethodHandle shadeDowncall(String name, FunctionDescriptor desc) {
+        load();
+        return downcall(name, desc);
+    }
+
     private static MethodHandle downcall(String name, FunctionDescriptor desc) {
         MemorySegment sym = lookup.find(name).orElseThrow(() -> new UnsatisfiedLinkError("Missing symbol: " + name));
         return LINKER.downcallHandle(sym, desc);

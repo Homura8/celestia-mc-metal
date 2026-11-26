@@ -3,7 +3,7 @@
   "name": "Celestia Native",
   "author": "Celestia Metal Contributors",
   "version": "2.0.0",
-  "description": "Celestia’s built-in Metal shader suite with daylight and moonlight shadows, water, volumetric atmosphere, weather and filmic post-processing.",
+  "description": "Celestia’s built-in Metal shader suite with daylight and moonlight shadows, dynamic lights, water, volumetric atmosphere, weather and filmic post-processing.",
   "categories": [
     "Lighting & Shadows",
     "Sky & Atmosphere",
@@ -17,6 +17,7 @@
       "SHADOW_DISTANCE": "80",
       "SHADOW_FAR_INTERVAL": "8",
       "SSAO_ENABLED": "false",
+      "DYNAMIC_LIGHT_COUNT": "16",
       "WATER_SWELL": "0",
       "SSR_BUDGET": "16",
       "SSR_DISTANCE": "96",
@@ -31,6 +32,7 @@
       "SHADOW_RES": "3072",
       "SHADOW_DISTANCE": "160",
       "SHADOW_FAR_INTERVAL": "3",
+      "DYNAMIC_LIGHT_COUNT": "48",
       "SSR_BUDGET": "28",
       "SSR_DISTANCE": "176",
       "CLOUD_STEPS": "18",
@@ -41,6 +43,7 @@
       "SHADOW_RES": "4096",
       "SHADOW_DISTANCE": "192",
       "SHADOW_FAR_INTERVAL": "2",
+      "DYNAMIC_LIGHT_COUNT": "64",
       "SSR_BUDGET": "32",
       "SSR_DISTANCE": "224",
       "CLOUD_STEPS": "24",
@@ -130,6 +133,48 @@
       "min": 0.0,
       "max": 2.0,
       "step": 0.1
+    },
+    {
+      "id": "DYNAMIC_LIGHTS",
+      "label": "Dynamic Lights",
+      "description": "Held torches, glowing mobs, burning entities, dropped light sources and projectiles light their surroundings. Walls block the light.",
+      "category": "Lighting & Shadows",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "MEDIUM"
+    },
+    {
+      "id": "DYNAMIC_LIGHT_STRENGTH",
+      "label": "Dynamic Light Strength",
+      "description": "Adjusts how bright dynamic lights are.",
+      "category": "Lighting & Shadows",
+      "type": "FLOAT_SLIDER",
+      "default": "1.0",
+      "impact": "NEGLIGIBLE",
+      "min": 0.0,
+      "max": 2.0,
+      "step": 0.1
+    },
+    {
+      "id": "DYNAMIC_LIGHT_COUNT",
+      "label": "Dynamic Light Count",
+      "description": "Caps the number of lights per frame. The nearest and brightest lights are kept, and what you hold always comes first.",
+      "category": "Lighting & Shadows",
+      "type": "INT_SLIDER",
+      "default": "32",
+      "impact": "LOW",
+      "min": 8,
+      "max": 64,
+      "step": 8
+    },
+    {
+      "id": "DYNAMIC_LIGHT_ENTITIES",
+      "label": "Lights From Entities",
+      "description": "Light from other players, mobs, dropped items and projectiles. When off, only what you hold gives light.",
+      "category": "Lighting & Shadows",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "LOW"
     },
     {
       "id": "STARFIELD_ENABLED",

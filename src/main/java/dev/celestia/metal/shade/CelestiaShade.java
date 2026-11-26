@@ -21,6 +21,8 @@ import dev.celestia.metal.backend.CelestiaTextureView;
 import dev.celestia.metal.backend.MetalConst;
 import dev.celestia.metal.backend.MetalNative;
 import dev.celestia.metal.shade.atmosphere.ShadeAtmosphere;
+import dev.celestia.metal.shade.light.DynLightConfig;
+import dev.celestia.metal.shade.light.DynLights;
 import dev.celestia.metal.shade.shadow.ShadowPass;
 import dev.celestia.metal.shade.water.ShadeWater;
 import dev.celestia.metal.shader.pack.ShaderPipelineManager;
@@ -264,6 +266,7 @@ public final class CelestiaShade {
             MetalNative.shadeFullscreenPass(ctx, psoMw, milkyWayTex, MemorySegment.NULL, 0, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
             MetalNative.pipelineDestroy(ctx, psoMw);
             MetalNative.shadeSetResource(ctx, 0, milkyWayTex);
+            if (DynLights.ON) DynLights.ensureBindings(ctx);
 
             initialized = true;
             double ms = (System.nanoTime() - startNs) / 1_000_000.0;
@@ -461,6 +464,19 @@ public final class CelestiaShade {
             water.beginFrame(device.handle(), ringSlot, frame, level, x, y, z, settings.water(), settings.atmosphere().weather());
         } else {
             water.disableFrame(device.handle());
+        }
+
+        // Dynamic lights (P6a): gather + pack this frame's lights and encode the visibility / irradiance volumes on the
+        // frame's command buffer before any world pass draws (every dimension, like upstream).
+        if (DynLights.ON) {
+            ShadeSettings.Lights lights = settings.lights();
+            if (lights.dynamic() && lights.strength() > 0f) {
+                DynLightConfig.applyLive(lights.count(), DynLightConfig.RANGE, lights.strength() * DynLightConfig.STRENGTH,
+                    DynLightConfig.HAND, lights.entities() && DynLightConfig.OTHERS, DynLightConfig.FLICKER);
+                DynLights.frame(device.handle(), device.handle(), camera, level, partial);
+            } else {
+                DynLights.disable(device.handle());
+            }
         }
 
         worldMainColor = color;
@@ -677,14 +693,15 @@ public final class CelestiaShade {
             ? (settings.water().screenReflections() ? " | Water SSR" : " | Water") : "";
         String effects = waterMode
             + (atmosphere.hasClouds() ? " | Clouds" : "") + (atmosphere.hasVolume() ? " | Volumetrics" : "")
-            + (aoActive ? " | SSAO" : "");
+            + (aoActive ? " | SSAO" : "")
+            + (DynLights.activeCount() > 0 ? " | Lights " + DynLights.activeCount() : "");
         if (shadowPass.isActive()) {
             return String.format(java.util.Locale.ROOT,
-                "P5 HDR (%dx%d) | Shadows %d %s (%dk/%dk q)%s | ev x%.2f | elev %.0f deg",
+                "P6 HDR (%dx%d) | Shadows %d %s (%dk/%dk q)%s | ev x%.2f | elev %.0f deg",
                 hdrWidth, hdrHeight, shadowPass.resolution(), shadowPass.sourceName(),
                 shadowPass.lastNearQuads() / 1000, shadowPass.lastFarQuads() / 1000, effects, ex, look.elevation);
         }
-        return String.format(java.util.Locale.ROOT, "P5 HDR (%dx%d)%s | ev x%.2f | elev %.0f deg",
+        return String.format(java.util.Locale.ROOT, "P6 HDR (%dx%d)%s | ev x%.2f | elev %.0f deg",
             hdrWidth, hdrHeight, effects, ex, look.elevation);
     }
 
@@ -737,6 +754,7 @@ public final class CelestiaShade {
         long ctx = device.handle();
         shadowPass.close(ctx);
         water.close(ctx);
+        DynLights.close(ctx);
         atmosphere.close(ctx);
         if (ctx != 0L) {
             MetalNative.shadeSetEnabled(ctx, false);

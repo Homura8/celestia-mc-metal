@@ -18,7 +18,7 @@ Referenced / Credited Upstream Projects:
 - Reese's Sodium Options (FlashyReese/reeses-sodium-options) — MIT License
 - CelestiaGlow (Homura8/celestiaglow) — Design tokens & frosted observatory palette
 
-Celestia Metal's cloud and volumetric-light shaders include adaptations of
+Celestia Metal's cloud, volumetric-light and dynamic-light code includes adaptations of
 the upstream Metal Shaders modules listed below. The distribution includes
 the Photon MIT license at META-INF/LICENSES/MIT-Photon.txt.
 

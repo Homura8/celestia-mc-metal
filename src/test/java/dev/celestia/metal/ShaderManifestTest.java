@@ -29,7 +29,7 @@ class ShaderManifestTest {
 
         assertEquals(ShaderPackManifest.PackKind.WORLD_MSL, nativePack.kind);
         assertEquals(List.of("Performance", "Balanced", "Quality", "Ultra"), List.copyOf(nativePack.presets.keySet()));
-        assertEquals(34, nativePack.options.size());
+        assertEquals(38, nativePack.options.size());
         assertTrue(nativePack.passes.isEmpty());
     }
 
@@ -56,6 +56,10 @@ class ShaderManifestTest {
         assertEquals(16, applied.water().ssrBudget());
         assertFalse(applied.atmosphere().volumetrics());
         assertEquals(8, applied.atmosphere().cloudSteps());
+        assertTrue(applied.lights().dynamic());
+        assertEquals(16, applied.lights().count());
+        assertEquals(1f, applied.lights().strength());
+        assertTrue(applied.lights().entities());
 
         ShaderOptionState draft = state.copy();
         draft.applyPreset("Ultra");

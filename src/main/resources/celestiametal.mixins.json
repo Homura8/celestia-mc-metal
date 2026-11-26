@@ -7,6 +7,8 @@
     "PreferredGraphicsApiMixin",
     "DebugScreenEntriesMixin",
     "DebugScreenEntryListMixin",
+    "DynLightEntityRendererMixin",
+    "DynLightClientLevelMixin",
     "MinecraftMixin",
     "GuiMixin",
     "HudMixin",

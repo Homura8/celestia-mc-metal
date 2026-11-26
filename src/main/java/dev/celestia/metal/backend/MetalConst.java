@@ -10,7 +10,7 @@ import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
  * Numeric ABI constants matching {@code src/main/native/celestia_metal.h}.
  */
 public final class MetalConst {
-    public static final int ABI_VERSION = 7;
+    public static final int ABI_VERSION = 8;
 
     // Global shader-suite slot reservations (matches celestia_metal.h & shade_slots.metal)
     public static final int SHADE_BUF_FRAME = 24;
@@ -26,6 +26,10 @@ public final class MetalConst {
     public static final int SHADE_TEX_WATER_WAVES = 20;
     public static final int SHADE_TEX_WATER_PYR = 21;
     public static final int SHADE_TEX_WATER_DETAIL = 22;
+    public static final int SHADE_BUF_DYNLIGHTS = 29;
+    public static final int SHADE_TEX_DL_VIS = 23;
+    public static final int SHADE_TEX_DL_IRR = 24;
+    public static final int SHADE_TEX_DL_DIR = 25;
     public static final int SHADE_SAMP_SHADOW = 12;
     public static final int SHADE_SAMP_LINEAR = 13;
     public static final int SHADE_MAX_RES_TEX = 16;
