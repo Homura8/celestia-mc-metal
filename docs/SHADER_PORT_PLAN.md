@@ -176,6 +176,7 @@ Celestia's `MTL4ArgumentTableDescriptor` (`src/main/native/cm_device.m`) uses on
 | `ShadeResources` (`shade_look.metal`) | **128 B** (`16 x uint64_t`) | CPU per-frame ring (`RING = 5`); holds `MTLResourceID` of 16 textures | World FS, Sky, Celestial, Post, VL, Water | **`buffer(27)`** (`CM_SHADE_BUF_RESOURCES`) | P1 |
 | `ShadeWaterParams` / `Head` (`water.metal`) | `float4` block | CPU per-frame | Translucent terrain / water (`ShadeWaterHead` in opaque UW caustics) | **`buffer(28)`** (`CM_SHADE_BUF_WATER`) | P3 |
 | `ShadeDynLights` (`dynlight.metal`) | Dynamic ring | CPU per-frame ring | World VS/FS, Compute `shade_dl_irr` | **`buffer(29)`** (`CM_SHADE_BUF_DYNLIGHTS`) | P6 |
+| `ShadeColorLights` (`colorlight.metal`) | **80 B** (256 B ring slots) | CPU per-frame header ring; volumes `texture(26)` fine / `texture(27)` coarse | Terrain / water / entity FS, compute `shade_cl_flood` / `shade_cl_clear` | **`buffer(30)`** (`CM_SHADE_BUF_COLORLIGHT`) | P6b |
 
 ### 8.3 `ShadeResources` Argument Buffer Entries (`buffer(27)`)
 
@@ -245,3 +246,18 @@ P6a status (branch `feat/shader-port-p6a-alpha.21`, based on main after the P5 m
 - [ ] In-game check by the owner (vanilla + Sodium): held torch, blaze, dropped glowstone, burning mob, light behind walls.
 - [ ] Later (optimization pass): the water specular glint (`shadeDynamicLightsSpec`), entity vertex-stage lights
       (`DynLightMsl.patch`), visibility volume count per preset (startup switch today, 16).
+
+P6b status (branch `feat/shader-port-p6b-alpha.22`, stacked on P6a / PR #13):
+- [x] Coloured block light, the fragment-side redesign: upstream sampled `shadeColorLightAt` in own terrain's vertex stage
+      (vertex textures 33/34, vertex bytes 15). Here `shadeColorLightFrag` evaluates it per fragment from
+      `ShadeFrame.cameraBlock + cameraFract + p` (exact integer world block, no float drift far out) in terrain, water (above)
+      and entities (not the hand), bound at buffer 30 (header ring: Metal 4 has no `setBytes`) / textures 26-27.
+- [x] Native `cm_colorlight.m` (ABI 9): fine 256x128x256 + coarse 192x64x192 RGBA8 toroidal volumes, shared block-id buffer,
+      list ring, header ring, fallback; Metal 4 intra-encoder barriers between dependent flood dispatches.
+- [x] Java `ColorLights` on vanilla `PalettedContainer.forEachInPalette` / `getAll` (Sodium optional), fed by the same
+      block / section mixin as the dynamic lights; options `COLORED_LIGHTS`, `COLORED_LIGHT_STRENGTH`, `COLORED_LIGHT_GLOW`;
+      F3 `| Colour N` (slots spreading); idles outside the Overworld (vanilla shading there until the Nether / End looks).
+- [x] Native Test 2r (M4/M3): fallback, soul-fire spread blocked by a wall, strength 0; warm step ~0.2 ms / 8 sections.
+- [ ] In-game check by the owner: soul torches / lanterns (blue), redstone (red), copper (green), amethyst / portal (purple),
+      sea lanterns (cyan), with vanilla and Sodium; F3 `Colour` count settles to 0 away from coloured lights.
+- [ ] Next in P6b: Nether / End looks (upstream `SKYDIMS.md`), aurora, motion blur, labPBR.

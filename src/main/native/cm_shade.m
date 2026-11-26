@@ -145,6 +145,7 @@ void cm_shade_bind_render_encoder(CMContext *ctx, const int64_t *colorViewPtrs, 
         }
         cm_water_bind_render_encoder(ctx, colorViewPtrs, colorCount);
         cm_dynlight_bind_render_encoder(ctx);
+        cm_colorlight_bind_render_encoder(ctx);
     } else {
         id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)ctx.activeRenderEnc;
         if (fBuf) {
@@ -204,6 +205,7 @@ void cm_shade_bind_render_encoder(CMContext *ctx, const int64_t *colorViewPtrs, 
         }
         cm_water_bind_render_encoder(ctx, colorViewPtrs, colorCount);
         cm_dynlight_bind_render_encoder(ctx);
+        cm_colorlight_bind_render_encoder(ctx);
     }
 }
 

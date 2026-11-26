@@ -106,6 +106,8 @@ public final class ShadeShaderPatcher {
         if (hdr) sb.append("#define MCOPT_HDR 1\n");
         boolean dynLights = hdr && dev.celestia.metal.shade.light.DynLights.ON;
         if (dynLights) sb.append("#define SHADE_DYNLIGHT 1\n");
+        boolean colorLights = hdr && dev.celestia.metal.shade.light.ColorLights.ON;
+        if (colorLights) sb.append("#define SHADE_COLORLIGHT 1\n");
         if (hand) sb.append("#define MCOPT_HAND 1\n");
         if (extraDefines != null && !extraDefines.isEmpty()) {
             sb.append(extraDefines);
@@ -116,6 +118,7 @@ public final class ShadeShaderPatcher {
         sb.append(resource("shade_common.metal")).append('\n');
         sb.append(resource("shade_m2.metal")).append('\n');
         if (dynLights) sb.append(dev.celestia.metal.shade.light.DynLightMsl.module()).append('\n');
+        if (colorLights) sb.append(resource("colorlight.metal")).append('\n');
         if (includeVanillaUniforms) {
             sb.append(resource("vanilla_uniforms.metal")).append('\n');
         }
@@ -424,7 +427,7 @@ public final class ShadeShaderPatcher {
             + ", sampler celShadowCmp [[sampler(" + MetalConst.SHADE_SAMP_SHADOW + ")]]"
             + ", texture2d<half> celLut [[texture(" + MetalConst.SHADE_TEX_SKY_LUT + ")]]"
             + ", sampler celLutSmplr [[sampler(" + MetalConst.SHADE_SAMP_LINEAR + ")]]"
-            + dynLightParams();
+            + dynLightParams() + colorLightParams();
 
         String shadeCall;
         StringBuilder fs = new StringBuilder(texelCaptured.length() + (translucentWater ? 65536 : 4096));
@@ -456,7 +459,7 @@ public final class ShadeShaderPatcher {
                 + ", celTexel, in.mcoptColor, in.mcoptPos, in.mcoptLight, " + uvExpr + ", " + fragPosName
                 + ", " + chunkVis + ", " + fogExpr
                 + ", celLut, celLutSmplr, celShadow, celShadowCmp, celSF, celSL, celSG, celSR"
-                + ", celSceneCopy, celDepthCopy, celWP, celWaterWaves, celWaterCoarse, celWaterDetail CEL_DL_ARGS);\n";
+                + ", celSceneCopy, celDepthCopy, celWP, celWaterWaves, celWaterCoarse, celWaterDetail CEL_DL_ARGS CEL_CL_ARGS);\n";
 
             String defines = waterDefines() + "#define SHADE_WEATHER 1\n#define SHADE_RIPPLES 1\n#define SHADE_RIPPLE_LAYERS 1\n";
             if (aboveWater) defines += "#define SHADE_LEAN_ABOVE 1\n";
@@ -468,7 +471,7 @@ public final class ShadeShaderPatcher {
             shadeCall = "    out." + colorMember + " = shadeTerrainShade(out." + colorMember
                 + ", celTexel, in.mcoptColor, in.mcoptPos, in.mcoptLight, " + chunkVis + ", "
                 + (isCutout ? "true" : "false") + ", " + fogExpr
-                + ", celLut, celLutSmplr, celShadow, celShadowCmp, celSF, celSL, celSG, celSR CEL_DL_ARGS);\n";
+                + ", celLut, celLutSmplr, celShadow, celShadowCmp, celSF, celSL, celSG, celSR CEL_DL_ARGS CEL_CL_ARGS);\n";
 
             fs.append(prelude(true, false, null, false));
             fs.append(resource("weather_surface.metal")).append('\n');
@@ -492,6 +495,14 @@ public final class ShadeShaderPatcher {
         return ", constant ShadeDynLights& celDL [[buffer(" + MetalConst.SHADE_BUF_DYNLIGHTS + ")]]"
             + ", texture3d<half> celDlIrr [[texture(" + MetalConst.SHADE_TEX_DL_IRR + ")]]"
             + ", texture3d<half> celDlDir [[texture(" + MetalConst.SHADE_TEX_DL_DIR + ")]]";
+    }
+
+    /** Fragment-main parameters for the coloured block light (buffer 30, textures 26/27), or "" with the module off. */
+    static String colorLightParams() {
+        if (!dev.celestia.metal.shade.light.ColorLights.ON) return "";
+        return ", constant ShadeColorLights& celCL [[buffer(" + MetalConst.SHADE_BUF_COLORLIGHT + ")]]"
+            + ", texture3d<float> celClFine [[texture(" + MetalConst.SHADE_TEX_CL_FINE + ")]]"
+            + ", texture3d<float> celClCoarse [[texture(" + MetalConst.SHADE_TEX_CL_COARSE + ")]]";
     }
 
     private static String captureTerrainTexel(String fsMsl, int sig, int close, int ret, boolean sodium) {
@@ -586,7 +597,7 @@ public final class ShadeShaderPatcher {
             .append(", texture2d<half> celLut [[texture(").append(MetalConst.SHADE_TEX_SKY_LUT).append(")]]")
             .append(", sampler celLutSmplr [[sampler(").append(MetalConst.SHADE_SAMP_LINEAR).append(")]]")
             .append(", float4 celFrag [[position]]")
-            .append(dynLightParams());
+            .append(dynLightParams()).append(colorLightParams());
         if ("celFront".equals(front)) {
             params.append(", bool celFront [[front_facing]]");
         }
@@ -601,7 +612,7 @@ public final class ShadeShaderPatcher {
         String shade = "    out." + member + " = shadeEntityShade(out." + member
             + ", Sampler0.sample(Sampler0Smplr, in.texCoord0) * in.mcoptColor * " + modulator + ", "
             + overlay + ", in.mcoptPos, in.mcoptNrm, in.mcoptLight, " + front + ", celFrag, " + kind + ", " + fogV
-            + ", celLut, celLutSmplr, celShadow, celShadowCmp, celSF, celSL, celSG, celSR CEL_DL_ARGS);\n";
+            + ", celLut, celLutSmplr, celShadow, celShadowCmp, celSF, celSL, celSG, celSR CEL_DL_ARGS CEL_CL_ARGS);\n";
 
         Matcher inFsM = STRUCT_MAIN0_IN.matcher(fsMsl);
         if (!inFsM.find()) return null;

@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 
-#define CM_ABI_VERSION 8
+#define CM_ABI_VERSION 9
 #define CM_MAX_COLOR_ATTACHMENTS 8
 #define CM_MAX_VERTEX_BUFFERS 8
 #define CM_MAX_UNIFORM_BUFFERS 15
@@ -29,6 +29,7 @@
 #define CM_SHADE_BUF_RESOURCES 27
 #define CM_SHADE_BUF_WATER     28
 #define CM_SHADE_BUF_DYNLIGHTS 29
+#define CM_SHADE_BUF_COLORLIGHT 30
 #define CM_SHADE_TEX_SHADOW       16
 #define CM_SHADE_TEX_SKY_LUT      17
 #define CM_SHADE_TEX_WATER_SCENE  18
@@ -39,6 +40,8 @@
 #define CM_SHADE_TEX_DL_VIS       23
 #define CM_SHADE_TEX_DL_IRR       24
 #define CM_SHADE_TEX_DL_DIR       25
+#define CM_SHADE_TEX_CL_FINE      26
+#define CM_SHADE_TEX_CL_COARSE    27
 #define CM_SHADE_SAMP_SHADOW      12
 #define CM_SHADE_SAMP_LINEAR      13
 #define CM_SHADE_MAX_RES_TEX      16
@@ -372,6 +375,8 @@ __attribute__((objc_direct_members))
 // Dynamic lights (P6a, cm_dynlight.m): active module state and the zeroed fallback bound when it is off.
 @property (nonatomic, strong) id dynLightState;
 @property (nonatomic, strong) id dynLightFallback;
+@property (nonatomic, strong) id colorLightState;
+@property (nonatomic, strong) id colorLightFallback;
 @property (nonatomic, strong) id shadeLinearSampler;
 @property (nonatomic, strong) id shadeShadowSampler;
 // Native sun/moon shadow pass state (P2+, cm_shadow.m)
@@ -429,6 +434,7 @@ MTLGPUAddress cm_m4_push_ring_alloc(CMContext *ctx, const void *data, NSUInteger
 void cm_shade_bind_render_encoder(CMContext *ctx, const int64_t *colorViewPtrs, int32_t colorCount);
 void cm_water_bind_render_encoder(CMContext *ctx, const int64_t *colorViewPtrs, int32_t colorCount);
 void cm_dynlight_bind_render_encoder(CMContext *ctx);
+void cm_colorlight_bind_render_encoder(CMContext *ctx);
 // Waits for submit `serial`; the blocked time is accounted to *waitUs (may be NULL). timeoutNs == 0 only polls.
 int32_t cm_wait_submit_accounted(CMContext *ctx, uint64_t serial, uint64_t timeoutNs, _Atomic int64_t *waitUs);
 NSUInteger cm_bytes_per_pixel(MTLPixelFormat fmt);
@@ -649,6 +655,16 @@ void cm_dl_slot(int64_t statePtr, int32_t slot);
 int32_t cm_dl_has_flood(int64_t statePtr);
 void cm_dl_vis(int64_t ctxPtr, int64_t statePtr, const void *params, int32_t length, int32_t volumes);
 void cm_dl_irr(int64_t ctxPtr, int64_t statePtr, int32_t x0, int32_t y0, int32_t z0, int32_t w, int32_t h, int32_t d);
+
+// P6b coloured block light (cm_colorlight.m; shaders/ported/colorlight.metal): buffer 30 header, textures 26 / 27 volumes.
+int64_t cm_cl_new(int64_t ctxPtr, const char *source, int32_t fw, int32_t fh, int32_t fd, int32_t cw, int32_t ch, int32_t cd,
+                  int64_t cells, int32_t listCap, int32_t ring, char *err, int32_t errCap);
+void cm_cl_free(int64_t ctxPtr, int64_t statePtr);
+int32_t cm_cl_fallback(int64_t ctxPtr);
+int64_t cm_cl_ids(int64_t statePtr);
+int64_t cm_cl_list(int64_t statePtr, int32_t slot);
+void cm_cl_header(int64_t statePtr, int32_t slot, const void *bytes);
+void cm_cl_frame(int64_t ctxPtr, int64_t statePtr, int32_t slot, int32_t clears, int32_t fine, int32_t coarse, int32_t fineSteps);
 
 #ifdef __cplusplus
 }

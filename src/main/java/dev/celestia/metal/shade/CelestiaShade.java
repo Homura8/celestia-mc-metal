@@ -21,6 +21,7 @@ import dev.celestia.metal.backend.CelestiaTextureView;
 import dev.celestia.metal.backend.MetalConst;
 import dev.celestia.metal.backend.MetalNative;
 import dev.celestia.metal.shade.atmosphere.ShadeAtmosphere;
+import dev.celestia.metal.shade.light.ColorLights;
 import dev.celestia.metal.shade.light.DynLightConfig;
 import dev.celestia.metal.shade.light.DynLights;
 import dev.celestia.metal.shade.shadow.ShadowPass;
@@ -267,6 +268,7 @@ public final class CelestiaShade {
             MetalNative.pipelineDestroy(ctx, psoMw);
             MetalNative.shadeSetResource(ctx, 0, milkyWayTex);
             if (DynLights.ON) DynLights.ensureBindings(ctx);
+            if (ColorLights.ON) ColorLights.fallback(ctx);
 
             initialized = true;
             double ms = (System.nanoTime() - startNs) / 1_000_000.0;
@@ -476,6 +478,17 @@ public final class CelestiaShade {
                 DynLights.frame(device.handle(), device.handle(), camera, level, partial);
             } else {
                 DynLights.disable(device.handle());
+            }
+        }
+        if (ColorLights.ON) {
+            ShadeSettings.Lights lights = settings.lights();
+            if (lights.colored() && lights.coloredStrength() > 0f) {
+                // Coloured block light (P6b): reads + spread before the world passes. Only the Overworld terrain shading reads
+                // it today (the Nether / End keep vanilla shading), so elsewhere the module idles with an "off" header.
+                ColorLights.applyLive(frame.dimension == ShadeFrame.DIM_OVERWORLD, lights.coloredStrength(), lights.coloredGlow());
+                ColorLights.frame(device.handle(), level, camera.pos.x, camera.pos.y, camera.pos.z);
+            } else {
+                ColorLights.disable(device.handle());
             }
         }
 
@@ -694,7 +707,8 @@ public final class CelestiaShade {
         String effects = waterMode
             + (atmosphere.hasClouds() ? " | Clouds" : "") + (atmosphere.hasVolume() ? " | Volumetrics" : "")
             + (aoActive ? " | SSAO" : "")
-            + (DynLights.activeCount() > 0 ? " | Lights " + DynLights.activeCount() : "");
+            + (DynLights.activeCount() > 0 ? " | Lights " + DynLights.activeCount() : "")
+            + (ColorLights.activeSlots() > 0 ? " | Colour " + ColorLights.activeSlots() : "");
         if (shadowPass.isActive()) {
             return String.format(java.util.Locale.ROOT,
                 "P6 HDR (%dx%d) | Shadows %d %s (%dk/%dk q)%s | ev x%.2f | elev %.0f deg",
@@ -755,6 +769,7 @@ public final class CelestiaShade {
         shadowPass.close(ctx);
         water.close(ctx);
         DynLights.close(ctx);
+        ColorLights.close(ctx);
         atmosphere.close(ctx);
         if (ctx != 0L) {
             MetalNative.shadeSetEnabled(ctx, false);

@@ -177,6 +177,39 @@
       "impact": "LOW"
     },
     {
+      "id": "COLORED_LIGHTS",
+      "label": "Coloured Block Lights",
+      "description": "Placed lights tint their surroundings in their own colour: soul fire blue, redstone red, copper green, amethyst and portals purple, sea lanterns cyan.",
+      "category": "Lighting & Shadows",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "LOW"
+    },
+    {
+      "id": "COLORED_LIGHT_STRENGTH",
+      "label": "Coloured Light Strength",
+      "description": "How strongly placed lights take on their colour. At 0 the block light stays the colour of a torch.",
+      "category": "Lighting & Shadows",
+      "type": "FLOAT_SLIDER",
+      "default": "1.0",
+      "impact": "NEGLIGIBLE",
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.1
+    },
+    {
+      "id": "COLORED_LIGHT_GLOW",
+      "label": "Coloured Light Glow",
+      "description": "Extra reach for dim coloured lights such as redstone torches and amethyst, so their colour shows.",
+      "category": "Lighting & Shadows",
+      "type": "FLOAT_SLIDER",
+      "default": "1.0",
+      "impact": "NEGLIGIBLE",
+      "min": 0.0,
+      "max": 3.0,
+      "step": 0.25
+    },
+    {
       "id": "STARFIELD_ENABLED",
       "label": "Procedural Stars",
       "description": "Draws the procedural starfield and Milky Way.",
