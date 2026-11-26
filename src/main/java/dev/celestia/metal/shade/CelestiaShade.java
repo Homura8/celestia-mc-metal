@@ -20,6 +20,7 @@ import dev.celestia.metal.backend.CelestiaTexture;
 import dev.celestia.metal.backend.CelestiaTextureView;
 import dev.celestia.metal.backend.MetalConst;
 import dev.celestia.metal.backend.MetalNative;
+import dev.celestia.metal.shade.atmosphere.ShadeAtmosphere;
 import dev.celestia.metal.shade.shadow.ShadowPass;
 import dev.celestia.metal.shade.water.ShadeWater;
 import dev.celestia.metal.shader.pack.ShaderPipelineManager;
@@ -62,6 +63,7 @@ public final class CelestiaShade {
     private static final int MILKY_WAY_W = 1024, MILKY_WAY_H = 512;
     private static final int BLOOM_LEVELS = 6;
     private static final int BLOOM_FORMAT = MetalConst.FMT_RG11B10_FLOAT;
+    private static final boolean SSAO = !"false".equalsIgnoreCase(System.getProperty("celestiametal.shade.ssao"));
 
     private static final float[] MOON_BRIGHTNESS = {1f, 0.75f, 0.5f, 0.25f, 0f, 0.25f, 0.5f, 0.75f};
 
@@ -72,9 +74,11 @@ public final class CelestiaShade {
     private final ShadeLook look = new ShadeLook();
     private final ShadowPass shadowPass = new ShadowPass();
     private final ShadeWater water = new ShadeWater();
+    private final ShadeAtmosphere atmosphere = new ShadeAtmosphere();
 
     private final Matrix4f pendingProjection = new Matrix4f();
     private boolean projectionSet;
+    private float pendingJitterX, pendingJitterY;
     private final Matrix4f previousViewProj = new Matrix4f();
     private double prevCamX, prevCamY, prevCamZ;
     private boolean hasPrevious;
@@ -100,6 +104,10 @@ public final class CelestiaShade {
     private long lutLib, lutVsFn, lutFsFn, psoSkyLut;
     private long postLib, fsVsFn, bloomDown0Fn, bloomDownFn, bloomUpFn, finalFn, histFn, expFn, milkyWayFn;
     private long psoBloomDown0, psoBloomDown, psoBloomUp, psoFinalRgba8, psoFinalBgra8, psoHist, psoExp;
+
+    private long psoAo, aoTexture;
+    private int aoW, aoH;
+    private boolean aoActive;
 
     private long hdrWorldTex;
     private long hdrWorldView;
@@ -152,10 +160,12 @@ public final class CelestiaShade {
     }
 
     /** Called inside {@code GameRendererMixin} during {@code renderLevel} before world draws start. */
-    public static void recordProjection(Matrix4fc proj) {
+    public static void recordProjection(Matrix4fc proj, float jitterX, float jitterY) {
         CelestiaShade s = activeInstance;
         if (s == null || !isEnabled()) return;
         s.pendingProjection.set(proj);
+        s.pendingJitterX = jitterX;
+        s.pendingJitterY = jitterY;
         s.projectionSet = true;
     }
 
@@ -227,6 +237,16 @@ public final class CelestiaShade {
             psoBloomUp = createFullscreenPso(ctx, fsVsFn, bloomUpFn, BLOOM_FORMAT, "CelestiaShade.BloomUp", err);
             psoFinalRgba8 = createFullscreenPso(ctx, fsVsFn, finalFn, MetalConst.FMT_RGBA8_UNORM, "CelestiaShade.FinalRGBA8", err);
             psoFinalBgra8 = createFullscreenPso(ctx, fsVsFn, finalFn, MetalConst.FMT_BGRA8_UNORM, "CelestiaShade.FinalBGRA8", err);
+            if (SSAO) {
+                long aoFn = MetalNative.compileFunction(postLib, "shade_ambient_occlusion", false, 0, 0, err);
+                try {
+                    psoAo = createFullscreenPso(ctx, fsVsFn, aoFn, MetalConst.FMT_RG16_FLOAT, "CelestiaShade.SSAO", err);
+                } catch (RuntimeException e) {
+                    LOGGER.warn("CelestiaShade SSAO pipeline unavailable", e);
+                } finally {
+                    if (aoFn != 0L) MetalNative.functionDestroy(aoFn);
+                }
+            }
             psoHist = MetalNative.computePipelineCreate(ctx, histFn, "CelestiaShade.Histogram", err);
             psoExp = MetalNative.computePipelineCreate(ctx, expFn, "CelestiaShade.Exposure", err);
             long psoMw = createFullscreenPso(ctx, fsVsFn, milkyWayFn, MetalConst.FMT_RGBA16_FLOAT, "CelestiaShade.MilkyWayBake", err);
@@ -313,6 +333,10 @@ public final class CelestiaShade {
 
         frame.view.set(camera.viewRotationMatrix);
         frame.proj.set(projectionSet ? pendingProjection : camera.projectionMatrix);
+        frame.prevJitterX = frame.jitterX;
+        frame.prevJitterY = frame.jitterY;
+        frame.jitterX = projectionSet ? pendingJitterX : 0f;
+        frame.jitterY = projectionSet ? pendingJitterY : 0f;
         projectionSet = false;
         frame.proj.mul(frame.view, frame.viewProj);
         frame.viewProj.invert(frame.invViewProj);
@@ -328,7 +352,6 @@ public final class CelestiaShade {
         hasPrevious = true;
         frame.cameraX = x; frame.cameraY = y; frame.cameraZ = z;
         frame.width = w; frame.height = h;
-        frame.jitterX = frame.jitterY = frame.prevJitterX = frame.prevJitterY = 0f;
         frame.mipScale = 1f;
         frame.renderScale = 1f;
 
@@ -407,6 +430,8 @@ public final class CelestiaShade {
         }
         look.setHasPrevScene(hasPrevHdrWorld && prevHdrWorldTex != 0L);
         look.update(frame, moonPhaseIndex, (float) clampedDt);
+        atmosphere.prepare(device.handle(), level, camera, frame, look, mc.options.getCloudStatus(), state.cloudHeight,
+            (float) clampedDt, w, h);
 
         ringSlot = (ringSlot + 1) % RING_SLOTS;
         ByteBuffer slotBb = ringSeg.asSlice((long) ringSlot * RING_SLOT_STRIDE, RING_SLOT_STRIDE)
@@ -420,6 +445,8 @@ public final class CelestiaShade {
         // Bake per-frame sky-view LUT before sky and terrain passes draw.
         MetalNative.shadeFullscreenPass(device.handle(), psoSkyLut, skyLutTex,
             MemorySegment.NULL, 0, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
+
+        atmosphere.renderClouds(device.handle(), frameCounter, texArgSeg);
 
         if (frame.dimension == ShadeFrame.DIM_OVERWORLD) {
             water.beginFrame(device.handle(), ringSlot, frame, level, x, y, z);
@@ -440,9 +467,12 @@ public final class CelestiaShade {
     }
 
     /** Captures opaque HDR color + depth and builds the SSR depth pyramid before translucent terrain draws. */
-    public void onTranslucentTerrainBind() {
-        if (!isWorldRedirectActive() || frame.dimension != ShadeFrame.DIM_OVERWORLD) return;
-        water.captureIfNeeded(device.handle());
+    public ShadeShaderPatcher.Variant onTranslucentTerrainBind() {
+        if (isWorldRedirectActive() && frame.dimension == ShadeFrame.DIM_OVERWORLD) {
+            water.captureIfNeeded(device.handle());
+            if (!frame.underwater) return ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE;
+        }
+        return ShadeShaderPatcher.Variant.HDR_WORLD;
     }
 
     /** Called before {@code render3dHud} (or {@code FogRenderer.endFrame}): bloom + auto-exposure + tonemap to mainColor. */
@@ -517,11 +547,16 @@ public final class CelestiaShade {
             bloomNorm = 1f / Math.max(sum, 1e-4f);
         }
 
+        long volumeTex = atmosphere.renderVolume(ctx, depthGpu instanceof CelestiaTexture ? depthPtr : 0L, texArgSeg);
+        long ao = depthGpu instanceof CelestiaTexture && frame.fogType == ShadeFrame.FOG_AIR
+            ? renderAo(ctx, depthPtr) : 0L;
+        aoActive = ao != 0L;
+
         // ShadeFinalParams: 6 x float4 = 96 B
         ByteBuffer fp = pushSeg.asSlice(0, 96).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
         fp.putFloat(0, bloomNorm).putFloat(4, levelsUsed > 1 ? 1f : 0f).putFloat(8, frameCounter & 0xffff).putFloat(12, frame.debug);
         fp.putFloat(16, w0).putFloat(20, 1f).putFloat(24, 1.6f).putFloat(28, 0.4f);
-        fp.putFloat(32, 0f).putFloat(36, 0f).putFloat(40, 1f).putFloat(44, 1f);
+        fp.putFloat(32, volumeTex != 0L ? 1f : 0f).putFloat(36, ao != 0L ? 1f : 0f).putFloat(40, 1f).putFloat(44, 1f);
         fp.putFloat(48, hdrWidth).putFloat(52, hdrHeight).putFloat(56, 0f).putFloat(60, 0f);
         fp.putFloat(64, 0f).putFloat(68, 1f).putFloat(72, 1f).putFloat(76, 1f);
         fp.putFloat(80, 0f).putFloat(84, 0f).putFloat(88, 0f).putFloat(92, 0f);
@@ -530,11 +565,13 @@ public final class CelestiaShade {
         texArgSeg.set(ValueLayout.JAVA_LONG, 8, levelsUsed > 1 ? bloomAccumTex[1] : hdrWorldTex);
         texArgSeg.set(ValueLayout.JAVA_LONG, 16, depthPtr);
         texArgSeg.set(ValueLayout.JAVA_LONG, 24, levelsUsed > 0 ? bloomDownTex[0] : hdrWorldTex);
+        texArgSeg.set(ValueLayout.JAVA_LONG, 32, volumeTex != 0L ? volumeTex : hdrWorldTex);
 
+        texArgSeg.set(ValueLayout.JAVA_LONG, 40, ao != 0L ? ao : hdrWorldTex);
         int outFmt = MetalConst.toNativeFormat(outTex.getFormat());
         long psoFinal = (outFmt == MetalConst.FMT_BGRA8_UNORM) ? psoFinalBgra8 : psoFinalRgba8;
         MetalNative.shadeFullscreenPass(ctx, psoFinal, ct.handle(),
-            texArgSeg, 4, MemorySegment.NULL, 0, pushSeg, 96);
+            texArgSeg, 6, MemorySegment.NULL, 0, pushSeg, 96);
 
         // Update auto-exposure histogram & exposure scalar for next frame
         if (levelsUsed > 2) {
@@ -549,6 +586,24 @@ public final class CelestiaShade {
 
         // Disable shader globals for post/GUI passes unless hand pass re-enables them
         MetalNative.shadeSetEnabled(ctx, false);
+    }
+
+    private long renderAo(long ctx, long depth) {
+        if (psoAo == 0L || frame.dimension != ShadeFrame.DIM_OVERWORLD) return 0L;
+        int w = (hdrWidth + 1) / 2, h = (hdrHeight + 1) / 2;
+        if (aoTexture == 0L || aoW != w || aoH != h) {
+            if (aoTexture != 0L) MetalNative.textureDestroy(ctx, aoTexture);
+            aoTexture = MetalNative.textureCreate(ctx, MetalConst.FMT_RG16_FLOAT, w, h, 1, 1,
+                false, true, true, false, "CelestiaShade.SSAO");
+            aoW = w;
+            aoH = h;
+        }
+        if (aoTexture != 0L) {
+            texArgSeg.setAtIndex(ValueLayout.JAVA_LONG, 0, depth);
+            MetalNative.shadeFullscreenPass(ctx, psoAo, aoTexture, texArgSeg, 1,
+                MemorySegment.NULL, 0, MemorySegment.NULL, 0);
+        }
+        return aoTexture;
     }
 
     public void beforeHand(RenderTarget main) {
@@ -605,15 +660,17 @@ public final class CelestiaShade {
         if (failed) return "Fallback (init failed)";
         if (!initialized) return "Pending";
         float ex = gpuView != null ? gpuView.getFloat(176) : 1.0f;
-        String waterInfo = water.isActive() ? " | Water SSR" : "";
+        String effects = (water.isActive() ? " | Water SSR" : "")
+            + (atmosphere.hasClouds() ? " | Clouds" : "") + (atmosphere.hasVolume() ? " | Volumetrics" : "")
+            + (aoActive ? " | SSAO" : "");
         if (shadowPass.isActive()) {
             return String.format(java.util.Locale.ROOT,
-                "P3a HDR (%dx%d) | Shadows %d %s (%dk/%dk q)%s | ev x%.2f | elev %.0f deg",
+                "P4 HDR (%dx%d) | Shadows %d %s (%dk/%dk q)%s | ev x%.2f | elev %.0f deg",
                 hdrWidth, hdrHeight, shadowPass.resolution(), shadowPass.sourceName(),
-                shadowPass.lastNearQuads() / 1000, shadowPass.lastFarQuads() / 1000, waterInfo, ex, look.elevation);
+                shadowPass.lastNearQuads() / 1000, shadowPass.lastFarQuads() / 1000, effects, ex, look.elevation);
         }
-        return String.format(java.util.Locale.ROOT, "P3a HDR (%dx%d)%s | ev x%.2f | elev %.0f deg",
-            hdrWidth, hdrHeight, waterInfo, ex, look.elevation);
+        return String.format(java.util.Locale.ROOT, "P4 HDR (%dx%d)%s | ev x%.2f | elev %.0f deg",
+            hdrWidth, hdrHeight, effects, ex, look.elevation);
     }
 
     private void syncLookPreset() {
@@ -677,6 +734,7 @@ public final class CelestiaShade {
         long ctx = device.handle();
         shadowPass.close(ctx);
         water.close(ctx);
+        atmosphere.close(ctx);
         if (ctx != 0L) {
             MetalNative.shadeSetEnabled(ctx, false);
             MetalNative.shadeSetGlobals(ctx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -690,6 +748,9 @@ public final class CelestiaShade {
                 if (bloomDownTex[i] != 0L) { MetalNative.textureDestroy(ctx, bloomDownTex[i]); bloomDownTex[i] = 0L; }
                 if (bloomAccumTex[i] != 0L) { MetalNative.textureDestroy(ctx, bloomAccumTex[i]); bloomAccumTex[i] = 0L; }
             }
+            if (psoAo != 0L) MetalNative.pipelineDestroy(ctx, psoAo);
+            if (aoTexture != 0L) MetalNative.textureDestroy(ctx, aoTexture);
+            psoAo = aoTexture = 0L;
             if (psoSkyLut != 0L) MetalNative.pipelineDestroy(ctx, psoSkyLut);
             if (psoBloomDown0 != 0L) MetalNative.pipelineDestroy(ctx, psoBloomDown0);
             if (psoBloomDown != 0L) MetalNative.pipelineDestroy(ctx, psoBloomDown);

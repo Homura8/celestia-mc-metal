@@ -40,7 +40,7 @@ struct ShadeLook {
 	float4 wet;        // 496  x wetness, y puddles, z snow cover, w rain intensity
 	float4 wind;       // 512  xy wind direction, z rain slant, w snowfall at camera
 	float4 clouds0;    // 528  x cumulus base y, y top y, z cloud shadow strength, w volumetric clouds on
-	float4 clouds1;    // 544  x dome clouds, y cirrus altitude, zw reserved
+	float4 clouds1;    // 544  x reflection dome enabled, y fancy clouds, zw reserved
 	float4 waterShadow;// 560  water soft shadow / DH direct / contact / torch caustics
 	float4 water;      // 576  wet-all look / film roughness / veg roughness / gate
 	float4 waterAbs;   // 592  wet film look parameters

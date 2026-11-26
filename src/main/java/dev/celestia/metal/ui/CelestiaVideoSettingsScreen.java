@@ -266,8 +266,8 @@ public final class CelestiaVideoSettingsScreen extends Screen {
                     v -> { workingConfig.appleSilicon.renderScalePercent = v; dirty = true; },
                     v -> v + "%"));
                 list.add(new OptionEntry.Cycle<>("Upscaler",
-                    "How the scaled world is upscaled when Internal Render Scale is below 100%. MetalFX Temporal currently "
-                        + "uses MetalFX Spatial (temporal needs motion vectors, coming with native shader packs).",
+                    "Upscales the world below 100% render scale. TAAU uses previous frames to reduce shimmering. "
+                        + "MetalFX Temporal uses the Spatial path.",
                     ShaderOptionDef.Impact.MEDIUM, Arrays.asList(CelestiaConfig.UpscalerMode.values()),
                     () -> workingConfig.appleSilicon.upscaler,
                     v -> { workingConfig.appleSilicon.upscaler = v; dirty = true; },
@@ -275,6 +275,7 @@ public final class CelestiaVideoSettingsScreen extends Screen {
                         case METALFX_TEMPORAL -> "MetalFX Temporal (Spatial for now)";
                         case METALFX_SPATIAL -> "MetalFX Spatial";
                         case BILINEAR -> "Bilinear";
+                        case TAAU -> "TAAU";
                     }));
                 list.add(new OptionEntry.Toggle("HDR / EDR Highlights",
                     "Uses RGBA16Float Extended Linear Display P3 swapchain for XDR / ProMotion HDR highlights.",

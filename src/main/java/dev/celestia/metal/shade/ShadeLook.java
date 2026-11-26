@@ -32,6 +32,10 @@ public final class ShadeLook {
     public static final int FEATURE_HDR = 1, FEATURE_BLOOM = 2, FEATURE_AUTO_EXPOSURE = 4,
         FEATURE_PCSS = 8, FEATURE_STARS = 16, FEATURE_HAZE = 32, FEATURE_LIGHT_V2 = 64;
 
+    public boolean cloudsEnabled, fancyClouds;
+    public float cloudBase, wetness, puddles, snow;
+    public float flashX, flashY, flashZ, flashStrength;
+
     // elevation, chroma gamma, light mul, ambient rgb (3), saturation, contrast a, bloom mix, VL k, mist sigma, white balance (mired)
     private static final float[][] KEYS = {
         {-15, 1.00f, 1.00f, 0.80f, 0.88f, 1.16f, 0.74f, 1.30f, 0.130f, 0.30f, 1.5f, -20},
@@ -276,10 +280,10 @@ public final class ShadeLook {
         float borderFrac = this.rainFog > 0f ? 0.78f - 0.18f * this.rainFog : 0.78f;
         put4(b, FOG_MISC, SEA + HAZE_BASE, borderFrac, this.borderRadius, (float) glow);
         put4(b, VL, 0f, 0f, 0f, 0f);
-        put4(b, WET, 0f, 0f, 0f, f.rain);
+        put4(b, WET, wetness, puddles, snow, f.rain);
         put4(b, WIND, 0f, 0f, 0f, 0f);
-        put4(b, CLOUDS0, 0f, 0f, 0f, 0f);
-        put4(b, CLOUDS1, 0f, 0f, 0f, 0f);
+        put4(b, CLOUDS0, cloudBase, cloudBase + 32f, 0f, cloudsEnabled ? 1f : 0f);
+        put4(b, CLOUDS1, cloudsEnabled ? 1f : 0f, fancyClouds ? 1f : 0f, 0f, 0f);
         put4(b, EYE, 0.5f, 0.5f, 1f, this.eyeSky);
         put4(b, SKY_GOLD_H, this.skyGold[0], this.skyGold[1], this.skyGold[2], 1f);
         put4(b, SKY_GOLD_Z, this.skyGold[3], this.skyGold[4], this.skyGold[5], this.skyRose);
@@ -288,7 +292,7 @@ public final class ShadeLook {
         float nightUp = EV_UP - (EV_UP - EV_UP_NIGHT) * (1f - smooth(-10f, -2f, this.elevation)) * this.outdoor;
         put4(b, EXPOSURE_CFG, EV_DOWN, nightUp, TAU_UP, TAU_DOWN);
         put4(b, DIM_TINT, 0f, 0f, 0f, 0f);
-        put4(b, FLASH, 0f, 0f, 0f, 0f);
+        put4(b, FLASH, flashX, flashY, flashZ, flashStrength);
         put4(b, RENDER_SCALE, f.renderScale, (float) (Math.log(Math.max(f.mipScale, 1e-4f)) / Math.log(2.0)), f.width, f.height);
         put4(b, DT, this.dt, f.gameTimeSeconds, 0f, this.rising);
         float airSky = smooth(2f / 15f, 10f / 15f, this.eyeSky);

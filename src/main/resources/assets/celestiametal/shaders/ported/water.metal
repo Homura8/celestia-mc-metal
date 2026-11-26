@@ -427,9 +427,9 @@ static float2 shadeWavesTiled(float2 x, float t, float speed, float phase, threa
 	return g;
 }
 
-// The bake pass (full-screen triangle into the SHADE_WAVE_BAKE_SIZE^2 wave texture, ShadeWater.bake): ShadeFrame at buffer(16).
+// The bake pass (full-screen triangle into the wave texture, ShadeWater.bake): ShadeFrame at buffer(16).
 #ifndef SHADE_WAVE_BAKE_SIZE
-#define SHADE_WAVE_BAKE_SIZE 1024
+#define SHADE_WAVE_BAKE_SIZE 512
 #endif
 fragment half4 shade_water_bake_fs(float4 pos [[position]], constant ShadeFrame &f [[buffer(CM_SHADE_BUF_FRAME)]]) {
 	float2 x = pos.xy * (SHADE_WAVE_TILE / float(SHADE_WAVE_BAKE_SIZE));
@@ -778,7 +778,7 @@ static inline uint shadeQuadOr(uint v) { v |= quad_shuffle_xor(v, 1); return v |
 // run out (the debug view of 2026-11-10: strips beside near silhouettes), so the budget is what they may cost, not the others: 32.
 // (Going on with fewer samples instead, inline or as a call, cost every water pixel 0.1 to 0.6 ms: price-p-c9*, 2026-11-10.)
 #ifndef SHADE_SSRH_BUDGET
-#define SHADE_SSRH_BUDGET 32
+#define SHADE_SSRH_BUDGET 24
 #endif
 #define SHADE_SSRH_N0 20      // the 128-pixel intervals at most (rays longer than 2560 pixels get longer ones)
 
@@ -2443,6 +2443,7 @@ static float3 shadeWaterNormal(ShadeWaterIn w, constant ShadeFrame &f, constant 
 	}
 	// (2.0.1 opt) With SHADE_WAVE_BAKE, ShadeWater keeps the last bake bound so wp.state.w stays 1.0; compiling out the
 	// dead 7-wave analytic fallback saves heavy register pressure across every water pixel.
+	height = 0.0;
 	return float3(0.0, 1.0, 0.0);
 #else
 	float lap;
@@ -2486,7 +2487,7 @@ static SHADE_COLD float3 shadeWaterFallNormal(ShadeWaterIn w, constant ShadeFram
 	float2 c = float2(dot(xa, tu.xz), ya * SHADE_WATER_FALL_STRETCH) * (SHADE_WATER_FALL_SCALE / SHADE_WAVE_TILE);
 	c.y += shadeWaterTime(f) * SHADE_WATER_FALL_SCROLL;
 	// the field's texels per pixel across the fall (the finer axis): its mip
-	float lod = max(log2(max(w.footprint * (SHADE_WATER_FALL_SCALE * float(SHADE_WAVE_BAKE_SIZE) / SHADE_WAVE_TILE), 1e-4)), 0.0);
+	float lod = max(log2(max(w.footprint * (SHADE_WATER_FALL_SCALE * float(waves.get_width()) / SHADE_WAVE_TILE), 1e-4)), 0.0);
 	half4 b = waves.sample(shadeWaveSampler, c, level(lod));
 	float k = shadeWaterMoving(float(w.cave.w), w.p) * SHADE_WATER_FALL_SLOPE * exp(-length(w.p) * (1.0 / 120.0)) * smoothstep(0.0, 0.3, abs(dot(nf, v)));
 	float2 s = float2(b.xy) * (float2(SHADE_WATER_FALL_SCALE, SHADE_WATER_FALL_SCALE * SHADE_WATER_FALL_STRETCH) * k);
@@ -2568,16 +2569,19 @@ static inline float3 shadeWaterMirrorN(float3 n, float3 nFace, float calm, float
 // Water seen from above (or a side face): reflection (SSR over the sky, sun glint), refraction of the bottom, absorption and
 // in-scattering along the path through the water, caustics on the bottom, shoreline foam. Composites what is behind the
 // water itself (draw with alpha 1). Radiance before exposure, without air fog between the camera and the surface.
-static float3 shadeWaterAbove(ShadeWaterIn w, constant ShadeFrame &f, constant ShadeWaterParams &wp, texture2d<half> lut, sampler lutS,
+#ifndef SHADE_LEAN_ABOVE
+static SHADE_COLD
+#else
+static
+#endif
+float3 shadeWaterAbove(ShadeWaterIn w, constant ShadeFrame &f, constant ShadeWaterParams &wp, texture2d<half> lut, sampler lutS,
                               texture2d<half> scene, depth2d<float> depth, texture2d<half> prev, texture2d<half> waves, texture2d<float> hz SHADE_RH_PARAMS) {
 	float3 pe = w.p - shadeEye(f.invViewProj); // from the eye: view bobbing moves it (shade_common.metal)
 	float dist = length(pe);
 	float3 v = pe / max(dist, 1e-4);
 	bool top = w.nFace.y > 0.5;
 	float height = 0.0, pattern = 0.0;
-#ifdef SHADE_WFAR_ANY
-	float farT = shadeWaterFarT(wp, dist); // (1.2.9 far water: the near draw's fade toward the far draw's look)
-#endif
+	float farSsr = 1.0 - shadeWaterFarT(wp, dist);
 	float3 n = w.nFace;
 #ifdef SHADE_WATER_SWELL
 	float cosV0 = 0.0; // (2026-11-02) the cosine without the swell, where there is one (wp.swell.w)
@@ -2636,19 +2640,10 @@ static float3 shadeWaterAbove(ShadeWaterIn w, constant ShadeFrame &f, constant S
 	float4 ssrHit = float4(0.0);
 	float ssrW = 0.0;
 	float fq = shadeQuadMax(shadeWaterFresnel(cosV));
-#ifdef SHADE_WFAR_SSR
-	// (1.2.9 far water) the near draw's scene reflections fade out toward D; quads wholly past it don't march
-	float farSsr = 1.0 - farT, farQ = shadeQuadMax(farSsr);
-	if (!SHADE_FAR_NOSSR && farQ > 0.0 && fq > 0.022 && wp.tune.y > 0.0 && !SHADE_WDEV_IS(f, SHADE_WDEV_NO_SSR)) {
-		ssrHit = shadeSsrT(w.p + n * 0.02, rr, w.pixel, wp.tune.y, w.exposure, w.prevExposure, f, w.look, scene, depth, prev, hz, tHit, wp.mirror.y, top ? wp.mirror.z : 0.0, w.res, 0, true, dcRr);
+	if (shadeQuadMax(farSsr) > 0.0 && fq > 0.022 && wp.tune.y > 0.0 && !SHADE_WDEV_IS(f, SHADE_WDEV_NO_SSR)) {
+		ssrHit = shadeSsrT(w.p + n * 0.02, rr, w.pixel, wp.tune.y, w.exposure, w.prevExposure, f, w.look, scene, depth, prev, hz, tHit, wp.mirror.y, top ? wp.mirror.z : 0.0, w.res, int(wp.far.z), true, dcRr);
 		ssrW = ssrHit.a * smoothstep(0.022, 0.03, fq) * farSsr;
 	}
-#else
-	if (fq > 0.022 && wp.tune.y > 0.0 && !SHADE_WDEV_IS(f, SHADE_WDEV_NO_SSR)) { // (1.1) tune.y 0: the player turned screen reflections off
-		ssrHit = shadeSsrT(w.p + n * 0.02, rr, w.pixel, wp.tune.y, w.exposure, w.prevExposure, f, w.look, scene, depth, prev, hz, tHit, wp.mirror.y, top ? wp.mirror.z : 0.0, w.res, int(wp.far.z), true, dcRr);
-		ssrW = ssrHit.a * smoothstep(0.022, 0.03, fq);
-	}
-#endif
 #endif
 
 	// --- what is behind the surface: refraction, absorption, in-scattering, caustics
@@ -2793,9 +2788,9 @@ static float3 shadeWaterAbove(ShadeWaterIn w, constant ShadeFrame &f, constant S
 	// looking steeply down (within ~45 degrees of straight down) the surface reflects 2% and what it would mirror is mostly
 	// behind the camera: no march there, faded in up to ~50 degrees (quad-uniform: SSR's lanes work together)
 	float fq = shadeQuadMax(shadeWaterFresnel(cosV));
-	if (fq > 0.022 && wp.tune.y > 0.0 && !SHADE_WDEV_IS(f, SHADE_WDEV_NO_SSR)) { // (1.1) tune.y 0: the player turned screen reflections off
+	if (shadeQuadMax(farSsr) > 0.0 && fq > 0.022 && wp.tune.y > 0.0 && !SHADE_WDEV_IS(f, SHADE_WDEV_NO_SSR)) {
 		float4 hit = shadeSsrT(w.p + n * 0.02, rr, w.pixel, wp.tune.y, w.exposure, w.prevExposure, f, w.look, scene, depth, prev, hz, tHit, wp.mirror.y);
-		hitWeight = hit.a * smoothstep(0.022, 0.03, fq);
+		hitWeight = hit.a * smoothstep(0.022, 0.03, fq) * farSsr;
 		refl = mix(refl, hit.rgb, hitWeight);
 	}
 #endif
@@ -2961,6 +2956,7 @@ static float3 shadeWaterAbove(ShadeWaterIn w, constant ShadeFrame &f, constant S
 // above, refracted (the scene copy, or the sky where the copy has none); outside it total internal reflection mirrors the
 // water below (SSR into the underwater scene, else the water's own colour). The vanilla underwater fog then applies
 // between the camera and the surface (shadeFinish).
+#ifndef SHADE_LEAN_ABOVE
 static float3 shadeWaterBelow(ShadeWaterIn w, constant ShadeFrame &f, constant ShadeWaterParams &wp, texture2d<half> lut, sampler lutS,
                               texture2d<half> scene, depth2d<float> depth, texture2d<half> prev, texture2d<half> waves, texture2d<float> hz) {
 	float3 pe = w.p - shadeEye(f.invViewProj); // from the eye: view bobbing moves it (shade_common.metal)
@@ -3024,10 +3020,14 @@ static float3 shadeWaterBelow(ShadeWaterIn w, constant ShadeFrame &f, constant S
 	return mix(above, below, fres);
 }
 
+#endif
+
 // Entry point for the translucent terrain fragment: picks the side the camera is on.
 static float3 shadeWaterSurface(ShadeWaterIn w, constant ShadeFrame &f, constant ShadeWaterParams &wp, texture2d<half> lut, sampler lutS,
                                 texture2d<half> scene, depth2d<float> depth, texture2d<half> prev, texture2d<half> waves, texture2d<float> hz SHADE_RH_PARAMS) {
+#ifndef SHADE_LEAN_ABOVE
 	if (SHADE_CAMERA_UNDERWATER(f) && w.nFace.y < -0.5) return shadeWaterBelow(w, f, wp, lut, lutS, scene, depth, prev, waves, hz);
+#endif
 	return shadeWaterAbove(w, f, wp, lut, lutS, scene, depth, prev, waves, hz SHADE_RH_ARGS);
 }
 

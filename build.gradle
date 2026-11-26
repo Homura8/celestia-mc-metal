@@ -111,6 +111,7 @@ processResources {
 	from(rootProject.file('LICENSE')) { into 'META-INF' }
 	from(rootProject.file('NOTICE')) { into 'META-INF' }
 	from(rootProject.file('CREDITS.md')) { into 'META-INF' }
+	from(rootProject.file('LICENSES/MIT-Photon.txt')) { into 'META-INF/LICENSES' }
 }
 
 tasks.register('checkPrivacy') {

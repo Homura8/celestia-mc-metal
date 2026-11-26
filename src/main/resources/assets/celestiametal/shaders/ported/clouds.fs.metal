@@ -28,6 +28,7 @@ fragment float4 main0(CloudIn in [[stage_in]],
                       sampler skyLutSmplr [[sampler(CM_SHADE_SAMP_LINEAR)]],
                       constant CloudInfo& ci [[buffer(CELESTIA_BUF_CloudInfo)]])
 {
+	if (sl.clouds0.w > 0.5) discard_fragment();
 	float cloudEnd = max(sf.fogSky.y, 1.0);
 	float alpha = in.vertexColor.a * (1.0 - saturate(in.vertexDistance / cloudEnd));
 	float cover = min(in.vertexColor.a * 1.12, 0.95) * (1.0 - saturate(in.vertexDistance / cloudEnd));

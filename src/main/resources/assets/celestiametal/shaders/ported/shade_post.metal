@@ -45,14 +45,18 @@ static inline half3 shadeDown13(texture2d<half> src, float2 uv, float2 texel, bo
 	return (g0 * w0 + g1 * w1 + g2 * w2 + g3 * w3 + g4 * w4) / (w0 + w1 + w2 + w3 + w4);
 }
 
+static inline half3 shadeBloomInput(half3 sample) {
+	return select(min(max(sample, 0.0h), 30000.0h), half3(0.0h), (as_type<ushort3>(sample) & ushort3(0x7c00)) == ushort3(0x7c00));
+}
+
 fragment half4 shade_bloom_down0(ShadeFsOut in [[stage_in]], texture2d<half> src [[texture(0)]], constant float4 &p [[buffer(0)]],
                                   device ShadeGpu &gw [[buffer(CM_SHADE_BUF_GPU)]]) {
 	float2 texel = 1.0 / float2(src.get_width(), src.get_height());
 	float2 uv = in.uv * p.xy, lo = texel, hi = p.xy - texel;
-	half3 a = min(src.sample(shadeLinearClamp, clamp(uv + texel * float2(-1, -1), lo, hi)).rgb, half3(30000.0h));
-	half3 b = min(src.sample(shadeLinearClamp, clamp(uv + texel * float2(1, -1), lo, hi)).rgb, half3(30000.0h));
-	half3 c = min(src.sample(shadeLinearClamp, clamp(uv + texel * float2(-1, 1), lo, hi)).rgb, half3(30000.0h));
-	half3 d = min(src.sample(shadeLinearClamp, clamp(uv + texel * float2(1, 1), lo, hi)).rgb, half3(30000.0h));
+	half3 a = shadeBloomInput(src.sample(shadeLinearClamp, clamp(uv + texel * float2(-1, -1), lo, hi)).rgb);
+	half3 b = shadeBloomInput(src.sample(shadeLinearClamp, clamp(uv + texel * float2(1, -1), lo, hi)).rgb);
+	half3 c = shadeBloomInput(src.sample(shadeLinearClamp, clamp(uv + texel * float2(-1, 1), lo, hi)).rgb);
+	half3 d = shadeBloomInput(src.sample(shadeLinearClamp, clamp(uv + texel * float2(1, 1), lo, hi)).rgb);
 	half wa = 1.0h / (1.0h + shadeLumaH(a)), wb = 1.0h / (1.0h + shadeLumaH(b)), wc = 1.0h / (1.0h + shadeLumaH(c)), wd = 1.0h / (1.0h + shadeLumaH(d));
 	(void)gw;
 	return half4((a * wa + b * wb + c * wc + d * wd) / (wa + wb + wc + wd), 1.0h);
@@ -108,6 +112,12 @@ fragment float4 shade_final(ShadeFsOut in [[stage_in]],
                             texture2d<half> bloom [[texture(1)]],
                             depth2d<float> depth [[texture(2)]],
                             texture2d<half> bloom0 [[texture(3)]],
+#ifdef CELESTIA_VL_COMPOSITE
+                            texture2d<half> volume [[texture(4)]],
+#endif
+#ifdef CELESTIA_SSAO
+                            texture2d<half> ambientOcclusion [[texture(5)]],
+#endif
                             constant ShadeFinalParams &P [[buffer(0)]],
                             constant ShadeFrame &f [[buffer(CM_SHADE_BUF_FRAME)]],
                             constant ShadeLook &L [[buffer(CM_SHADE_BUF_LOOK)]],
@@ -121,9 +131,16 @@ fragment float4 shade_final(ShadeFsOut in [[stage_in]],
 	float3 T = float3(1.0);
 	bool hazeOn = (L.tier.y & SHADE_FEATURE_HAZE) != 0 && f.flags.x == SHADE_DIM_OVERWORLD && f.fogColor.a < 0.5;
 	float hazeNear = shadeAirSmooth(L) ? 0.0 : 4.0;
-	if (d > 0.0 && hazeOn) {
+	bool aoOn = false;
+#ifdef CELESTIA_SSAO
+	aoOn = P.v.y > 0.5;
+#endif
+	if (d > 0.0 && (hazeOn || aoOn)) {
 		float3 wp = shadeWorldFromDepth(in.uv, d, f);
-		if (dot(wp, wp) > hazeNear) {
+#ifdef CELESTIA_SSAO
+		if (aoOn) c *= float(shadeAoSample(ambientOcclusion, in.uv, length(wp)));
+#endif
+		if (hazeOn && dot(wp, wp) > hazeNear) {
 			float3 S = shadeHazeInscatter(wp, f, L, 1.0, T);
 			if (L.user4.x > 1.5 && L.fogMisc.z > 0.0) {
 				float kk = shadeHazeBorderKeep(wp, L);
@@ -140,6 +157,10 @@ fragment float4 shade_final(ShadeFsOut in [[stage_in]],
 		float m = L.bloom.x + (d > 0.0 ? mTerr : mSky);
 		c = mix(c, b, saturate(m));
 	}
+#ifdef CELESTIA_VL_COMPOSITE
+	if (P.v.x > 0.5) c += vlUpsample(volume, in.uv, vlDistance(in.uv, d, shadeEye(f.invViewProj), f)) * ex;
+#endif
+	c = select(c, float3(0.0), (as_type<uint3>(c) & uint3(0x7f800000u)) == uint3(0x7f800000u));
 	half3 ch = half3(min(max(c, 0.0), 60000.0));
 	half lch = shadeLumaH(ch);
 	float lum = float(lch) / ex;

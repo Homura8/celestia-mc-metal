@@ -33,7 +33,7 @@ public final class ShadeWater {
     private static final int RING_SLOTS = 4;
     private static final int SLOT_STRIDE = 256;
 
-    private static final int WAVE_SIZE = 1024, WAVE_MIPS = 11;
+    private static final int WAVE_SIZE = 512, WAVE_MIPS = Integer.SIZE - Integer.numberOfLeadingZeros(WAVE_SIZE);
     private static final int DETAIL_SIZE = 256, DETAIL_MIPS = 9;
     private static final int SWELL_SIZE = 256, SWELL_MIPS = 9;
 
@@ -51,10 +51,11 @@ public final class ShadeWater {
     private boolean initialized;
     private boolean failed;
     private boolean capturedThisFrame;
+    private boolean wavesReady, swellReady;
     private boolean activeThisFrame;
 
     public boolean isActive() {
-        return initialized && !failed && activeThisFrame;
+        return initialized && !failed && capturedThisFrame;
     }
 
     public boolean ensureInitialized(long ctx) {
@@ -94,7 +95,7 @@ public final class ShadeWater {
             psoPyr2 = CelestiaShade.createFullscreenPso(ctx, fsVsFn, pyr2Fn, MetalConst.FMT_RG16_FLOAT, "CelestiaWater.PyrReduce", err);
 
             initialized = true;
-            LOGGER.info("CelestiaShade P3a water module initialized (1024x1024 waves + 256x256 ripples/swell + RG16F depth pyramid)");
+            LOGGER.info("CelestiaShade P3a water module initialized (512x512 waves + 256x256 ripples/swell + RG16F depth pyramid)");
             return true;
         } catch (Throwable t) {
             failed = true;
@@ -115,26 +116,30 @@ public final class ShadeWater {
         int slot = Math.floorMod(ringSlot, RING_SLOTS);
         currentSlotOffset = (long) slot * SLOT_STRIDE;
 
-        ByteBuffer b = paramsSeg.asSlice(currentSlotOffset, PARAMS_BYTES).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
-        packParams(b, stillRect, flowRect, false, surfaceAbove, frame.rain, true, true);
+        // Capture is only known after the world starts drawing. Keep the last bake available
+        // when translucent terrain reappears, then update it on the next frame.
+        if (capturedThisFrame || !wavesReady) {
+            MetalNative.shadeFullscreenPass(ctx, psoBake, wavesTex,
+                MemorySegment.NULL, 0, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
+            MetalNative.shadeFullscreenPass(ctx, psoBakeDetail, detailTex,
+                MemorySegment.NULL, 0, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
+            boolean bakeSwell = !frame.underwater && (!swellReady || (++swellCounter & 1) != 0);
+            if (bakeSwell) {
+                MetalNative.shadeFullscreenPass(ctx, psoBakeSwell, swellTex,
+                    MemorySegment.NULL, 0, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
+                swellReady = true;
+            }
+            MetalNative.waterGenerateMipmaps(ctx, wavesTex, detailTex, bakeSwell ? swellTex : 0L);
+            wavesReady = true;
+        }
+
+        ByteBuffer b = paramsSeg.asSlice(currentSlotOffset, PARAMS_BYTES).asByteBuffer().order(ByteOrder.nativeOrder());
+        packParams(b, stillRect, flowRect, false, surfaceAbove, frame.rain, wavesReady, swellReady);
 
         capturedThisFrame = false;
         activeThisFrame = true;
-
         MetalNative.waterSetParams(ctx, paramsBuf, currentSlotOffset, wavesTex, detailTex, true);
-        MetalNative.shadeSetResource(ctx, 15, swellTex);
-
-        // Bake per-frame tiled waves, fine ripples, and bi-frame sea swell + mip chains.
-        MetalNative.shadeFullscreenPass(ctx, psoBake, wavesTex, MemorySegment.NULL, 0, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
-        MetalNative.waterGenerateMipmaps(ctx, wavesTex);
-
-        MetalNative.shadeFullscreenPass(ctx, psoBakeDetail, detailTex, MemorySegment.NULL, 0, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
-        MetalNative.waterGenerateMipmaps(ctx, detailTex);
-
-        if ((swellCounter++ & 1) == 0) {
-            MetalNative.shadeFullscreenPass(ctx, psoBakeSwell, swellTex, MemorySegment.NULL, 0, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
-            MetalNative.waterGenerateMipmaps(ctx, swellTex);
-        }
+        MetalNative.shadeSetResource(ctx, 15, swellReady ? swellTex : 0L);
     }
 
     public void disableFrame(long ctx) {
@@ -151,7 +156,7 @@ public final class ShadeWater {
         if (ok != 0) {
             capturedThisFrame = true;
             // Mark scene/depth copies valid (state.x = 1) for all translucent terrain fragments rendered afterwards.
-            paramsSeg.asSlice(currentSlotOffset, PARAMS_BYTES).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN).putFloat(32, 1f);
+            paramsSeg.asSlice(currentSlotOffset, PARAMS_BYTES).asByteBuffer().order(ByteOrder.nativeOrder()).putFloat(32, 1f);
             return true;
         }
         return false;
@@ -165,7 +170,7 @@ public final class ShadeWater {
         // state: x copies valid (0/1), y surfaceAbove (underwater), z wetness, w baked waves ready
         p.putFloat(32, copyValid ? 1f : 0f).putFloat(36, surfaceAbove).putFloat(40, wetness).putFloat(44, wavesReady ? 1f : 0f);
         // tune: x wave strength, y SSR max dist (blocks), z reflection strength, w caustics
-        p.putFloat(48, 1f).putFloat(52, 512f).putFloat(56, 1f).putFloat(60, 1f);
+        p.putFloat(48, 1f).putFloat(52, 144f).putFloat(56, 1f).putFloat(60, 1f);
         // swell: x strength, y masking k, z crest glow, w Fresnel share
         p.putFloat(64, 1.3f).putFloat(68, 0.45f).putFloat(72, 0.5f).putFloat(76, 1f);
         // swell2: x openFar (< 0 = full swell everywhere), y mirrorCalm, z long calm, w detail ripple scale
@@ -177,7 +182,7 @@ public final class ShadeWater {
         // mirror: x mirrorAA, y reflFilter, z reflPano, w causticGain
         p.putFloat(128, 0f).putFloat(132, 1f).putFloat(136, 0f).putFloat(140, 2.5f);
         // far: x dist, y band, z dev, w baked swell ready
-        p.putFloat(144, 0f).putFloat(148, 0f).putFloat(152, 0f).putFloat(156, swellReady ? 1f : 0f);
+        p.putFloat(144, 176f).putFloat(148, 64f).putFloat(152, 0f).putFloat(156, swellReady ? 1f : 0f);
     }
 
     public void close(long ctx) {
@@ -207,6 +212,8 @@ public final class ShadeWater {
         wavesTex = detailTex = swellTex = paramsBuf = 0L;
         fsVsFn = bakeFn = bakeDetailFn = bakeSwellFn = pyrFn = pyr2Fn = waterLib = 0L;
         paramsSeg = null;
+        wavesReady = swellReady = false;
+        swellCounter = 0;
         initialized = false;
     }
 }

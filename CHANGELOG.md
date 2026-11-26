@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.0-alpha.19
+
+### Added
+- **P4 TAAU**. Select TAAU in Upscaler with Internal Render Scale below 100%. Halton jitter, camera reprojection, depth rejection and neighborhood clipping reconstruct the world at output resolution. The depth written by the first-person hand rejects temporal history at held-item pixels. The 2D HUD draws at native resolution.
+- **Screen-space ambient occlusion**. Half-resolution depth sampling adds contact shading to the Overworld, with depth-aware compositing to limit bleeding across silhouettes.
+- **Bloom and tone mapping**. Reject non-finite color components before the bloom downsample and display conversion.
+- Native GPU checks cover the SSAO plane and TAAU history blending, disocclusion, hand rejection and full-size output on Metal 4 and Metal 3.
+
+## 0.1.0-alpha.18
+
+### Added
+- **P3b volumetric atmosphere**. Ray-marched clouds follow Minecraft's Off, Fast and Fancy cloud settings. A low-resolution cloud buffer shades the sky and a separate dome supplies off-screen water reflections. Quarter-resolution volumetric light marches the two shadow cascades and uses depth-aware upsampling during HDR compositing.
+- **Surface weather**. Rain darkens exposed terrain, accumulates puddles, and adds raindrop ripples to water. Snow accumulates on open horizontal surfaces. Nearby lightning lights the sky and terrain and respects Hide Lightning Flashes.
+- Native Test 2o exercises cloud lighting and transmittance, atmospheric light, baked weather noise, and HDR compositing on Metal 4 and Metal 3.
+
+### Performance
+- **Water**. Added an above-water shader variant and isolated glossy non-water shading. SSR shares coarse depth traversal across 2×2 quads and refines the hit per pixel. Above-water rays travel up to 144 blocks and fade to sky reflections on distant surfaces. The hierarchical SSR budget defaults to 24 intervals and accepts an optional `-Dcelestiametal.shade.water.ssrBudget=16` for comparison.
+- Tiled waves now bake at 512². Detail ripples use seven wave trains, and mipmaps for all three textures share one encoder. Frames after a missed translucent capture reuse the last bake. Sea swell skips underwater bakes and fades out between 112 and 176 blocks.
+- Native ABI 7 batches the optional wave, ripple and swell textures in a single mipmap call.
+
+### Verified Performance
+- **Owner beach overview, Vanilla 26.3, M1 Pro, Metal 4, 3024×1752**. **82 FPS** and **13.47 ms GPU** with Water SSR, Clouds and Volumetrics active.
+- **Sodium 0.9.3-beta.1, M1 Pro, Metal 4, 3024×1742 pond fixture**. Sunset close-up improved from **46.06 to 34.19 ms** GPU with 24 SSR intervals and measured **29.57 ms** at 16. Underwater looking up improved from **11.31 to 10.68 ms** at 24 intervals.
+- Vanilla 26.3 rendered the same water and weather scenes on Metal 4. Native Tests 2n and 2o passed on Metal 4 and Metal 3.
+
 ## 0.1.0-alpha.17
 
 ### Added
