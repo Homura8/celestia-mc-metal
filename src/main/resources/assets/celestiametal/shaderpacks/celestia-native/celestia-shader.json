@@ -1,0 +1,363 @@
+{
+  "apiVersion": 1,
+  "id": "builtin:celestia-native",
+  "name": "Celestia Native",
+  "author": "Celestia Metal Contributors",
+  "version": "1.0.0",
+  "description": "Apple Silicon-first native MSL shader pack featuring Rayleigh/Mie sky LUT, 2-cascade PCF shadows, SSAO, reflective water, half-res volumetric clouds, dual Kawase bloom, and HDR tonemapping.",
+  "categories": [
+    "Lighting & Shadows",
+    "Sky & Atmosphere",
+    "Water",
+    "Volumetrics & Clouds",
+    "Post-Processing & HDR"
+  ],
+  "presets": {
+    "Performance": {
+      "SHADOWS_ENABLED": "true",
+      "SHADOW_RES": "1024",
+      "SHADOW_PCF_TAPS": "4",
+      "SSAO_ENABLED": "false",
+      "DYNAMIC_LIGHTS": "true",
+      "SKY_SCATTERING_STEPS": "4",
+      "STARFIELD_ENABLED": "true",
+      "WATER_WAVES": "true",
+      "WATER_REFLECTIONS": "SKY_ONLY",
+      "WATER_CAUSTICS": "false",
+      "CLOUDS_ENABLED": "true",
+      "CLOUD_STEPS": "8",
+      "GOD_RAYS": "false",
+      "BLOOM_ENABLED": "true",
+      "BLOOM_STRENGTH": "0.18",
+      "TONEMAP_CURVE": "FILMIC",
+      "EXPOSURE": "1.0",
+      "SATURATION": "1.06",
+      "HDR_EDR_BOOST": "1.2"
+    },
+    "Balanced": {
+      "SHADOWS_ENABLED": "true",
+      "SHADOW_RES": "2048",
+      "SHADOW_PCF_TAPS": "9",
+      "SSAO_ENABLED": "true",
+      "DYNAMIC_LIGHTS": "true",
+      "SKY_SCATTERING_STEPS": "8",
+      "STARFIELD_ENABLED": "true",
+      "WATER_WAVES": "true",
+      "WATER_REFLECTIONS": "SSR_AND_SKY",
+      "WATER_CAUSTICS": "true",
+      "CLOUDS_ENABLED": "true",
+      "CLOUD_STEPS": "14",
+      "GOD_RAYS": "true",
+      "BLOOM_ENABLED": "true",
+      "BLOOM_STRENGTH": "0.24",
+      "TONEMAP_CURVE": "AGX",
+      "EXPOSURE": "1.05",
+      "SATURATION": "1.08",
+      "HDR_EDR_BOOST": "1.35"
+    },
+    "Quality": {
+      "SHADOWS_ENABLED": "true",
+      "SHADOW_RES": "3072",
+      "SHADOW_PCF_TAPS": "12",
+      "SSAO_ENABLED": "true",
+      "DYNAMIC_LIGHTS": "true",
+      "SKY_SCATTERING_STEPS": "12",
+      "STARFIELD_ENABLED": "true",
+      "WATER_WAVES": "true",
+      "WATER_REFLECTIONS": "SSR_AND_SKY",
+      "WATER_CAUSTICS": "true",
+      "CLOUDS_ENABLED": "true",
+      "CLOUD_STEPS": "20",
+      "GOD_RAYS": "true",
+      "BLOOM_ENABLED": "true",
+      "BLOOM_STRENGTH": "0.26",
+      "TONEMAP_CURVE": "AGX",
+      "EXPOSURE": "1.05",
+      "SATURATION": "1.10",
+      "HDR_EDR_BOOST": "1.45"
+    },
+    "Cinematic": {
+      "SHADOWS_ENABLED": "true",
+      "SHADOW_RES": "4096",
+      "SHADOW_PCF_TAPS": "16",
+      "SSAO_ENABLED": "true",
+      "DYNAMIC_LIGHTS": "true",
+      "SKY_SCATTERING_STEPS": "16",
+      "STARFIELD_ENABLED": "true",
+      "WATER_WAVES": "true",
+      "WATER_REFLECTIONS": "SSR_AND_SKY",
+      "WATER_CAUSTICS": "true",
+      "CLOUDS_ENABLED": "true",
+      "CLOUD_STEPS": "28",
+      "GOD_RAYS": "true",
+      "BLOOM_ENABLED": "true",
+      "BLOOM_STRENGTH": "0.32",
+      "TONEMAP_CURVE": "ACES",
+      "EXPOSURE": "1.10",
+      "SATURATION": "1.12",
+      "HDR_EDR_BOOST": "1.60"
+    }
+  },
+  "options": [
+    {
+      "id": "SHADOWS_ENABLED",
+      "label": "Real-Time Sun Shadows",
+      "description": "Renders 2-cascade reversed-Z sun and moon shadow maps with cave sky-light early-out.",
+      "category": "Lighting & Shadows",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "HIGH"
+    },
+    {
+      "id": "SHADOW_RES",
+      "label": "Shadow Map Resolution",
+      "description": "Resolution per shadow cascade texture.",
+      "category": "Lighting & Shadows",
+      "type": "ENUM",
+      "values": ["1024", "2048", "3072", "4096"],
+      "default": "2048",
+      "impact": "HIGH"
+    },
+    {
+      "id": "SHADOW_PCF_TAPS",
+      "label": "Shadow Softness Taps",
+      "description": "Number of PCF filter taps around shadow edges.",
+      "category": "Lighting & Shadows",
+      "type": "INT_SLIDER",
+      "min": 1,
+      "max": 16,
+      "step": 1,
+      "default": "9",
+      "impact": "MEDIUM"
+    },
+    {
+      "id": "SSAO_ENABLED",
+      "label": "Screen-Space Ambient Occlusion",
+      "description": "Adds soft contact shadows in corners and crevices.",
+      "category": "Lighting & Shadows",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "MEDIUM"
+    },
+    {
+      "id": "DYNAMIC_LIGHTS",
+      "label": "Held-Item Dynamic Lights",
+      "description": "Illuminates nearby blocks with warm light when holding torches or glowstone.",
+      "category": "Lighting & Shadows",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "LOW"
+    },
+    {
+      "id": "SKY_SCATTERING_STEPS",
+      "label": "Atmosphere LUT Steps",
+      "description": "Ray integration steps for the upper-hemisphere Rayleigh & Mie sky LUT.",
+      "category": "Sky & Atmosphere",
+      "type": "INT_SLIDER",
+      "min": 2,
+      "max": 16,
+      "step": 2,
+      "default": "8",
+      "impact": "NEGLIGIBLE"
+    },
+    {
+      "id": "STARFIELD_ENABLED",
+      "label": "Celestial Stars & Twilight Glow",
+      "description": "Crisp twinkling night starfield and warm twilight horizon scattering.",
+      "category": "Sky & Atmosphere",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "NEGLIGIBLE"
+    },
+    {
+      "id": "AERIAL_FOG",
+      "label": "Atmospheric Aerial Fog",
+      "description": "Blends distant terrain into the scattering sky LUT.",
+      "category": "Sky & Atmosphere",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "LOW"
+    },
+    {
+      "id": "WATER_WAVES",
+      "label": "Animated Water Ripples",
+      "description": "Multi-octave procedural wave normals on water surfaces.",
+      "category": "Water",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "LOW"
+    },
+    {
+      "id": "WATER_REFLECTIONS",
+      "label": "Water Reflections",
+      "description": "Reflects sky and nearby terrain on water surfaces via Fresnel.",
+      "category": "Water",
+      "type": "ENUM",
+      "values": ["OFF", "SKY_ONLY", "SSR_AND_SKY"],
+      "default": "SSR_AND_SKY",
+      "impact": "MEDIUM"
+    },
+    {
+      "id": "WATER_CAUSTICS",
+      "label": "Underwater Caustics & Absorption",
+      "description": "Beer-Lambert depth tinting and sunlit underwater caustic patterns.",
+      "category": "Water",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "LOW"
+    },
+    {
+      "id": "CLOUDS_ENABLED",
+      "label": "Volumetric Clouds",
+      "description": "Half-resolution raymarched volumetric clouds with Mie silver lining.",
+      "category": "Volumetrics & Clouds",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "MEDIUM"
+    },
+    {
+      "id": "CLOUD_STEPS",
+      "label": "Cloud Raymarch Steps",
+      "description": "Raymarch samples per pixel for volumetric clouds.",
+      "category": "Volumetrics & Clouds",
+      "type": "INT_SLIDER",
+      "min": 4,
+      "max": 32,
+      "step": 2,
+      "default": "14",
+      "impact": "HIGH"
+    },
+    {
+      "id": "GOD_RAYS",
+      "label": "Crepuscular Light Shafts",
+      "description": "Subtle sun shafts and underwater volumetric beams.",
+      "category": "Volumetrics & Clouds",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "MEDIUM"
+    },
+    {
+      "id": "BLOOM_ENABLED",
+      "label": "Dual Kawase Bloom",
+      "description": "Soft glow around sunlight, lava, torches, and bright highlights.",
+      "category": "Post-Processing & HDR",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "LOW"
+    },
+    {
+      "id": "BLOOM_STRENGTH",
+      "label": "Bloom Intensity",
+      "description": "Multiplier applied when compositing the bloom pyramid.",
+      "category": "Post-Processing & HDR",
+      "type": "FLOAT_SLIDER",
+      "min": 0.0,
+      "max": 0.6,
+      "step": 0.02,
+      "default": "0.24",
+      "impact": "NEGLIGIBLE"
+    },
+    {
+      "id": "TONEMAP_CURVE",
+      "label": "Tone Mapping Curve",
+      "description": "Selects AgX, ACES, or Celestia Filmic HDR response curve.",
+      "category": "Post-Processing & HDR",
+      "type": "ENUM",
+      "values": ["AGX", "ACES", "FILMIC"],
+      "default": "AGX",
+      "impact": "NEGLIGIBLE"
+    },
+    {
+      "id": "EXPOSURE",
+      "label": "Exposure",
+      "description": "Scene brightness multiplier prior to tone mapping.",
+      "category": "Post-Processing & HDR",
+      "type": "FLOAT_SLIDER",
+      "min": 0.6,
+      "max": 1.6,
+      "step": 0.05,
+      "default": "1.05",
+      "impact": "NEGLIGIBLE"
+    },
+    {
+      "id": "SATURATION",
+      "label": "Color Vibrance",
+      "description": "Post-tonemap color saturation balance.",
+      "category": "Post-Processing & HDR",
+      "type": "FLOAT_SLIDER",
+      "min": 0.8,
+      "max": 1.4,
+      "step": 0.02,
+      "default": "1.08",
+      "impact": "NEGLIGIBLE"
+    },
+    {
+      "id": "HDR_EDR_BOOST",
+      "label": "EDR Highlight Expansion",
+      "description": "Expands highlights beyond SDR white on Apple XDR / EDR displays.",
+      "category": "Post-Processing & HDR",
+      "type": "FLOAT_SLIDER",
+      "min": 1.0,
+      "max": 2.0,
+      "step": 0.05,
+      "default": "1.35",
+      "impact": "NEGLIGIBLE"
+    }
+  ],
+  "passes": [
+    {
+      "name": "sky_lut",
+      "stage": "COMPUTE",
+      "shader": "sky_lut.metal",
+      "entryPoint": "celestia_sky_lut_cs",
+      "scale": 1.0,
+      "format": "RGBA16_FLOAT",
+      "threadgroupX": 8,
+      "threadgroupY": 8
+    },
+    {
+      "name": "deferred_lighting",
+      "stage": "FULLSCREEN",
+      "shader": "deferred_lighting.metal",
+      "entryPoint": "celestia_deferred_fs",
+      "scale": 1.0,
+      "format": "RGBA16_FLOAT"
+    },
+    {
+      "name": "water_surface",
+      "stage": "FULLSCREEN",
+      "shader": "water_surface.metal",
+      "entryPoint": "celestia_water_fs",
+      "scale": 1.0,
+      "format": "RGBA16_FLOAT"
+    },
+    {
+      "name": "volumetric_clouds",
+      "stage": "COMPUTE",
+      "shader": "volumetric_clouds.metal",
+      "entryPoint": "celestia_clouds_cs",
+      "scale": 0.5,
+      "format": "RGBA16_FLOAT",
+      "threadgroupX": 8,
+      "threadgroupY": 8
+    },
+    {
+      "name": "bloom_downsample",
+      "stage": "COMPUTE",
+      "shader": "bloom.metal",
+      "entryPoint": "celestia_bloom_down_cs",
+      "scale": 0.5,
+      "format": "RGBA16_FLOAT",
+      "threadgroupX": 8,
+      "threadgroupY": 8
+    },
+    {
+      "name": "tonemap_composite",
+      "stage": "FULLSCREEN",
+      "shader": "tonemap_composite.metal",
+      "entryPoint": "celestia_tonemap_fs",
+      "scale": 1.0,
+      "format": "RGBA16_FLOAT"
+    }
+  ]
+}

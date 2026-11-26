@@ -1,12 +1,12 @@
 .gradle/
 build/
-run/
-out/
+/run/
+/out/
 .idea/
 *.iml
 .DS_Store
 *.log
 *.hprof
-natives/
-shaderpacks/
-config/
+/natives/
+/shaderpacks/
+/config/
