@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 
-#define CM_ABI_VERSION 5
+#define CM_ABI_VERSION 6
 #define CM_MAX_COLOR_ATTACHMENTS 8
 #define CM_MAX_VERTEX_BUFFERS 8
 #define CM_MAX_UNIFORM_BUFFERS 15
@@ -27,13 +27,18 @@
 #define CM_SHADE_BUF_LOOK      25
 #define CM_SHADE_BUF_GPU       26
 #define CM_SHADE_BUF_RESOURCES 27
-#define CM_SHADE_BUF_HIST      28
+#define CM_SHADE_BUF_WATER     28
 #define CM_SHADE_BUF_BLOOM     29
-#define CM_SHADE_TEX_SHADOW    16
-#define CM_SHADE_TEX_SKY_LUT   17
-#define CM_SHADE_SAMP_SHADOW   12
-#define CM_SHADE_SAMP_LINEAR   13
-#define CM_SHADE_MAX_RES_TEX   16
+#define CM_SHADE_TEX_SHADOW       16
+#define CM_SHADE_TEX_SKY_LUT      17
+#define CM_SHADE_TEX_WATER_SCENE  18
+#define CM_SHADE_TEX_WATER_DEPTH  19
+#define CM_SHADE_TEX_WATER_WAVES  20
+#define CM_SHADE_TEX_WATER_PYR    21
+#define CM_SHADE_TEX_WATER_DETAIL 22
+#define CM_SHADE_SAMP_SHADOW      12
+#define CM_SHADE_SAMP_LINEAR      13
+#define CM_SHADE_MAX_RES_TEX      16
 
 typedef enum CMFormat {
     CM_FMT_R8_UNORM = 0,
@@ -369,6 +374,28 @@ __attribute__((objc_direct_members))
 @property (nonatomic) NSUInteger shadowQuadIdx32Cap;
 @property (nonatomic, strong) NSMutableArray *shadowOrigRing;
 @property (nonatomic, strong) id<MTLDepthStencilState> shadowDepthState;
+// Scissor mirror for reopening passes (cm_water.m)
+@property (nonatomic) BOOL currentScissorEnabled;
+@property (nonatomic) int32_t currentScissorX;
+@property (nonatomic) int32_t currentScissorY;
+@property (nonatomic) int32_t currentScissorW;
+@property (nonatomic) int32_t currentScissorH;
+// Native water pass state (P3a+, cm_water.m)
+@property (nonatomic) BOOL waterEnabled;
+@property (nonatomic) BOOL waterCopyValid;
+@property (nonatomic, strong) id<MTLBuffer> waterParamsBuf;
+@property (nonatomic) uint64_t waterParamsOffset;
+@property (nonatomic, strong) id<MTLBuffer> waterDummyParamsBuf;
+@property (nonatomic, strong) id<MTLTexture> waterSceneCopy;
+@property (nonatomic, strong) id<MTLTexture> waterDepthCopy;
+@property (nonatomic, strong) id<MTLTexture> waterPyrTex;
+@property (nonatomic, strong) id<MTLTexture> waterPyrTmp8;
+@property (nonatomic, strong) id<MTLTexture> waterPyrTmp16;
+@property (nonatomic, strong) id<MTLTexture> waterWavesTex;
+@property (nonatomic, strong) id<MTLTexture> waterDetailTex;
+@property (nonatomic, strong) id<MTLTexture> waterDummyHalf;
+@property (nonatomic, strong) id<MTLTexture> waterDummyDepth;
+@property (nonatomic, strong) id<MTLTexture> waterDummyFloat;
 @end
 
 // Internal helpers shared across native .m modules
@@ -394,6 +421,7 @@ void cm_reset_pass_cache(CMContext *ctx);
 void cm_emit_m4_render_producer_barrier(id enc);
 MTLGPUAddress cm_m4_push_ring_alloc(CMContext *ctx, const void *data, NSUInteger size);
 void cm_shade_bind_render_encoder(CMContext *ctx, const int64_t *colorViewPtrs, int32_t colorCount);
+void cm_water_bind_render_encoder(CMContext *ctx, const int64_t *colorViewPtrs, int32_t colorCount);
 // Waits for submit `serial`; the blocked time is accounted to *waitUs (may be NULL). timeoutNs == 0 only polls.
 int32_t cm_wait_submit_accounted(CMContext *ctx, uint64_t serial, uint64_t timeoutNs, _Atomic int64_t *waitUs);
 NSUInteger cm_bytes_per_pixel(MTLPixelFormat fmt);
@@ -594,6 +622,13 @@ void cm_shadow_render_vanilla(int64_t ctxPtr, int64_t shadowTexPtr, int32_t laye
                               const void *draws, int32_t drawCount,
                               int64_t atlasTexPtr, int64_t atlasSampPtr,
                               float slopeScale, float clamp, int32_t loadExisting);
+
+// Water scene copy, depth pyramid & wave mipmap generation (P3a+, cm_water.m)
+void cm_water_set_params(int64_t ctxPtr, int64_t paramsBufPtr, int64_t paramsOffset,
+                         int64_t wavesTexPtr, int64_t detailTexPtr, int32_t enabled);
+void cm_water_generate_mipmaps(int64_t ctxPtr, int64_t texPtr);
+int32_t cm_water_capture(int64_t ctxPtr, int64_t pyrPsoPtr, int64_t pyr2PsoPtr);
+void cm_blit_copy_texture_full(int64_t ctxPtr, int64_t srcTexPtr, int64_t dstTexPtr);
 
 #ifdef __cplusplus
 }

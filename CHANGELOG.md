@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.0-alpha.17
+
+### Added
+- **Native MSL Shader Suite Port — Phase P3a (`dev.celestia.metal.shade.water.*`)**:
+  - **Realistic Water & Screen-Space Reflections (`water.metal`, `shade_water_terrain.metal`, `cm_water.m`, `CM_ABI_VERSION 6`)**:
+    - Captures opaque world color + depth (`cm_water_capture`) when the main pass switches to translucent terrain (reopening with `MTLLoadActionLoad` so sky/terrain/entities stay intact) and builds a hazard-free 3-pass `RG16Float` hierarchical depth pyramid (`shade_water_pyr_fs` / `shade_water_pyr2_fs`) for exact SSR tracing.
+    - Bakes mipmapped tiled wave (`1024×1024` `RGBA16Float`), fine-ripple detail (`256×256` `RGBA16Float`), and bi-frame open-sea swell (`256×256` `RGBA16Float`) textures with native `generateMipmapsForTexture` (`cm_water_generate_mipmaps`), plus previous-frame `RGBA16Float` HDR world history (`ShadeResources.prevScene`) for SSR hit colors and reflected sky/sun/stars.
+    - Implements directional flowing water waves, Schlick Fresnel, depth-based Beer-Lambert underwater absorption, refraction, shoreline foam, animated bottom caustics, underwater Snell's window & TIR reflections (`WaterFrame.surfaceAbove`), and glossy dielectric reflections (`shadeGlossy`) for stained glass/ice/slime/honey.
+    - **Sodium 0.9.x + Vanilla 26.3 support without hard Sodium dependency**: `ShadeShaderPatcher` patches both `minecraft:pipeline/translucent_terrain*` (excluding `oit`) and `sodium:pipeline/translucent_terrain`, extracting `minecraft:block/water_still` & `water_flow` atlas UV rectangles in `WaterFrame`.
+    - Updated F3 `Celestia Shade:` status line (`P3a HDR ... | Water SSR`).
+    - Added `ShadeP3aTest` (JUnit 5 + FFM) and native **Test 2n** (mid-pass scene+depth capture, 3-pass `RG16Float` depth pyramid, wave/detail/swell bake + mipmaps, reopened pass load-action preservation) plus 3024×1752 synthetic P3a water prep GPU benchmark in `tools/test_metal_backend.m` across Metal 4 and Metal 3.
+
+### Verified Performance (Apple M1 Pro, 3024×1752 native, Metal 4)
+- **In-game (Vanilla 26.3 terrain + Xaero's Minimap)**:
+  - Beach day overview (`elev 25 deg`, `109k/821k q`): **77 FPS** (`14.10 ms` GPU)
+  - Beach twilight (`elev -5 deg`, `146k/793k q`): **62–63 FPS** (`16.62–16.84 ms` GPU)
+  - Sunset water close-up (waves + SSR): **43 FPS** (`23.30 ms` GPU)
+  - Underwater looking up (Snell's window + TIR, `elev 29 deg`, `106k/1032k q`): **33 FPS** (`26.51 ms` GPU)
+  - Visuals verified: animated ocean waves, SSR shoreline/tree/reed reflections, twilight/sky reflection, shoreline depth absorption, and underwater Snell's window + kelp TIR refraction. Known optimization follow-ups: register-pressure split (`SHADE_COLD` / above-water lean specialization + isolating non-water `shadeLit2`/`shadeGlossy`), lowering default `WAVE_SIZE` (`1024²` -> `512²`) and batching mipmap blits, skipping wave bakes on non-water frames, and tuning `SHADE_SSRH_BUDGET`.
+- **Synthetic P3a Water Prep (`tools/test_metal_backend.m` @ 3024×1752, 1024² waves + 256² ripples/swell + mipmaps + scene/depth copy + 3-pass `RG16Float` pyramid)**: **1.993 ms** GPU (Metal 4) / **1.691 ms** GPU (Metal 3).
+
 ## 0.1.0-alpha.16
 
 ### Added

@@ -47,6 +47,7 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
     private final long fsFunction;
     private final long vsLibrary;
     private final long fsLibrary;
+    private final boolean translucentTerrain;
     private final Map<ShadeShaderPatcher.Variant, CompiledStages> variantStages = new EnumMap<>(ShadeShaderPatcher.Variant.class);
     private final Map<PsoKey, Long> psoCache = new ConcurrentHashMap<>();
     private volatile boolean closed;
@@ -68,6 +69,11 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
         this.fsLibrary = fsLib;
         this.vsFunction = vsFn;
         this.fsFunction = fsFn;
+        this.translucentTerrain = ShadeShaderPatcher.isTranslucentTerrainPipelineName(info.name());
+    }
+
+    public boolean isTranslucentTerrain() {
+        return translucentTerrain;
     }
 
     public static Pending compileAsync(CelestiaMetalDevice device, BackendRenderPipeline.CreateInfo info) {

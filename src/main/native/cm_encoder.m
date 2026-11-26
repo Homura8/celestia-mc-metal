@@ -884,8 +884,18 @@ void cm_pass_set_scissor(int64_t ctxPtr, int32_t enabled, int32_t x, int32_t y, 
         NSUInteger sw = (NSUInteger)MIN(w, ctx.currentPassWidth - (int32_t)sx);
         NSUInteger sh = (NSUInteger)MIN(h, ctx.currentPassHeight - (int32_t)sy);
         sr = (MTLScissorRect){ sx, sy, MAX(1UL, sw), MAX(1UL, sh) };
+        ctx.currentScissorEnabled = YES;
+        ctx.currentScissorX = x;
+        ctx.currentScissorY = y;
+        ctx.currentScissorW = w;
+        ctx.currentScissorH = h;
     } else {
         sr = (MTLScissorRect){ 0, 0, (NSUInteger)ctx.currentPassWidth, (NSUInteger)ctx.currentPassHeight };
+        ctx.currentScissorEnabled = NO;
+        ctx.currentScissorX = 0;
+        ctx.currentScissorY = 0;
+        ctx.currentScissorW = 0;
+        ctx.currentScissorH = 0;
     }
     if (ctx.metal4Active) {
         [(id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc setScissorRect:sr];

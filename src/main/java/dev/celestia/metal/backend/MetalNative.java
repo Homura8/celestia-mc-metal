@@ -105,6 +105,10 @@ public final class MetalNative {
     private static MethodHandle mhShadeExposureRun;
     private static MethodHandle mhShadowRenderSodium;
     private static MethodHandle mhShadowRenderVanilla;
+    private static MethodHandle mhWaterSetParams;
+    private static MethodHandle mhWaterGenerateMipmaps;
+    private static MethodHandle mhWaterCapture;
+    private static MethodHandle mhBlitCopyTextureFull;
 
     private MetalNative() {}
 
@@ -282,6 +286,10 @@ public final class MetalNative {
             L, L, I, I, L, L, P, I, L, L, L, L, P, I, L, L, F, F, I));
         mhShadowRenderVanilla = downcall("cm_shadow_render_vanilla", FunctionDescriptor.ofVoid(
             L, L, I, I, L, L, P, I, P, I, L, L, F, F, I));
+        mhWaterSetParams = downcall("cm_water_set_params", FunctionDescriptor.ofVoid(L, L, L, L, L, I));
+        mhWaterGenerateMipmaps = downcall("cm_water_generate_mipmaps", FunctionDescriptor.ofVoid(L, L));
+        mhWaterCapture = downcall("cm_water_capture", FunctionDescriptor.of(I, L, L, L));
+        mhBlitCopyTextureFull = downcall("cm_blit_copy_texture_full", FunctionDescriptor.ofVoid(L, L, L));
     }
 
     public static ProbeInfo probeDevice() {
@@ -809,5 +817,26 @@ public final class MetalNative {
                 segOrNull(cascadeData), cascadeBytes, segOrNull(draws), drawCount,
                 atlasTex, atlasSamp, slopeScale, clamp, loadExisting ? 1 : 0);
         } catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    public static void waterSetParams(long ctx, long paramsBuf, long paramsOffset,
+                                      long wavesTex, long detailTex, boolean enabled) {
+        try {
+            mhWaterSetParams.invokeExact(ctx, paramsBuf, paramsOffset, wavesTex, detailTex, enabled ? 1 : 0);
+        } catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    public static void waterGenerateMipmaps(long ctx, long tex) {
+        try { mhWaterGenerateMipmaps.invokeExact(ctx, tex); } catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    public static int waterCapture(long ctx, long pyrPso, long pyr2Pso) {
+        try { return (int) mhWaterCapture.invokeExact(ctx, pyrPso, pyr2Pso); }
+        catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    public static void blitCopyTextureFull(long ctx, long srcTex, long dstTex) {
+        try { mhBlitCopyTextureFull.invokeExact(ctx, srcTex, dstTex); }
+        catch (Throwable t) { throw new RuntimeException(t); }
     }
 }

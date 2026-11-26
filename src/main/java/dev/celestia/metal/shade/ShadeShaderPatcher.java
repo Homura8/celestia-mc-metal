@@ -128,6 +128,50 @@ public final class ShadeShaderPatcher {
         return prelude(true, false, null) + resource("shade_post.metal") + "\n";
     }
 
+    public static String waterDefines() {
+        return """
+            #define SHADE_WATER 1
+            #define SHADE_SSR 1
+            #define SHADE_SSR_HIER 1
+            #define SHADE_SSRH_THICK 2.0
+            #define SHADE_SSRH_BUDGET 32
+            #define SHADE_SSRH_OWN 1
+            #define SHADE_SSRH_THIN 1
+            #define SHADE_SSR_STEPS 24
+            #define SHADE_SSR_RAWZ 1
+            #define SHADE_SSR_LEAN2 1
+            #define SHADE_SSR_EDGE 1
+            #define SHADE_SSR_THICK_K 1.5
+            #define SHADE_SSR_BEHIND 0
+            #define SHADE_SSR_TOP 0.15
+            #define SHADE_SSR_SIDE 0.25
+            #define SHADE_SSR_SIDE_END 0.0
+            #define SHADE_SSR_PREV 1
+            #define SHADE_CAUSTICS 1
+            #define SHADE_FOAM 1
+            #define SHADE_GLOSSY 1
+            #define SHADE_WATER_DETAIL 1
+            #define SHADE_WATER_DETAIL_SIZE 256
+            #define SHADE_WATER_DETAIL_FAR 112.0
+            #define SHADE_WATER_PATTERN_FAR 0.075
+            #define SHADE_WATER_DETAIL_EXTRAS 1
+            #define SHADE_WATER_SMOOTH 1
+            #define SHADE_WATER_GLINT_GRAZE 1
+            #define SHADE_WAVE_BAKE 1
+            #define SHADE_WAVE_BAKE_SIZE 1024
+            #define SHADE_WATER_SWELL 1
+            #define SHADE_WATER_SWELL_BAKED 1
+            #define SHADE_WATER_GLITTER 1
+            #define SHADE_WATER_SUBRECT 1
+            """;
+    }
+
+    public static String waterBakeSource() {
+        return prelude(true, false, waterDefines(), false)
+            + resource("shade_post.metal") + "\n"
+            + resource("water.metal") + "\n";
+    }
+
     public static String skyLutSource() {
         return prelude(true, false, null) + resource("sky_lut.metal") + "\n";
     }
@@ -191,10 +235,14 @@ public final class ShadeShaderPatcher {
             return new PatchedStages(baseVs, baseVsEntry, pre + resource("clouds.fs.metal"), "main0", true);
         }
 
-        // 2. Vanilla & Sodium 0.9.x terrain (solid / cutout; translucent keeps sRGB->HDR conversion until P5 water)
+        // 2. Vanilla & Sodium 0.9.x terrain (opaque/cutout & P3a translucent water)
         if (baseFs != null && isOpaqueOrCutoutTerrain(lower, baseVs)) {
             PatchedStages terrain = patchTerrain(lower, baseVs, baseVsEntry, baseFs, baseFsEntry);
             if (terrain != null) return terrain;
+        }
+        if (baseFs != null && isTranslucentTerrain(lower, baseVs)) {
+            PatchedStages waterTerrain = patchTranslucentTerrain(lower, baseVs, baseVsEntry, baseFs, baseFsEntry);
+            if (waterTerrain != null) return waterTerrain;
         }
 
         // 3. Vanilla entities, moving blocks, items, particles
@@ -220,6 +268,20 @@ public final class ShadeShaderPatcher {
             || pipelineNameLower.contains("block_layer");
         if (!nameLooksTerrain) return false;
         return isSodiumTerrainVs(vsMsl) || isVanillaTerrainVs(vsMsl);
+    }
+
+    public static boolean isTranslucentTerrainPipelineName(String pipelineName) {
+        if (pipelineName == null) return false;
+        String lower = pipelineName.toLowerCase(Locale.ROOT);
+        if (lower.contains("oit") || lower.contains("tripwire") || lower.contains("_block") || !lower.contains("translucent")) {
+            return false;
+        }
+        return lower.contains("terrain") || lower.contains("chunk") || lower.contains("sodium") || lower.contains("block_layer");
+    }
+
+    public static boolean isTranslucentTerrain(String pipelineNameLower, String vsMsl) {
+        return isTranslucentTerrainPipelineName(pipelineNameLower)
+            && (isSodiumTerrainVs(vsMsl) || isVanillaTerrainVs(vsMsl));
     }
 
     public static boolean isSodiumTerrainVs(String vsMsl) {
@@ -261,10 +323,25 @@ public final class ShadeShaderPatcher {
 
     private static final Pattern GL_POS_FIELD = Pattern.compile("\\bfloat4\\s+gl_Position\\s*\\[\\[position\\]\\];");
     private static final Pattern STRUCT_MAIN0_IN = Pattern.compile("struct\\s+main0_in\\s*\\{");
+    private static final Pattern FRAG_POSITION_PARAM = Pattern.compile("\\bfloat4\\s+(\\w+)\\s*\\[\\[position\\]\\]");
+    private static final Pattern TEXCOORD_FIELD = Pattern.compile("\\bfloat2\\s+(\\w*(?:texcoord|uv)\\w*)\\s*\\[\\[user\\(", Pattern.CASE_INSENSITIVE);
 
     static PatchedStages patchTerrain(String pipelineNameLower,
                                       String vsMsl, String vsEntry,
                                       String fsMsl, String fsEntry) {
+        return patchTerrainCommon(pipelineNameLower, vsMsl, vsEntry, fsMsl, fsEntry, false);
+    }
+
+    static PatchedStages patchTranslucentTerrain(String pipelineNameLower,
+                                                 String vsMsl, String vsEntry,
+                                                 String fsMsl, String fsEntry) {
+        return patchTerrainCommon(pipelineNameLower, vsMsl, vsEntry, fsMsl, fsEntry, true);
+    }
+
+    private static PatchedStages patchTerrainCommon(String pipelineNameLower,
+                                                    String vsMsl, String vsEntry,
+                                                    String fsMsl, String fsEntry,
+                                                    boolean translucentWater) {
         if (vsMsl == null || fsMsl == null) return null;
         boolean sodium = isSodiumTerrainVs(vsMsl);
         String inVs = structBody(vsMsl, "main0_in");
@@ -314,7 +391,6 @@ public final class ShadeShaderPatcher {
         int inFsEnd = texelCaptured.indexOf("};", inFsM.end());
         if (inFsEnd < 0) return null;
 
-        // Recompute sig/close/ret on texelCaptured
         int pSig = texelCaptured.indexOf(FRAGMENT_ENTRY);
         int pClose = findClosingParen(texelCaptured, pSig + FRAGMENT_ENTRY.length() - 1);
         int pRet = texelCaptured.lastIndexOf("return out;");
@@ -345,14 +421,51 @@ public final class ShadeShaderPatcher {
             + ", texture2d<half> celLut [[texture(" + MetalConst.SHADE_TEX_SKY_LUT + ")]]"
             + ", sampler celLutSmplr [[sampler(" + MetalConst.SHADE_SAMP_LINEAR + ")]]";
 
-        String shadeCall = "    out." + colorMember + " = shadeTerrainShade(out." + colorMember
-            + ", celTexel, in.mcoptColor, in.mcoptPos, in.mcoptLight, " + chunkVis + ", "
-            + (isCutout ? "true" : "false") + ", " + fogExpr
-            + ", celLut, celLutSmplr, celShadow, celShadowCmp, celSF, celSL, celSG, celSR);\n";
+        String shadeCall;
+        StringBuilder fs = new StringBuilder(texelCaptured.length() + (translucentWater ? 65536 : 4096));
+        if (translucentWater) {
+            String uvExpr = "float2(0.0)";
+            if (inFs.contains("v_TexCoord")) {
+                uvExpr = "in.v_TexCoord";
+            } else if (inFs.contains("texCoord0")) {
+                uvExpr = "in.texCoord0";
+            } else {
+                Matcher uvM = TEXCOORD_FIELD.matcher(inFs);
+                if (uvM.find()) uvExpr = "in." + uvM.group(1);
+            }
+            String fragPosName = null;
+            Matcher fpM = FRAG_POSITION_PARAM.matcher(texelCaptured);
+            if (fpM.find(pSig) && fpM.start() < pClose) {
+                fragPosName = fpM.group(1);
+            } else {
+                fragPosName = "celFragCoord";
+                shadeParams += ", float4 celFragCoord [[position]]";
+            }
+            shadeParams += ", texture2d<half> celSceneCopy [[texture(" + MetalConst.SHADE_TEX_WATER_SCENE + ")]]"
+                + ", depth2d<float> celDepthCopy [[texture(" + MetalConst.SHADE_TEX_WATER_DEPTH + ")]]"
+                + ", constant ShadeWaterParams& celWP [[buffer(" + MetalConst.SHADE_BUF_WATER + ")]]"
+                + ", texture2d<half> celWaterWaves [[texture(" + MetalConst.SHADE_TEX_WATER_WAVES + ")]]"
+                + ", texture2d<float> celWaterCoarse [[texture(" + MetalConst.SHADE_TEX_WATER_PYR + ")]]"
+                + ", texture2d<half> celWaterDetail [[texture(" + MetalConst.SHADE_TEX_WATER_DETAIL + ")]]";
+            shadeCall = "    out." + colorMember + " = shadeWaterTerrainShade(out." + colorMember
+                + ", celTexel, in.mcoptColor, in.mcoptPos, in.mcoptLight, " + uvExpr + ", " + fragPosName
+                + ", " + chunkVis + ", " + fogExpr
+                + ", celLut, celLutSmplr, celShadow, celShadowCmp, celSF, celSL, celSG, celSR"
+                + ", celSceneCopy, celDepthCopy, celWP, celWaterWaves, celWaterCoarse, celWaterDetail);\n";
 
-        StringBuilder fs = new StringBuilder(texelCaptured.length() + 4096);
-        fs.append(prelude(true, false, null, false));
-        fs.append(resource("shade_terrain.metal")).append('\n');
+            fs.append(prelude(true, false, waterDefines(), false));
+            fs.append(resource("water.metal")).append('\n');
+            fs.append(resource("shade_water_terrain.metal")).append('\n');
+        } else {
+            shadeCall = "    out." + colorMember + " = shadeTerrainShade(out." + colorMember
+                + ", celTexel, in.mcoptColor, in.mcoptPos, in.mcoptLight, " + chunkVis + ", "
+                + (isCutout ? "true" : "false") + ", " + fogExpr
+                + ", celLut, celLutSmplr, celShadow, celShadowCmp, celSF, celSL, celSG, celSR);\n";
+
+            fs.append(prelude(true, false, null, false));
+            fs.append(resource("shade_terrain.metal")).append('\n');
+        }
+
         fs.append(texelCaptured, 0, inFsEnd);
         fs.append(TERRAIN_OUT_MEMBERS);
         fs.append(texelCaptured, inFsEnd, pClose);
