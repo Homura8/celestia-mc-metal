@@ -325,11 +325,10 @@ void cm_blit_copy_buffer_to_texture(int64_t ctxPtr, int64_t srcBuf, int64_t srcO
         id<MTLBuffer> s = (__bridge id<MTLBuffer>)(void *)srcBuf;
         id<MTLTexture> t = (__bridge id<MTLTexture>)(void *)dstTex;
         NSUInteger bpr = srcRowBytes > 0 ? (NSUInteger)srcRowBytes : ((NSUInteger)w * cm_bytes_per_pixel(t.pixelFormat));
-        NSUInteger bpi = bpr * (NSUInteger)h;
         if (ctx.metal4Active) {
             if (@available(macOS 26.0, *)) {
                 [(id<MTL4ComputeCommandEncoder>)enc copyFromBuffer:s sourceOffset:(NSUInteger)srcOff
-                                                sourceBytesPerRow:bpr sourceBytesPerImage:bpi
+                                                sourceBytesPerRow:bpr sourceBytesPerImage:0
                                                        sourceSize:MTLSizeMake((NSUInteger)w, (NSUInteger)h, 1)
                                                         toTexture:t destinationSlice:(NSUInteger)slice
                                                  destinationLevel:(NSUInteger)mip
@@ -337,7 +336,7 @@ void cm_blit_copy_buffer_to_texture(int64_t ctxPtr, int64_t srcBuf, int64_t srcO
             }
         } else {
             [(id<MTLBlitCommandEncoder>)enc copyFromBuffer:s sourceOffset:(NSUInteger)srcOff
-                                         sourceBytesPerRow:bpr sourceBytesPerImage:bpi
+                                         sourceBytesPerRow:bpr sourceBytesPerImage:0
                                                 sourceSize:MTLSizeMake((NSUInteger)w, (NSUInteger)h, 1)
                                                  toTexture:t destinationSlice:(NSUInteger)slice
                                           destinationLevel:(NSUInteger)mip
@@ -356,7 +355,6 @@ void cm_blit_copy_texture_to_buffer(int64_t ctxPtr, int64_t srcTex, int32_t mip,
         id<MTLTexture> t = (__bridge id<MTLTexture>)(void *)srcTex;
         id<MTLBuffer> d = (__bridge id<MTLBuffer>)(void *)dstBuf;
         NSUInteger bpr = dstRowBytes > 0 ? (NSUInteger)dstRowBytes : ((NSUInteger)w * cm_bytes_per_pixel(t.pixelFormat));
-        NSUInteger bpi = bpr * (NSUInteger)h;
         if (ctx.metal4Active) {
             if (@available(macOS 26.0, *)) {
                 [(id<MTL4ComputeCommandEncoder>)enc copyFromTexture:t sourceSlice:(NSUInteger)slice
@@ -364,7 +362,7 @@ void cm_blit_copy_texture_to_buffer(int64_t ctxPtr, int64_t srcTex, int32_t mip,
                                                       sourceOrigin:MTLOriginMake((NSUInteger)srcX, (NSUInteger)srcY, 0)
                                                         sourceSize:MTLSizeMake((NSUInteger)w, (NSUInteger)h, 1)
                                                           toBuffer:d destinationOffset:(NSUInteger)dstOff
-                                            destinationBytesPerRow:bpr destinationBytesPerImage:bpi];
+                                            destinationBytesPerRow:bpr destinationBytesPerImage:0];
             }
         } else {
             [(id<MTLBlitCommandEncoder>)enc copyFromTexture:t sourceSlice:(NSUInteger)slice
@@ -372,7 +370,7 @@ void cm_blit_copy_texture_to_buffer(int64_t ctxPtr, int64_t srcTex, int32_t mip,
                                                sourceOrigin:MTLOriginMake((NSUInteger)srcX, (NSUInteger)srcY, 0)
                                                  sourceSize:MTLSizeMake((NSUInteger)w, (NSUInteger)h, 1)
                                                    toBuffer:d destinationOffset:(NSUInteger)dstOff
-                                     destinationBytesPerRow:bpr destinationBytesPerImage:bpi];
+                                     destinationBytesPerRow:bpr destinationBytesPerImage:0];
         }
     }
 }

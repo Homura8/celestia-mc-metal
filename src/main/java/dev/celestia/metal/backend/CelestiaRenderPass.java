@@ -228,7 +228,7 @@ public final class CelestiaRenderPass implements RenderPassBackend {
     }
 
     @Override
-    public void multiDraw(IntBuffer drawCommands, int drawCount, int instanceCount, int firstInstance) {
+    public void multiDraw(IntBuffer drawCommands, int instanceCount, int firstInstance, int drawCount) {
         if (closed || drawCount <= 0 || drawCommands == null) return;
         flushUniforms();
         // VkMultiDrawInfoEXT interleaved layout: { uint32 firstVertex, uint32 vertexCount }
@@ -256,7 +256,7 @@ public final class CelestiaRenderPass implements RenderPassBackend {
     }
 
     @Override
-    public void multiDrawIndexed(IntBuffer drawCommands, int drawCount, int instanceCount, int firstInstance) {
+    public void multiDrawIndexed(IntBuffer drawCommands, int instanceCount, int firstInstance, int drawCount) {
         if (closed || drawCount <= 0 || drawCommands == null) return;
         flushUniforms();
         // VkMultiDrawIndexedInfoEXT interleaved layout: { uint32 firstIndex, uint32 indexCount, int32 vertexOffset }

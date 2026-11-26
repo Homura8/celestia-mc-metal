@@ -234,7 +234,7 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
     @Override
     public void copyBufferToTexture(GpuBufferSlice srcSlice, int srcX, int srcY,
                                     int srcRowLengthPixels, int srcImageHeight,
-                                    GpuTexture dstTex, int mip, int slice, int dstX, int dstY, int w, int h) {
+                                    GpuTexture dstTex, int dstX, int dstY, int w, int h, int mip, int slice) {
         if (srcSlice.buffer() instanceof CelestiaBuffer cb && dstTex instanceof CelestiaTexture ct) {
             int bpp = ct.getFormat().blockSize();
             int stridePixels = srcRowLengthPixels > 0 ? srcRowLengthPixels : w;

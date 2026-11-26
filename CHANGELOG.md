@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0-alpha.7
+
+### Fixed
+- **Missing Text & Panorama Background (`copyBufferToTexture` Signature)**: Corrected parameter order in `CelestiaCommandEncoder.copyBufferToTexture` to match RenderPearl's `(dstX, dstY, width, height, mipLevel, arrayLayer)` order instead of `(mip, slice, dstX, dstY, width, height)`. Previously `mip=0` / `slice=0` overwrote `width`/`height` as zero, skipping every bitmap font glyph upload and every panorama cubemap upload.
+- **Interleaved Multi-Draw Signature**: Corrected the `(instanceCount, firstInstance, drawCount)` parameter order in `CelestiaRenderPass.multiDraw` and `multiDrawIndexed` to match `RenderPassBackend`.
+- **Metal 2D Copy `bytesPerImage`**: Set `sourceBytesPerImage` / `destinationBytesPerImage` to `0` for `depth == 1` buffer-texture copies in `cm_encoder.m` per Metal 4 / Metal 3 spec.
+
+### Added
+- Native Metal 4 & Metal 3 GPU readback verification in `tools/test_metal_backend.m` covering strided sub-rect `R8_UNORM` glyph uploads and 6-face cubemap texture uploads.
+
 ## 0.1.0-alpha.6
 
 ### Fixed

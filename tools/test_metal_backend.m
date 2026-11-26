@@ -216,6 +216,38 @@ static void verify_backend_ops(int32_t preferMetal4) {
     cm_texture_view_destroy(ctx, dsView);
     cm_texture_destroy(ctx, dsTex);
 
+    // 2d. Sub-rect R8_UNORM glyph upload & cubemap 6-slice upload verification
+    int64_t r8Tex = cm_texture_create(ctx, CM_FMT_R8_UNORM, 16, 16, 1, 1, 0, 0, 1, 0, "FontAtlasR8");
+    int64_t cubeTex = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, 8, 8, 6, 1, 1, 0, 1, 0, "PanoramaCube");
+    uint8_t r8Src[256];
+    for (int i = 0; i < 256; i++) r8Src[i] = (uint8_t)i;
+    uint8_t cubeSrc[8 * 8 * 4];
+    memset(cubeSrc, 0xAB, sizeof(cubeSrc));
+    int64_t r8Stage = cm_buffer_create(ctx, sizeof(r8Src), r8Src, "R8Stage");
+    int64_t cubeStage = cm_buffer_create(ctx, sizeof(cubeSrc), cubeSrc, "CubeStage");
+    int64_t r8Out = cm_buffer_create(ctx, 16, NULL, "R8Out");
+    assert(r8Tex && cubeTex && r8Stage && cubeStage && r8Out);
+
+    cm_cmd_begin(ctx);
+    cm_blit_copy_buffer_to_texture(ctx, r8Stage, 8 * 16 + 8, 16, r8Tex, 0, 0, 4, 4, 4, 4);
+    for (int f = 0; f < 6; f++) {
+        cm_blit_copy_buffer_to_texture(ctx, cubeStage, 0, 8 * 4, cubeTex, 0, f, 0, 0, 8, 8);
+    }
+    cm_blit_copy_texture_to_buffer(ctx, r8Tex, 0, 0, 4, 4, 4, 4, r8Out, 0, 4);
+    uint64_t s2d = cm_cmd_submit(ctx, 2);
+    assert(cm_wait_submit(ctx, s2d, 5000000000ULL) == 1);
+    uint8_t *r8Read = (uint8_t *)(uintptr_t)cm_buffer_contents(r8Out);
+    for (int row = 0; row < 4; row++) {
+        for (int col = 0; col < 4; col++) {
+            assert(r8Read[row * 4 + col] == (uint8_t)((8 + row) * 16 + (8 + col)));
+        }
+    }
+    cm_buffer_destroy(ctx, r8Out);
+    cm_buffer_destroy(ctx, cubeStage);
+    cm_buffer_destroy(ctx, r8Stage);
+    cm_texture_destroy(ctx, cubeTex);
+    cm_texture_destroy(ctx, r8Tex);
+
     // 3. MetalFX Spatial & Temporal scaler creation + execution
     int64_t mfxOut = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 128, 128, 1, 1, 0, 1, 1, 1, "MFXOut");
     int64_t mfxIn = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 64, 64, 1, 1, 0, 1, 1, 0, "MFXIn");
