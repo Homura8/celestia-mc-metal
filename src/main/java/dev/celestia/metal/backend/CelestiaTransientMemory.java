@@ -67,12 +67,29 @@ public final class CelestiaTransientMemory implements TransientMemory {
         sharedAllocator.close();
     }
 
+    /**
+     * RenderPearl's {@code allocate(size, alignment, minimumAllocation, elementSize)}: when the current block cannot fit
+     * {@code size}, the allocator may hand out the rest of it instead (at least {@code minimumAllocation}, a multiple of
+     * {@code elementSize}), and the caller must use the length it got. Zero means "all of size" / byte granularity; the
+     * allocator itself divides by {@code elementSize}, so it must never see 0 (alpha.16 builds did: "/ by zero" while
+     * uploading animated sprites with Create / Alex's Caves, leaving the loading screen black).
+     */
+    static <T extends TransientBlockAllocator.Allocator.Block> TransientBlockAllocator.Allocation<T> allocate(
+            TransientBlockAllocator<T> allocator, long size, long alignment, long minimumAllocation, long elementSize) {
+        long element = elementSize > 0L ? elementSize : 1L;
+        long min = minimumAllocation > 0L ? Math.min(minimumAllocation, size) : size;
+        return allocator.allocate(size, alignment, min, element);
+    }
+
+    /** The bytes of an allocation the caller may use: never more than it asked for, never more than it got. */
+    static long usable(TransientBlockAllocator.Allocation<?> alloc, long size) {
+        return Math.min(alloc.size(), size);
+    }
+
     @Override
-    public ByteBuffer allocateCpu(long size, long alignment, long unusedOffset, long unusedStep) {
-        long min = unusedOffset > 0L ? unusedOffset : size;
-        long step = unusedStep > 0L ? unusedStep : 1L;
-        var alloc = cpuAllocator.allocate(size, Math.max(1L, alignment), min, step);
-        return MemoryUtil.memByteBuffer(alloc.block().address() + alloc.offset(), (int) size);
+    public ByteBuffer allocateCpu(long size, long alignment, long minimumAllocation, long elementSize) {
+        var alloc = allocate(cpuAllocator, size, Math.max(1L, alignment), minimumAllocation, elementSize);
+        return MemoryUtil.memByteBuffer(alloc.block().address() + alloc.offset(), (int) usable(alloc, size));
     }
 
     @Override
@@ -81,11 +98,9 @@ public final class CelestiaTransientMemory implements TransientMemory {
     }
 
     @Override
-    public GpuBufferSlice allocateGpu(long size, long alignment, int usage, long unusedOffset, long unusedStep) {
-        long min = unusedOffset > 0L ? unusedOffset : size;
-        long step = unusedStep > 0L ? unusedStep : 1L;
-        var alloc = sharedAllocator.allocate(size, Math.max(16L, alignment), min, step);
-        return alloc.block().buffer().slice(alloc.offset(), size);
+    public GpuBufferSlice allocateGpu(long size, long alignment, int usage, long minimumAllocation, long elementSize) {
+        var alloc = allocate(sharedAllocator, size, Math.max(16L, alignment), minimumAllocation, elementSize);
+        return alloc.block().buffer().slice(alloc.offset(), usable(alloc, size));
     }
 
     @Override
@@ -94,7 +109,7 @@ public final class CelestiaTransientMemory implements TransientMemory {
     }
 
     private GpuBufferSlice.MappedView allocateSharedMapped(long size, long alignment) {
-        var alloc = sharedAllocator.allocate(size, Math.max(16L, alignment), size, 1L);
+        var alloc = allocate(sharedAllocator, size, Math.max(16L, alignment), size, 1L);
         return alloc.block().buffer().map(alloc.offset(), size, true, true);
     }
 
@@ -114,7 +129,7 @@ public final class CelestiaTransientMemory implements TransientMemory {
         if (total == 0L) {
             return allocateGpu(16L, alignment, DEFAULT_USAGE, 16L, 1L);
         }
-        var alloc = sharedAllocator.allocate(total, Math.max(16L, alignment), total, 1L);
+        var alloc = allocate(sharedAllocator, total, Math.max(16L, alignment), total, 1L);
         ByteBuffer dst = alloc.block().buffer().mappedSegment().asSlice(alloc.offset(), total).asByteBuffer().order(ByteOrder.nativeOrder());
         for (ByteBuffer src : buffers) {
             dst.put(src.duplicate());
@@ -138,7 +153,7 @@ public final class CelestiaTransientMemory implements TransientMemory {
         for (ByteBuffer src : buffers) {
             int len = src.remaining();
             long allocSize = Math.max(16L, len);
-            var alloc = sharedAllocator.allocate(allocSize, align, allocSize, 1L);
+            var alloc = allocate(sharedAllocator, allocSize, align, allocSize, 1L);
             if (len > 0) {
                 ByteBuffer dst = alloc.block().buffer().mappedSegment().asSlice(alloc.offset(), len).asByteBuffer().order(ByteOrder.nativeOrder());
                 dst.put(src.duplicate());
