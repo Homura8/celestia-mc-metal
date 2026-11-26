@@ -209,7 +209,10 @@ static void encode_present_pass_into(CMContext *ctx, CMSurface *surf, id<MTLText
 static void cm_surface_submit_nonblocking(CMContext *ctx, CMSurface *surf, id<MTLTexture> srcTex, int32_t maxInFlight) {
     int64_t ctxPtr = (int64_t)(__bridge void *)ctx;
     // A free slot exists unless the present queue is far behind; never wait long (a hidden window shows nothing).
-    if (dispatch_semaphore_wait(surf.slotsFree, dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC)) != 0) {
+    CFTimeInterval slotWait0 = CACurrentMediaTime();
+    long slotTimedOut = dispatch_semaphore_wait(surf.slotsFree, dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC));
+    atomic_fetch_add(&ctx->_waitSlotUs, (int64_t)((CACurrentMediaTime() - slotWait0) * 1e6));
+    if (slotTimedOut != 0) {
         atomic_fetch_add(&ctx->_framesDropped, 1);
         cm_cmd_submit(ctxPtr, maxInFlight);
         return;
@@ -503,7 +506,7 @@ void cm_surface_blit_and_present(int64_t ctxPtr, int64_t surfPtr, int64_t srcTex
         int32_t cap = maxInFlight > 0 ? MIN(maxInFlight, CM_INFLIGHT_SLOTS) : 2;
         uint64_t next = atomic_load(&ctx->_nextSubmitSerial);
         if (next > (uint64_t)cap) {
-            cm_wait_submit(ctxPtr, next - (uint64_t)cap, 5000000000ULL);
+            cm_wait_submit_accounted(ctx, next - (uint64_t)cap, 5000000000ULL, &ctx->_waitThrottleUs);
         }
         cm_drain_retired(ctx);
     }

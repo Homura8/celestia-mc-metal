@@ -27,7 +27,10 @@ public final class MetalConst {
     public static final int STAT_FRAMES_SUBMITTED = 7;
     public static final int STAT_PRESENTS_SHOWN = 8;
     public static final int STAT_FRAMES_DROPPED = 9;
-    public static final int STAT_COUNT = 10;
+    public static final int STAT_WAIT_THROTTLE_US = 10;
+    public static final int STAT_WAIT_FENCE_US = 11;
+    public static final int STAT_WAIT_SLOT_US = 12;
+    public static final int STAT_COUNT = 13;
 
     // CMFormat
     public static final int FMT_R8_UNORM = 0;

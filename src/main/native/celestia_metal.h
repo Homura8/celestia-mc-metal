@@ -147,7 +147,10 @@ typedef enum CMStatIndex {
     CM_STAT_FRAMES_SUBMITTED = 7,  // frames handed to the surface (blitFromTexture)
     CM_STAT_PRESENTS_SHOWN = 8,    // presents macOS reported on screen (non-blocking present path)
     CM_STAT_FRAMES_DROPPED = 9,    // finished frames superseded by a newer one before reaching the screen
-    CM_STAT_COUNT = 10,
+    CM_STAT_WAIT_THROTTLE_US = 10, // CPU time blocked waiting for in-flight frames (submit / command-buffer ring)
+    CM_STAT_WAIT_FENCE_US = 11,    // CPU time blocked in fence waits (cm_wait_submit from Java: ring buffers, readbacks)
+    CM_STAT_WAIT_SLOT_US = 12,     // CPU time blocked waiting for a free present slot (non-blocking present)
+    CM_STAT_COUNT = 13,
 } CMStatIndex;
 
 typedef struct CMProbeInfo {
@@ -238,6 +241,9 @@ __attribute__((objc_direct_members))
     // Written by the surface present queue / presented handlers
     _Atomic int64_t _presentsShown;
     _Atomic int64_t _framesDropped;
+    _Atomic int64_t _waitThrottleUs;
+    _Atomic int64_t _waitFenceUs;
+    _Atomic int64_t _waitSlotUs;
 }
 @property (nonatomic, strong) id<MTLDevice> device;
 @property (nonatomic) BOOL metal4Active;
@@ -326,6 +332,8 @@ void cm_end_blit_if_active(CMContext *ctx);
 // Ends any open render encoder, flushes deferred clears and ends the blit encoder.
 // Call before encoding any non-render-pass GPU work (compute, MetalFX, present, submit).
 void cm_flush_encoders(CMContext *ctx);
+// Waits for submit `serial`; the blocked time is accounted to *waitUs (may be NULL). timeoutNs == 0 only polls.
+int32_t cm_wait_submit_accounted(CMContext *ctx, uint64_t serial, uint64_t timeoutNs, _Atomic int64_t *waitUs);
 NSUInteger cm_bytes_per_pixel(MTLPixelFormat fmt);
 
 // Public C ABI exported to Java FFM & native test harness

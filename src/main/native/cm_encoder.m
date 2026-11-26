@@ -1,4 +1,5 @@
 #import "celestia_metal.h"
+#include <mach/mach_time.h>
 
 #pragma clang diagnostic ignored "-Wunguarded-availability-new"
 #pragma clang diagnostic ignored "-Wunguarded-availability"
@@ -22,7 +23,7 @@ static void ensure_cmd_begun(CMContext *ctx) {
         if (@available(macOS 26.0, *)) {
             uint64_t next = atomic_load(&ctx->_nextSubmitSerial) + 1;
             if (next > CM_INFLIGHT_SLOTS) {
-                cm_wait_submit((int64_t)(__bridge void *)ctx, next - CM_INFLIGHT_SLOTS, 5000000000ULL);
+                cm_wait_submit_accounted(ctx, next - CM_INFLIGHT_SLOTS, 5000000000ULL, &ctx->_waitThrottleUs);
             }
             NSUInteger idx = (NSUInteger)(next % CM_INFLIGHT_SLOTS);
             id<MTL4CommandAllocator> alloc = ctx.m4Allocators[idx];
@@ -133,7 +134,7 @@ uint64_t cm_cmd_submit(int64_t ctxPtr, int32_t maxInFlight) {
         uint64_t serial = atomic_fetch_add(&ctx->_nextSubmitSerial, 1) + 1;
         int32_t cap = maxInFlight > 0 ? MIN(maxInFlight, CM_INFLIGHT_SLOTS) : 2;
         if (serial > (uint64_t)cap) {
-            cm_wait_submit(ctxPtr, serial - (uint64_t)cap, 5000000000ULL);
+            cm_wait_submit_accounted(ctx, serial - (uint64_t)cap, 5000000000ULL, &ctx->_waitThrottleUs);
         }
 
         if (ctx.metal4Active && ctx.activeM4CmdBuf) {
@@ -185,24 +186,45 @@ uint64_t cm_cmd_submit(int64_t ctxPtr, int32_t maxInFlight) {
     }
 }
 
+static BOOL advance_completed(CMContext *ctx, uint64_t signaled) {
+    uint64_t cur = atomic_load(&ctx->_completedSubmitSerial);
+    BOOL advanced = NO;
+    while (cur < signaled) {
+        if (atomic_compare_exchange_weak(&ctx->_completedSubmitSerial, &cur, signaled)) { advanced = YES; break; }
+    }
+    return advanced;
+}
+
+int32_t cm_wait_submit_accounted(CMContext *ctx, uint64_t serial, uint64_t timeoutNs, _Atomic int64_t *waitUs) {
+    if (!ctx || serial == 0) return 1;
+    // Fast path (also the whole cost of a zero-timeout poll): one signaledValue read. Retired objects are only
+    // drained when the completed serial actually advanced, not on every poll.
+    uint64_t signaled = ctx.submitEvent.signaledValue;
+    if (signaled >= serial) {
+        if (advance_completed(ctx, signaled)) cm_drain_retired(ctx);
+        return 1;
+    }
+    if (timeoutNs == 0) return 0;
+    uint64_t ms = timeoutNs / 1000000ULL;
+    if (ms == 0) ms = 1;
+    uint64_t t0 = mach_absolute_time();
+    BOOL ok = [ctx.submitEvent waitUntilSignaledValue:serial timeoutMS:ms];
+    if (waitUs) {
+        static mach_timebase_info_data_t tb;
+        if (tb.denom == 0) mach_timebase_info(&tb);
+        uint64_t ns = (mach_absolute_time() - t0) * tb.numer / tb.denom;
+        atomic_fetch_add(waitUs, (int64_t)(ns / 1000ULL));
+    }
+    if (ok) {
+        if (advance_completed(ctx, ctx.submitEvent.signaledValue)) cm_drain_retired(ctx);
+    }
+    return ok ? 1 : 0;
+}
+
 int32_t cm_wait_submit(int64_t ctxPtr, uint64_t serial, uint64_t timeoutNs) {
     if (!ctxPtr || serial == 0) return 1;
     CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
-    if (ctx.submitEvent.signaledValue >= serial) {
-        uint64_t cur = atomic_load(&ctx->_completedSubmitSerial);
-        while (cur < serial && !atomic_compare_exchange_weak(&ctx->_completedSubmitSerial, &cur, serial)) {}
-        cm_drain_retired(ctx);
-        return 1;
-    }
-    uint64_t ms = timeoutNs / 1000000ULL;
-    if (ms == 0 && timeoutNs > 0) ms = 1;
-    BOOL ok = [ctx.submitEvent waitUntilSignaledValue:serial timeoutMS:ms];
-    if (ok) {
-        uint64_t cur = atomic_load(&ctx->_completedSubmitSerial);
-        while (cur < serial && !atomic_compare_exchange_weak(&ctx->_completedSubmitSerial, &cur, serial)) {}
-        cm_drain_retired(ctx);
-    }
-    return ok ? 1 : 0;
+    return cm_wait_submit_accounted(ctx, serial, timeoutNs, &ctx->_waitFenceUs);
 }
 
 // ---- Clears (deferred & folded into the next pass load action when possible) ----

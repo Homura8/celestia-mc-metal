@@ -56,6 +56,10 @@ public abstract class DebugScreenEntriesMixin {
                 displayer.addLine(String.format(
                     "Celestia Present: %d frames/s rendered | %d/s shown | %d/s dropped (newer frame ready)",
                     pr[0], pr[1], pr[2]));
+                double[] wr = dev.waitRates();
+                displayer.addLine(String.format(
+                    "Celestia CPU waits (ms/s): in-flight cap %.0f | fences %.0f | present slots %.0f",
+                    wr[0], wr[1], wr[2]));
             }
         });
     }

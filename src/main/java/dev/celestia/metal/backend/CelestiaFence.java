@@ -17,6 +17,8 @@ public final class CelestiaFence implements GpuFence {
     @Override
     public boolean awaitCompletion(long timeoutNs) {
         if (closed || submitSerial <= 0L) return true;
+        // Fast path for the common poll (e.g. StagedVertexBuffer recycling every frame): already completed.
+        if (submitSerial <= MetalNative.deviceCompletedSubmit(device.handle())) return true;
         if (submitSerial > MetalNative.deviceNextSubmit(device.handle())) {
             if (timeoutNs == 0L) {
                 return false;

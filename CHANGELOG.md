@@ -18,11 +18,13 @@
 - **Java uniform dirty tracking**: `CelestiaRenderPass` only re-sends uniforms whose value changed since the last `setPipeline`, instead of every uniform on any change.
 
 ### Fixed
+- **Fence polls blocked in the kernel**: profiling showed ~10% of the render thread in `waitSubmit` from Minecraft's `StagedVertexBuffer` polling fences with a zero timeout every frame. A zero-timeout `cm_wait_submit` now only reads `signaledValue`, `CelestiaFence` returns early for already-completed serials, and retired objects are only drained when the completed serial advances (not on every poll).
 - **Crash when the window/surface is destroyed mid-stream** (non-blocking present, alpha.12): libdispatch traps when a semaphore is released below its initial value; the present-slot semaphore is now created at 0 and filled to the pool size. Reproduced in 2 of 5 native test runs before the fix, 0 of 11 after.
 - **Present slots leaked on resize** (alpha.12): `cm_surface_configure` and `cm_surface_destroy` dropped a frame waiting for the screen without returning its slot, so each resize that landed while a frame was waiting shrank the pool; after a few resizes every frame could hit a 50 ms slot-wait timeout.
 
 ### Added
 - Native Test 2j (push-constant dedup correctness, including a new encoder after identical bytes; fails with a naive dedup).
+- F3 `Celestia CPU waits` line: milliseconds per second the render thread blocks on the in-flight frame cap, fences, and present slots.
 - Test 2i now also resizes repeatedly while frames are in flight and tears the surface down with frames still queued.
 
 ## 0.1.0-alpha.12

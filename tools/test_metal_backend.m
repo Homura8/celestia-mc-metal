@@ -255,6 +255,16 @@ static void verify_backend_ops(int32_t preferMetal4) {
     uint64_t s2eIdle = cm_cmd_submit(ctx, 2);
     assert(cm_cmd_has_active(ctx) == 0);
     assert(cm_wait_submit(ctx, s2eIdle, 5000000000ULL) == 1);
+    // Zero-timeout fence polls must never block (Minecraft polls many fences per frame) and report correctly.
+    {
+        uint64_t future = cm_device_next_submit(ctx) + 5;
+        CFTimeInterval p0 = CACurrentMediaTime();
+        for (int i = 0; i < 1000; i++) assert(cm_wait_submit(ctx, future, 0) == 0);
+        double pollUs = (CACurrentMediaTime() - p0) * 1e6 / 1000.0;
+        assert(cm_wait_submit(ctx, s2eIdle, 0) == 1);
+        if (pollUs > 20.0) { fprintf(stderr, "FAIL: zero-timeout fence poll costs %.2f us\n", pollUs); exit(1); }
+        printf("[Backend %s] zero-timeout fence poll %.3f us\n", preferMetal4 ? "Metal 4" : "Metal 3", pollUs);
+    }
 
     const char *fanMsl =
         "#include <metal_stdlib>\n"
