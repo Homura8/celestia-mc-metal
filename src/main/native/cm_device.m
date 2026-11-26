@@ -206,6 +206,8 @@ int64_t cm_device_create(int32_t preferMetal4, int32_t debugLabels, const char *
         atomic_init(&ctx->_deviceLost, 0);
         atomic_init(&ctx->_errorCount, 0);
         ctx.inflightSem = dispatch_semaphore_create(CM_INFLIGHT_SLOTS);
+        ctx.passMergeEnabled = YES;
+        ctx.deferClearsEnabled = YES;
         ctx.submitEvent = [dev newSharedEvent];
         ctx.m3Queue = [dev newCommandQueue];
         if (!ctx.m3Queue) return 0;
@@ -294,6 +296,12 @@ void cm_device_destroy(int64_t ctxPtr) {
     if (!ctxPtr) return;
     @autoreleasepool {
         CMContext *ctx = (__bridge_transfer CMContext *)(void *)ctxPtr;
+        // Close any soft-ended render encoder / open blit encoder so no encoder is released un-ended,
+        // and drop deferred clears that were never consumed (nothing can observe them any more).
+        if (ctx.activeRenderEnc) cm_pass_end((int64_t)(__bridge void *)ctx);
+        cm_end_blit_if_active(ctx);
+        for (int32_t i = 0; i < ctx->_pendingClearCount; i++) ctx->_pendingClearTex[i] = nil;
+        ctx->_pendingClearCount = 0;
         cm_device_wait_idle((int64_t)(__bridge void *)ctx);
         if (ctx.binaryArchive && ctx.archivePath) {
             NSString *dir = [ctx.archivePath stringByDeletingLastPathComponent];
@@ -374,4 +382,26 @@ void cm_device_wait_idle(int64_t ctxPtr) {
     if (target > 0) {
         cm_wait_submit(ctxPtr, target, 5000000000ULL);
     }
+}
+
+void cm_device_set_option(int64_t ctxPtr, int32_t option, int32_t value) {
+    if (!ctxPtr) return;
+    CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
+    switch (option) {
+        case CM_OPT_PASS_MERGE:
+            ctx.passMergeEnabled = value != 0;
+            break;
+        case CM_OPT_DEFER_CLEARS:
+            ctx.deferClearsEnabled = value != 0;
+            break;
+        default:
+            break;
+    }
+}
+
+void cm_device_stats(int64_t ctxPtr, int64_t *out, int32_t count) {
+    if (!ctxPtr || !out || count <= 0) return;
+    CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
+    int32_t n = MIN(count, (int32_t)CM_STAT_COUNT);
+    for (int32_t i = 0; i < n; i++) out[i] = ctx->_stats[i];
 }

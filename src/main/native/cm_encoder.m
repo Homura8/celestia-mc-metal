@@ -68,12 +68,18 @@ static void emit_m4_blit_intra_barrier_if_needed(CMContext *ctx, id enc) {
     }
 }
 
+static void flush_pending_clears(CMContext *ctx);
+
 static id ensure_blit_encoder(CMContext *ctx) {
     ensure_cmd_begun(ctx);
     if (ctx.activeRenderEnc) {
         cm_pass_end((int64_t)(__bridge void *)ctx);
     }
+    if (ctx->_pendingClearCount > 0) {
+        flush_pending_clears(ctx);
+    }
     if (!ctx.activeBlitEnc) {
+        ctx->_stats[CM_STAT_BLIT_ENCODERS]++;
         if (ctx.metal4Active) {
             if (@available(macOS 26.0, *)) {
                 ctx.activeBlitEnc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf computeCommandEncoder];
@@ -112,8 +118,7 @@ uint64_t cm_cmd_submit(int64_t ctxPtr, int32_t maxInFlight) {
     if (!ctxPtr) return 0;
     @autoreleasepool {
         CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
-        if (ctx.activeRenderEnc) cm_pass_end(ctxPtr);
-        cm_end_blit_if_active(ctx);
+        cm_flush_encoders(ctx);
 
         if (!ctx.activeM4CmdBuf && !ctx.activeM3CmdBuf) {
             cm_drain_retired(ctx);
@@ -197,39 +202,7 @@ int32_t cm_wait_submit(int64_t ctxPtr, uint64_t serial, uint64_t timeoutNs) {
     return ok ? 1 : 0;
 }
 
-// ---- Blit operations ----
-
-void cm_blit_clear_color(int64_t ctxPtr, int64_t texPtr, float r, float g, float b, float a) {
-    if (!ctxPtr || !texPtr) return;
-    @autoreleasepool {
-        CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
-        ensure_cmd_begun(ctx);
-        if (ctx.activeRenderEnc) cm_pass_end(ctxPtr);
-        cm_end_blit_if_active(ctx);
-
-        id<MTLTexture> tex = (__bridge id<MTLTexture>)(void *)texPtr;
-        if (ctx.metal4Active) {
-            if (@available(macOS 26.0, *)) {
-                MTL4RenderPassDescriptor *rpd = [MTL4RenderPassDescriptor new];
-                rpd.colorAttachments[0].texture = tex;
-                rpd.colorAttachments[0].loadAction = MTLLoadActionClear;
-                rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
-                rpd.colorAttachments[0].clearColor = MTLClearColorMake(r, g, b, a);
-                id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
-                emit_m4_render_producer_barrier(enc);
-                [enc endEncoding];
-            }
-        } else {
-            MTLRenderPassDescriptor *rpd = [MTLRenderPassDescriptor renderPassDescriptor];
-            rpd.colorAttachments[0].texture = tex;
-            rpd.colorAttachments[0].loadAction = MTLLoadActionClear;
-            rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
-            rpd.colorAttachments[0].clearColor = MTLClearColorMake(r, g, b, a);
-            id<MTLRenderCommandEncoder> enc = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf renderCommandEncoderWithDescriptor:rpd];
-            [enc endEncoding];
-        }
-    }
-}
+// ---- Clears (deferred & folded into the next pass load action when possible) ----
 
 static void configure_depth_stencil_attachments(MTLRenderPassDepthAttachmentDescriptor *depthAtt,
                                                 MTLRenderPassStencilAttachmentDescriptor *stencilAtt,
@@ -246,28 +219,133 @@ static void configure_depth_stencil_attachments(MTLRenderPassDepthAttachmentDesc
     }
 }
 
+// Emits a standalone clear render encoder for a color and/or depth texture (either may be nil).
+// Requires an active command buffer and no open render/blit encoder.
+static void emit_clear_encoder(CMContext *ctx, id<MTLTexture> ctex, const float *rgba,
+                               id<MTLTexture> dtex, double depth) {
+    if (!ctex && !dtex) return;
+    ctx->_stats[CM_STAT_RENDER_ENCODERS]++;
+    if (ctx.metal4Active) {
+        if (@available(macOS 26.0, *)) {
+            MTL4RenderPassDescriptor *rpd = [MTL4RenderPassDescriptor new];
+            if (ctex) {
+                rpd.colorAttachments[0].texture = ctex;
+                rpd.colorAttachments[0].loadAction = MTLLoadActionClear;
+                rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
+                rpd.colorAttachments[0].clearColor = MTLClearColorMake(rgba[0], rgba[1], rgba[2], rgba[3]);
+            }
+            if (dtex) configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment, dtex, YES, depth);
+            id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
+            emit_m4_render_producer_barrier(enc);
+            [enc endEncoding];
+        }
+    } else {
+        MTLRenderPassDescriptor *rpd = [MTLRenderPassDescriptor renderPassDescriptor];
+        if (ctex) {
+            rpd.colorAttachments[0].texture = ctex;
+            rpd.colorAttachments[0].loadAction = MTLLoadActionClear;
+            rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
+            rpd.colorAttachments[0].clearColor = MTLClearColorMake(rgba[0], rgba[1], rgba[2], rgba[3]);
+        }
+        if (dtex) configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment, dtex, YES, depth);
+        id<MTLRenderCommandEncoder> enc = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf renderCommandEncoderWithDescriptor:rpd];
+        [enc endEncoding];
+    }
+}
+
+static void remove_pending_clear(CMContext *ctx, int32_t idx) {
+    int32_t last = ctx->_pendingClearCount - 1;
+    for (int32_t i = idx; i < last; i++) {
+        ctx->_pendingClearTex[i] = ctx->_pendingClearTex[i + 1];
+        memcpy(ctx->_pendingClearColor[i], ctx->_pendingClearColor[i + 1], sizeof(float) * 4);
+        ctx->_pendingClearDepth[i] = ctx->_pendingClearDepth[i + 1];
+        ctx->_pendingClearIsDepth[i] = ctx->_pendingClearIsDepth[i + 1];
+    }
+    ctx->_pendingClearTex[last] = nil;
+    ctx->_pendingClearCount = last;
+}
+
+// Emits every deferred clear in request order, pairing an adjacent color+depth request into one encoder.
+static void flush_pending_clears(CMContext *ctx) {
+    int32_t n = ctx->_pendingClearCount;
+    if (n <= 0) return;
+    ensure_cmd_begun(ctx);
+    for (int32_t i = 0; i < n; i++) {
+        id<MTLTexture> tex = ctx->_pendingClearTex[i];
+        if (!ctx->_pendingClearIsDepth[i] && i + 1 < n && ctx->_pendingClearIsDepth[i + 1]) {
+            emit_clear_encoder(ctx, tex, ctx->_pendingClearColor[i], ctx->_pendingClearTex[i + 1], ctx->_pendingClearDepth[i + 1]);
+            ctx->_stats[CM_STAT_CLEARS_FLUSHED] += 2;
+            i++;
+        } else if (ctx->_pendingClearIsDepth[i]) {
+            emit_clear_encoder(ctx, nil, NULL, tex, ctx->_pendingClearDepth[i]);
+            ctx->_stats[CM_STAT_CLEARS_FLUSHED]++;
+        } else {
+            emit_clear_encoder(ctx, tex, ctx->_pendingClearColor[i], nil, 0.0);
+            ctx->_stats[CM_STAT_CLEARS_FLUSHED]++;
+        }
+    }
+    for (int32_t i = 0; i < n; i++) ctx->_pendingClearTex[i] = nil;
+    ctx->_pendingClearCount = 0;
+}
+
+static void defer_clear(CMContext *ctx, id<MTLTexture> tex, const float *rgba, BOOL isDepth, double depth) {
+    // A later clear of the same texture supersedes the earlier one.
+    for (int32_t i = 0; i < ctx->_pendingClearCount; i++) {
+        if (ctx->_pendingClearTex[i] == tex && ctx->_pendingClearIsDepth[i] == isDepth) {
+            remove_pending_clear(ctx, i);
+            break;
+        }
+    }
+    if (ctx->_pendingClearCount >= CM_MAX_PENDING_CLEARS) {
+        flush_pending_clears(ctx);
+    }
+    int32_t k = ctx->_pendingClearCount++;
+    ctx->_pendingClearTex[k] = tex;
+    ctx->_pendingClearIsDepth[k] = isDepth;
+    ctx->_pendingClearDepth[k] = depth;
+    if (rgba) memcpy(ctx->_pendingClearColor[k], rgba, sizeof(float) * 4);
+}
+
+static void begin_clear(CMContext *ctx) {
+    ensure_cmd_begun(ctx);
+    if (ctx.activeRenderEnc) cm_pass_end((int64_t)(__bridge void *)ctx);
+    cm_end_blit_if_active(ctx);
+}
+
+void cm_flush_encoders(CMContext *ctx) {
+    if (!ctx) return;
+    if (ctx.activeRenderEnc) cm_pass_end((int64_t)(__bridge void *)ctx);
+    cm_end_blit_if_active(ctx);
+    if (ctx->_pendingClearCount > 0) flush_pending_clears(ctx);
+}
+
+void cm_blit_clear_color(int64_t ctxPtr, int64_t texPtr, float r, float g, float b, float a) {
+    if (!ctxPtr || !texPtr) return;
+    @autoreleasepool {
+        CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
+        begin_clear(ctx);
+        id<MTLTexture> tex = (__bridge id<MTLTexture>)(void *)texPtr;
+        float rgba[4] = { r, g, b, a };
+        if (ctx.deferClearsEnabled) {
+            defer_clear(ctx, tex, rgba, NO, 0.0);
+        } else {
+            emit_clear_encoder(ctx, tex, rgba, nil, 0.0);
+            ctx->_stats[CM_STAT_CLEARS_FLUSHED]++;
+        }
+    }
+}
+
 void cm_blit_clear_depth(int64_t ctxPtr, int64_t texPtr, double depth) {
     if (!ctxPtr || !texPtr) return;
     @autoreleasepool {
         CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
-        ensure_cmd_begun(ctx);
-        if (ctx.activeRenderEnc) cm_pass_end(ctxPtr);
-        cm_end_blit_if_active(ctx);
-
+        begin_clear(ctx);
         id<MTLTexture> tex = (__bridge id<MTLTexture>)(void *)texPtr;
-        if (ctx.metal4Active) {
-            if (@available(macOS 26.0, *)) {
-                MTL4RenderPassDescriptor *rpd = [MTL4RenderPassDescriptor new];
-                configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment, tex, YES, depth);
-                id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
-                emit_m4_render_producer_barrier(enc);
-                [enc endEncoding];
-            }
+        if (ctx.deferClearsEnabled) {
+            defer_clear(ctx, tex, NULL, YES, depth);
         } else {
-            MTLRenderPassDescriptor *rpd = [MTLRenderPassDescriptor renderPassDescriptor];
-            configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment, tex, YES, depth);
-            id<MTLRenderCommandEncoder> enc = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf renderCommandEncoderWithDescriptor:rpd];
-            [enc endEncoding];
+            emit_clear_encoder(ctx, nil, NULL, tex, depth);
+            ctx->_stats[CM_STAT_CLEARS_FLUSHED]++;
         }
     }
 }
@@ -277,33 +355,16 @@ void cm_blit_clear_color_depth(int64_t ctxPtr, int64_t colorTexPtr, float r, flo
     if (!ctxPtr || !colorTexPtr || !depthTexPtr) return;
     @autoreleasepool {
         CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
-        ensure_cmd_begun(ctx);
-        if (ctx.activeRenderEnc) cm_pass_end(ctxPtr);
-        cm_end_blit_if_active(ctx);
-
+        begin_clear(ctx);
         id<MTLTexture> ctex = (__bridge id<MTLTexture>)(void *)colorTexPtr;
         id<MTLTexture> dtex = (__bridge id<MTLTexture>)(void *)depthTexPtr;
-        if (ctx.metal4Active) {
-            if (@available(macOS 26.0, *)) {
-                MTL4RenderPassDescriptor *rpd = [MTL4RenderPassDescriptor new];
-                rpd.colorAttachments[0].texture = ctex;
-                rpd.colorAttachments[0].loadAction = MTLLoadActionClear;
-                rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
-                rpd.colorAttachments[0].clearColor = MTLClearColorMake(r, g, b, a);
-                configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment, dtex, YES, depth);
-                id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
-                emit_m4_render_producer_barrier(enc);
-                [enc endEncoding];
-            }
+        float rgba[4] = { r, g, b, a };
+        if (ctx.deferClearsEnabled) {
+            defer_clear(ctx, ctex, rgba, NO, 0.0);
+            defer_clear(ctx, dtex, NULL, YES, depth);
         } else {
-            MTLRenderPassDescriptor *rpd = [MTLRenderPassDescriptor renderPassDescriptor];
-            rpd.colorAttachments[0].texture = ctex;
-            rpd.colorAttachments[0].loadAction = MTLLoadActionClear;
-            rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
-            rpd.colorAttachments[0].clearColor = MTLClearColorMake(r, g, b, a);
-            configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment, dtex, YES, depth);
-            id<MTLRenderCommandEncoder> enc = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf renderCommandEncoderWithDescriptor:rpd];
-            [enc endEncoding];
+            emit_clear_encoder(ctx, ctex, rgba, dtex, depth);
+            ctx->_stats[CM_STAT_CLEARS_FLUSHED] += 2;
         }
     }
 }
@@ -390,6 +451,9 @@ void cm_blit_copy_buffer_to_texture(int64_t ctxPtr, int64_t srcBuf, int64_t srcO
         id<MTLBuffer> s = (__bridge id<MTLBuffer>)(void *)srcBuf;
         id<MTLTexture> t = (__bridge id<MTLTexture>)(void *)dstTex;
         NSUInteger bpr = srcRowBytes > 0 ? (NSUInteger)srcRowBytes : ((NSUInteger)w * cm_bytes_per_pixel(t.pixelFormat));
+        // Metal 4 does not order blits inside one encoder: the source buffer is commonly filled by the previous
+        // blit (writeToBuffer staging copy) and the destination may be written by an earlier upload.
+        emit_m4_blit_intra_barrier_if_needed(ctx, enc);
         if (ctx.metal4Active) {
             if (@available(macOS 26.0, *)) {
                 [(id<MTL4ComputeCommandEncoder>)enc copyFromBuffer:s sourceOffset:(NSUInteger)srcOff
@@ -489,8 +553,57 @@ static void reset_pass_cache(CMContext *ctx) {
     memset(ctx->_boundVtxStrides, 0, sizeof(ctx->_boundVtxStrides));
     memset(ctx->_boundTextures, 0, sizeof(ctx->_boundTextures));
     memset(ctx->_boundSamplers, 0, sizeof(ctx->_boundSamplers));
+    memset(ctx->_boundUboAddrV, 0, sizeof(ctx->_boundUboAddrV));
+    memset(ctx->_boundUboAddrF, 0, sizeof(ctx->_boundUboAddrF));
+    memset(ctx->_boundVtxAddr, 0, sizeof(ctx->_boundVtxAddr));
     ctx.m4ArgDirtyVertex = YES;
     ctx.m4ArgDirtyFragment = YES;
+}
+
+static id<MTLTexture> base_texture(id<MTLTexture> t) {
+    id<MTLTexture> parent = t.parentTexture;
+    return parent ? parent : t;
+}
+
+// A clear recorded for texture `cleared` (mip 0 / slice 0) applies to attachment view `view`
+// only when the view renders into that same mip 0 / slice 0.
+static BOOL clear_matches_view(id<MTLTexture> cleared, id<MTLTexture> view) {
+    if (base_texture(cleared) != base_texture(view)) return NO;
+    if (cleared.parentTexture && (cleared.parentRelativeLevel != 0 || cleared.parentRelativeSlice != 0)) return NO;
+    if (view.parentTexture && (view.parentRelativeLevel != 0 || view.parentRelativeSlice != 0)) return NO;
+    return YES;
+}
+
+static int32_t find_pending_clear(CMContext *ctx, id<MTLTexture> view, BOOL isDepth) {
+    for (int32_t i = 0; i < ctx->_pendingClearCount; i++) {
+        if (ctx->_pendingClearIsDepth[i] == isDepth && clear_matches_view(ctx->_pendingClearTex[i], view)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void set_pass_viewport(CMContext *ctx) {
+    MTLViewport vp = { 0.0, 0.0, (double)ctx.currentPassWidth, (double)ctx.currentPassHeight, 0.0, 1.0 };
+    if (ctx.metal4Active) {
+        if (@available(macOS 26.0, *)) [(id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc setViewport:vp];
+    } else {
+        [(id<MTLRenderCommandEncoder>)ctx.activeRenderEnc setViewport:vp];
+    }
+}
+
+static BOOL can_merge_pass(CMContext *ctx, const int64_t *colorViewPtrs, const int32_t *colorHasClear,
+                           int32_t colorCount, int64_t depthViewPtr, int32_t depthHasClear) {
+    if (!ctx.activeRenderEnc || !ctx.passSoftEnded || !ctx.passMergeable || !ctx.passMergeEnabled) return NO;
+    if (ctx->_pendingClearCount > 0) return NO;
+    if (depthHasClear) return NO;
+    if (colorCount != ctx.passColorCount) return NO;
+    if ((uintptr_t)depthViewPtr != ctx.passDepthView) return NO;
+    for (int32_t i = 0; i < colorCount; i++) {
+        if (colorHasClear[i]) return NO;
+        if ((uintptr_t)colorViewPtrs[i] != ctx->_passColorViews[i]) return NO;
+    }
+    return YES;
 }
 
 int32_t cm_pass_begin(int64_t ctxPtr,
@@ -503,20 +616,74 @@ int32_t cm_pass_begin(int64_t ctxPtr,
     @autoreleasepool {
         CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
         ensure_cmd_begun(ctx);
+        ctx->_stats[CM_STAT_PASSES_BEGUN]++;
+        colorCount = MAX(0, MIN(colorCount, CM_MAX_COLOR_ATTACHMENTS));
+
+        // Fast path: an immediately following load-only pass on identical attachments continues the
+        // still-open encoder, avoiding a full tile store/load round trip and a Metal 4 queue barrier.
+        if (can_merge_pass(ctx, colorViewPtrs, colorHasClear, colorCount, depthViewPtr, depthHasClear)) {
+            ctx.passSoftEnded = NO;
+            ctx->_stats[CM_STAT_PASSES_MERGED]++;
+            set_pass_viewport(ctx);
+            if (areaW > 0 && areaH > 0) {
+                cm_pass_set_scissor(ctxPtr, 1, areaX, areaY, areaW, areaH);
+            } else {
+                cm_pass_set_scissor(ctxPtr, 0, 0, 0, 0, 0);
+            }
+            return 1;
+        }
+
         if (ctx.activeRenderEnc) cm_pass_end(ctxPtr);
         cm_end_blit_if_active(ctx);
+
+        // Fold deferred clears of this pass's attachments into its load actions.
+        int32_t effColorClear[CM_MAX_COLOR_ATTACHMENTS];
+        float effColorRGBA[CM_MAX_COLOR_ATTACHMENTS][4];
+        for (int32_t i = 0; i < colorCount; i++) {
+            effColorClear[i] = colorHasClear[i] ? 1 : 0;
+            if (effColorClear[i]) memcpy(effColorRGBA[i], &colorClearsRGBA[i * 4], sizeof(float) * 4);
+            id<MTLTexture> view = (__bridge id<MTLTexture>)(void *)colorViewPtrs[i];
+            int32_t pc = view ? find_pending_clear(ctx, view, NO) : -1;
+            if (pc >= 0) {
+                if (!effColorClear[i]) {
+                    effColorClear[i] = 1;
+                    memcpy(effColorRGBA[i], ctx->_pendingClearColor[pc], sizeof(float) * 4);
+                }
+                remove_pending_clear(ctx, pc);
+                ctx->_stats[CM_STAT_CLEARS_FOLDED]++;
+            }
+        }
+        BOOL effDepthClear = depthHasClear != 0;
+        double effDepthValue = depthClear;
+        if (depthViewPtr) {
+            id<MTLTexture> dview = (__bridge id<MTLTexture>)(void *)depthViewPtr;
+            int32_t pc = find_pending_clear(ctx, dview, YES);
+            if (pc >= 0) {
+                if (!effDepthClear) {
+                    effDepthClear = YES;
+                    effDepthValue = ctx->_pendingClearDepth[pc];
+                }
+                remove_pending_clear(ctx, pc);
+                ctx->_stats[CM_STAT_CLEARS_FOLDED]++;
+            }
+        }
+        // Clears of textures this pass does not target are emitted now, before the pass encoder,
+        // preserving their order relative to this pass (nothing else was encoded in between).
+        if (ctx->_pendingClearCount > 0) flush_pending_clears(ctx);
+
         reset_pass_cache(ctx);
+        ctx->_stats[CM_STAT_RENDER_ENCODERS]++;
 
         int32_t texW = 0;
         int32_t texH = 0;
-        ctx.currentColorCount = MIN(colorCount, CM_MAX_COLOR_ATTACHMENTS);
+        ctx.currentColorCount = colorCount;
         ctx.currentHasDepth = depthViewPtr != 0;
         ctx.currentDepthFormat = MTLPixelFormatInvalid;
 
         if (ctx.metal4Active) {
             if (@available(macOS 26.0, *)) {
                 MTL4RenderPassDescriptor *rpd = [MTL4RenderPassDescriptor new];
-                for (int32_t i = 0; i < ctx.currentColorCount; i++) {
+                for (int32_t i = 0; i < colorCount; i++) {
                     id<MTLTexture> tex = (__bridge id<MTLTexture>)(void *)colorViewPtrs[i];
                     ctx->_currentColorFormats[i] = tex.pixelFormat;
                     if (texW <= 0) {
@@ -524,12 +691,11 @@ int32_t cm_pass_begin(int64_t ctxPtr,
                         texH = (int32_t)tex.height;
                     }
                     rpd.colorAttachments[(NSUInteger)i].texture = tex;
-                    rpd.colorAttachments[(NSUInteger)i].loadAction = colorHasClear[i] ? MTLLoadActionClear : MTLLoadActionLoad;
+                    rpd.colorAttachments[(NSUInteger)i].loadAction = effColorClear[i] ? MTLLoadActionClear : MTLLoadActionLoad;
                     rpd.colorAttachments[(NSUInteger)i].storeAction = MTLStoreActionStore;
-                    if (colorHasClear[i]) {
+                    if (effColorClear[i]) {
                         rpd.colorAttachments[(NSUInteger)i].clearColor = MTLClearColorMake(
-                            colorClearsRGBA[i * 4 + 0], colorClearsRGBA[i * 4 + 1],
-                            colorClearsRGBA[i * 4 + 2], colorClearsRGBA[i * 4 + 3]);
+                            effColorRGBA[i][0], effColorRGBA[i][1], effColorRGBA[i][2], effColorRGBA[i][3]);
                     }
                 }
                 if (depthViewPtr) {
@@ -540,7 +706,7 @@ int32_t cm_pass_begin(int64_t ctxPtr,
                         texH = (int32_t)dtex.height;
                     }
                     configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment,
-                                                        dtex, depthHasClear != 0, depthClear);
+                                                        dtex, effDepthClear, effDepthValue);
                 }
                 id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
                 if (!enc) return 0;
@@ -552,7 +718,7 @@ int32_t cm_pass_begin(int64_t ctxPtr,
             }
         } else {
             MTLRenderPassDescriptor *rpd = [MTLRenderPassDescriptor renderPassDescriptor];
-            for (int32_t i = 0; i < ctx.currentColorCount; i++) {
+            for (int32_t i = 0; i < colorCount; i++) {
                 id<MTLTexture> tex = (__bridge id<MTLTexture>)(void *)colorViewPtrs[i];
                 ctx->_currentColorFormats[i] = tex.pixelFormat;
                 if (texW <= 0) {
@@ -560,12 +726,11 @@ int32_t cm_pass_begin(int64_t ctxPtr,
                     texH = (int32_t)tex.height;
                 }
                 rpd.colorAttachments[(NSUInteger)i].texture = tex;
-                rpd.colorAttachments[(NSUInteger)i].loadAction = colorHasClear[i] ? MTLLoadActionClear : MTLLoadActionLoad;
+                rpd.colorAttachments[(NSUInteger)i].loadAction = effColorClear[i] ? MTLLoadActionClear : MTLLoadActionLoad;
                 rpd.colorAttachments[(NSUInteger)i].storeAction = MTLStoreActionStore;
-                if (colorHasClear[i]) {
+                if (effColorClear[i]) {
                     rpd.colorAttachments[(NSUInteger)i].clearColor = MTLClearColorMake(
-                        colorClearsRGBA[i * 4 + 0], colorClearsRGBA[i * 4 + 1],
-                        colorClearsRGBA[i * 4 + 2], colorClearsRGBA[i * 4 + 3]);
+                        effColorRGBA[i][0], effColorRGBA[i][1], effColorRGBA[i][2], effColorRGBA[i][3]);
                 }
             }
             if (depthViewPtr) {
@@ -576,7 +741,7 @@ int32_t cm_pass_begin(int64_t ctxPtr,
                     texH = (int32_t)dtex.height;
                 }
                 configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment,
-                                                    dtex, depthHasClear != 0, depthClear);
+                                                    dtex, effDepthClear, effDepthValue);
             }
             id<MTLRenderCommandEncoder> enc = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf renderCommandEncoderWithDescriptor:rpd];
             if (!enc) return 0;
@@ -585,14 +750,16 @@ int32_t cm_pass_begin(int64_t ctxPtr,
             ctx.activeRenderEnc = enc;
         }
 
+        // Remember the attachments so an immediately following compatible pass can merge.
+        ctx.passSoftEnded = NO;
+        ctx.passMergeable = YES;
+        ctx.passColorCount = colorCount;
+        ctx.passDepthView = (uintptr_t)depthViewPtr;
+        for (int32_t i = 0; i < colorCount; i++) ctx->_passColorViews[i] = (uintptr_t)colorViewPtrs[i];
+
         ctx.currentPassWidth = MAX(1, texW > 0 ? texW : areaW);
         ctx.currentPassHeight = MAX(1, texH > 0 ? texH : areaH);
-        MTLViewport vp = { 0.0, 0.0, (double)ctx.currentPassWidth, (double)ctx.currentPassHeight, 0.0, 1.0 };
-        if (ctx.metal4Active) {
-            if (@available(macOS 26.0, *)) [(id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc setViewport:vp];
-        } else {
-            [(id<MTLRenderCommandEncoder>)ctx.activeRenderEnc setViewport:vp];
-        }
+        set_pass_viewport(ctx);
         if (areaW > 0 && areaH > 0) {
             cm_pass_set_scissor(ctxPtr, 1, areaX, areaY, areaW, areaH);
         } else {
@@ -605,6 +772,8 @@ int32_t cm_pass_begin(int64_t ctxPtr,
 void cm_pass_end(int64_t ctxPtr) {
     if (!ctxPtr) return;
     CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
+    ctx.passSoftEnded = NO;
+    ctx.passMergeable = NO;
     if (!ctx.activeRenderEnc) return;
     if (ctx.metal4Active) {
         if (@available(macOS 26.0, *)) {
@@ -616,6 +785,17 @@ void cm_pass_end(int64_t ctxPtr) {
         [(id<MTLRenderCommandEncoder>)ctx.activeRenderEnc endEncoding];
     }
     ctx.activeRenderEnc = nil;
+}
+
+void cm_pass_finish(int64_t ctxPtr) {
+    if (!ctxPtr) return;
+    CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
+    if (!ctx.activeRenderEnc) return;
+    if (ctx.passMergeEnabled && ctx.passMergeable) {
+        ctx.passSoftEnded = YES;
+    } else {
+        cm_pass_end(ctxPtr);
+    }
 }
 
 void cm_pass_set_pipeline(int64_t ctxPtr, int64_t pipePtr) {
@@ -692,8 +872,14 @@ void cm_pass_set_uniform_buffer(int64_t ctxPtr, int32_t slot, int64_t bufPtr, in
     if (ctx.metal4Active) {
         if (@available(macOS 26.0, *)) {
             MTLGPUAddress addr = buf.gpuAddress + (MTLGPUAddress)offset;
-            [(id<MTL4ArgumentTable>)ctx.m4VertexArgTable setAddress:addr atIndex:(NSUInteger)slot];
-            [(id<MTL4ArgumentTable>)ctx.m4FragmentArgTable setAddress:addr atIndex:(NSUInteger)slot];
+            if (ctx->_boundUboAddrV[slot] != addr) {
+                ctx->_boundUboAddrV[slot] = addr;
+                [(id<MTL4ArgumentTable>)ctx.m4VertexArgTable setAddress:addr atIndex:(NSUInteger)slot];
+            }
+            if (ctx->_boundUboAddrF[slot] != addr) {
+                ctx->_boundUboAddrF[slot] = addr;
+                [(id<MTL4ArgumentTable>)ctx.m4FragmentArgTable setAddress:addr atIndex:(NSUInteger)slot];
+            }
         }
     } else {
         id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)ctx.activeRenderEnc;
@@ -776,7 +962,10 @@ void cm_pass_set_vertex_buffer(int64_t ctxPtr, int32_t slot, int64_t bufPtr, int
     if (ctx.metal4Active) {
         if (@available(macOS 26.0, *)) {
             MTLGPUAddress addr = buf.gpuAddress + (MTLGPUAddress)offset;
-            [(id<MTL4ArgumentTable>)ctx.m4VertexArgTable setAddress:addr atIndex:metalSlot];
+            if (ctx->_boundVtxAddr[slot] != addr) {
+                ctx->_boundVtxAddr[slot] = addr;
+                [(id<MTL4ArgumentTable>)ctx.m4VertexArgTable setAddress:addr atIndex:metalSlot];
+            }
         }
     } else {
         id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)ctx.activeRenderEnc;
@@ -836,6 +1025,7 @@ void cm_pass_draw(int64_t ctxPtr, int32_t topology, int32_t vertexCount, int32_t
     if (topology == CM_TOPO_TRIANGLE_FAN) {
         if (vertexCount < 3) return;
         NSUInteger idxCount = (NSUInteger)(vertexCount - 2) * 3UL;
+        ctx->_stats[CM_STAT_DRAWS]++;
         id<MTLBuffer> fbuf = ensure_fan_index_buffer(ctx, idxCount);
         if (!fbuf) return;
         if (ctx.metal4Active) {
@@ -862,6 +1052,7 @@ void cm_pass_draw(int64_t ctxPtr, int32_t topology, int32_t vertexCount, int32_t
         return;
     }
     MTLPrimitiveType pt = cm_primitive_type(topology);
+    ctx->_stats[CM_STAT_DRAWS]++;
     if (ctx.metal4Active) {
         if (@available(macOS 26.0, *)) {
             [(id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc drawPrimitives:pt
@@ -889,6 +1080,7 @@ void cm_pass_draw_indexed(int64_t ctxPtr, int32_t topology, int64_t indexBufOffs
     NSUInteger stride = (ctx.boundIndexType == MTLIndexTypeUInt32) ? 4 : 2;
     NSUInteger byteOff = (NSUInteger)indexBufOffset + (NSUInteger)firstIndex * stride;
     MTLPrimitiveType pt = cm_primitive_type(topology);
+    ctx->_stats[CM_STAT_DRAWS]++;
 
     if (ctx.metal4Active) {
         if (@available(macOS 26.0, *)) {
@@ -919,6 +1111,7 @@ void cm_pass_multi_draw(int64_t ctxPtr, int32_t topology, const int32_t *firstVe
     CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
     if (!ctx.activeRenderEnc) return;
     MTLPrimitiveType pt = cm_primitive_type(topology);
+    ctx->_stats[CM_STAT_DRAWS] += count;
     if (ctx.metal4Active) {
         if (@available(macOS 26.0, *)) {
             id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc;
@@ -949,6 +1142,7 @@ void cm_pass_multi_draw_indexed(int64_t ctxPtr, int32_t topology,
     MTLGPUAddress ibase = ibuf.gpuAddress;
     NSUInteger ilen = ibuf.length;
     MTLPrimitiveType pt = cm_primitive_type(topology);
+    ctx->_stats[CM_STAT_DRAWS] += count;
     if (ctx.metal4Active) {
         if (@available(macOS 26.0, *)) {
             id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc;
@@ -977,6 +1171,81 @@ void cm_pass_multi_draw_indexed(int64_t ctxPtr, int32_t topology,
     }
 }
 
+void cm_pass_multi_draw_packed(int64_t ctxPtr, int32_t topology, const uint32_t *cmds, int32_t count,
+                               int32_t instanceCount, int32_t firstInstance) {
+    if (!ctxPtr || !cmds || count <= 0 || instanceCount <= 0) return;
+    CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
+    if (!ctx.activeRenderEnc) return;
+    if (topology == CM_TOPO_TRIANGLE_FAN) {
+        for (int32_t i = 0; i < count; i++) {
+            cm_pass_draw(ctxPtr, topology, (int32_t)cmds[i * 2 + 1], instanceCount, (int32_t)cmds[i * 2], firstInstance);
+        }
+        return;
+    }
+    MTLPrimitiveType pt = cm_primitive_type(topology);
+    ctx->_stats[CM_STAT_DRAWS] += count;
+    if (ctx.metal4Active) {
+        if (@available(macOS 26.0, *)) {
+            id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc;
+            for (int32_t i = 0; i < count; i++) {
+                uint32_t vc = cmds[i * 2 + 1];
+                if (vc == 0) continue;
+                [enc drawPrimitives:pt vertexStart:(NSUInteger)cmds[i * 2] vertexCount:(NSUInteger)vc
+                      instanceCount:(NSUInteger)instanceCount baseInstance:(NSUInteger)firstInstance];
+            }
+        }
+    } else {
+        id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)ctx.activeRenderEnc;
+        for (int32_t i = 0; i < count; i++) {
+            uint32_t vc = cmds[i * 2 + 1];
+            if (vc == 0) continue;
+            [enc drawPrimitives:pt vertexStart:(NSUInteger)cmds[i * 2] vertexCount:(NSUInteger)vc
+                  instanceCount:(NSUInteger)instanceCount baseInstance:(NSUInteger)firstInstance];
+        }
+    }
+}
+
+void cm_pass_multi_draw_indexed_packed(int64_t ctxPtr, int32_t topology, const uint32_t *cmds, int32_t count,
+                                       int64_t indexBaseOffset, int32_t instanceCount, int32_t firstInstance) {
+    if (!ctxPtr || !cmds || count <= 0 || instanceCount <= 0) return;
+    CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
+    if (!ctx.activeRenderEnc || !ctx.boundIndexBuffer) return;
+    id<MTLBuffer> ibuf = (__bridge id<MTLBuffer>)(void *)ctx.boundIndexBuffer;
+    MTLGPUAddress ibase = ibuf.gpuAddress;
+    NSUInteger ilen = ibuf.length;
+    NSUInteger stride = (ctx.boundIndexType == MTLIndexTypeUInt32) ? 4 : 2;
+    MTLIndexType itype = ctx.boundIndexType;
+    MTLPrimitiveType pt = cm_primitive_type(topology);
+    ctx->_stats[CM_STAT_DRAWS] += count;
+    if (ctx.metal4Active) {
+        if (@available(macOS 26.0, *)) {
+            id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc;
+            for (int32_t i = 0; i < count; i++) {
+                const uint32_t *c = &cmds[i * 3];
+                if (c[1] == 0) continue;
+                NSUInteger off = (NSUInteger)indexBaseOffset + (NSUInteger)c[0] * stride;
+                if (off >= ilen) continue;
+                [enc drawIndexedPrimitives:pt indexCount:(NSUInteger)c[1] indexType:itype
+                               indexBuffer:ibase + off indexBufferLength:ilen - off
+                             instanceCount:(NSUInteger)instanceCount baseVertex:(NSInteger)(int32_t)c[2]
+                              baseInstance:(NSUInteger)firstInstance];
+            }
+        }
+    } else {
+        id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)ctx.activeRenderEnc;
+        for (int32_t i = 0; i < count; i++) {
+            const uint32_t *c = &cmds[i * 3];
+            if (c[1] == 0) continue;
+            NSUInteger off = (NSUInteger)indexBaseOffset + (NSUInteger)c[0] * stride;
+            if (off >= ilen) continue;
+            [enc drawIndexedPrimitives:pt indexCount:(NSUInteger)c[1] indexType:itype
+                           indexBuffer:ibuf indexBufferOffset:off
+                         instanceCount:(NSUInteger)instanceCount baseVertex:(NSInteger)(int32_t)c[2]
+                          baseInstance:(NSUInteger)firstInstance];
+        }
+    }
+}
+
 void cm_pass_draw_indirect(int64_t ctxPtr, int32_t topology, int64_t indirectBufPtr, int64_t offset,
                            int32_t count, int32_t stride, int32_t indexed) {
     if (!ctxPtr || !indirectBufPtr || count <= 0) return;
@@ -985,6 +1254,7 @@ void cm_pass_draw_indirect(int64_t ctxPtr, int32_t topology, int64_t indirectBuf
     id<MTLBuffer> ind = (__bridge id<MTLBuffer>)(void *)indirectBufPtr;
     MTLPrimitiveType pt = cm_primitive_type(topology);
     NSUInteger step = stride > 0 ? (NSUInteger)stride : (indexed ? 20 : 16);
+    ctx->_stats[CM_STAT_DRAWS] += count;
 
     if (indexed) {
         if (!ctx.boundIndexBuffer) return;

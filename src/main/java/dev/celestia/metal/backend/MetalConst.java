@@ -10,7 +10,21 @@ import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
  * Numeric ABI constants matching {@code src/main/native/celestia_metal.h}.
  */
 public final class MetalConst {
-    public static final int ABI_VERSION = 1;
+    public static final int ABI_VERSION = 2;
+
+    // cm_device_set_option ids (CMDeviceOption)
+    public static final int OPT_PASS_MERGE = 0;
+    public static final int OPT_DEFER_CLEARS = 1;
+
+    // cm_device_stats indices (CMStatIndex)
+    public static final int STAT_PASSES_BEGUN = 0;
+    public static final int STAT_RENDER_ENCODERS = 1;
+    public static final int STAT_PASSES_MERGED = 2;
+    public static final int STAT_CLEARS_FOLDED = 3;
+    public static final int STAT_CLEARS_FLUSHED = 4;
+    public static final int STAT_DRAWS = 5;
+    public static final int STAT_BLIT_ENCODERS = 6;
+    public static final int STAT_COUNT = 8;
 
     // CMFormat
     public static final int FMT_R8_UNORM = 0;

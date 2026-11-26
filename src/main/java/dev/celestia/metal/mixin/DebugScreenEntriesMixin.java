@@ -1,6 +1,7 @@
 package dev.celestia.metal.mixin;
 
 import dev.celestia.metal.backend.CelestiaMetalDevice;
+import dev.celestia.metal.backend.MetalConst;
 import dev.celestia.metal.perf.PerformanceEngine;
 import dev.celestia.metal.shader.pack.ShaderPipelineManager;
 import net.minecraft.client.gui.components.debug.DebugScreenDisplayer;
@@ -43,6 +44,13 @@ public abstract class DebugScreenEntriesMixin {
                     "Celestia Metal: %s (%s) | GPU %.2f ms | Scale %d%% | %s | Shader: %s",
                     api, dev.probeInfo().gpuName(), perf.ewmaGpuMs(),
                     perf.effectiveRenderScalePercent(), perf.thermalLabel(), shader
+                ));
+                long[] st = dev.lastFrameStats();
+                displayer.addLine(String.format(
+                    "Celestia Encoders: %d passes -> %d render encoders (%d merged) | %d blit | clears %d folded / %d flushed | %d draws",
+                    st[MetalConst.STAT_PASSES_BEGUN], st[MetalConst.STAT_RENDER_ENCODERS], st[MetalConst.STAT_PASSES_MERGED],
+                    st[MetalConst.STAT_BLIT_ENCODERS], st[MetalConst.STAT_CLEARS_FOLDED], st[MetalConst.STAT_CLEARS_FLUSHED],
+                    st[MetalConst.STAT_DRAWS]
                 ));
             }
         });

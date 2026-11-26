@@ -32,8 +32,88 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
     private final CelestiaMetalDevice device;
     private final CelestiaTransientMemory transientMemory;
     private final ArrayDeque<Deferred> deferred = new ArrayDeque<>();
+    // Reusable off-heap scratch memory for per-pass / per-draw FFM arguments (render thread only).
+    private final Arena scratchArena = Arena.ofShared();
+    private final MemorySegment passScratch = scratchArena.allocate(PASS_SCRATCH_BYTES, 16);
+    private final Scratch drawScratch = new Scratch();
+    private final MemorySegment statsScratch = scratchArena.allocate(8L * MetalConst.STAT_COUNT, 8);
+    private final long[] prevStats = new long[MetalConst.STAT_COUNT];
+    private volatile long[] lastFrameStats = new long[MetalConst.STAT_COUNT];
     private CelestiaRenderPass currentRenderPass;
     private boolean closed;
+
+    // passScratch layout: 8 x int64 color views | 8 x int32 clear flags | 8 x float4 clear colors
+    private static final long PASS_VIEWS_OFF = 0L;
+    private static final long PASS_FLAGS_OFF = 64L;
+    private static final long PASS_RGBA_OFF = 96L;
+    private static final long PASS_SCRATCH_BYTES = 224L;
+    private static final int MAX_COLOR_ATTACHMENTS = 8;
+
+    /** Grow-only off-heap scratch buffer; contents are only valid until the next {@link #get} call. */
+    static final class Scratch {
+        private Arena arena;
+        private MemorySegment segment = MemorySegment.NULL;
+
+        MemorySegment get(long bytes) {
+            if (segment.byteSize() < bytes) {
+                if (arena != null) arena.close();
+                arena = Arena.ofShared();
+                segment = arena.allocate(Math.max(bytes, Math.max(4096L, segment.byteSize() * 2L)), 16);
+            }
+            return segment;
+        }
+
+        void close() {
+            if (arena != null) {
+                arena.close();
+                arena = null;
+                segment = MemorySegment.NULL;
+            }
+        }
+    }
+
+    Scratch drawScratch() {
+        return drawScratch;
+    }
+
+    /** Serial the currently recording command buffer will receive when submitted. */
+    private long recordingSerial() {
+        return MetalNative.deviceNextSubmit(device.handle()) + 1L;
+    }
+
+    /**
+     * Waits until submit {@code serial} has completed on the GPU, submitting the recording command buffer first
+     * when it contains that work. Used to give CPU reads of GPU-written buffers OpenGL-like implicit sync.
+     */
+    void awaitSerial(long serial) {
+        if (serial <= 0L || serial <= MetalNative.deviceCompletedSubmit(device.handle())) return;
+        if (serial > MetalNative.deviceNextSubmit(device.handle())) {
+            if (currentRenderPass != null) {
+                LOGGER.warn("Buffer mapped for read while a render pass is open; GPU writes may not be visible yet");
+                return;
+            }
+            submit();
+        }
+        if (!MetalNative.waitSubmit(device.handle(), serial, 5_000_000_000L)) {
+            LOGGER.warn("Timed out waiting for GPU writes before buffer map (serial {})", serial);
+        }
+    }
+
+    private void sampleFrameStats() {
+        MetalNative.deviceStats(device.handle(), statsScratch, MetalConst.STAT_COUNT);
+        long[] delta = new long[MetalConst.STAT_COUNT];
+        for (int i = 0; i < MetalConst.STAT_COUNT; i++) {
+            long cur = statsScratch.getAtIndex(ValueLayout.JAVA_LONG, i);
+            delta[i] = cur - prevStats[i];
+            prevStats[i] = cur;
+        }
+        lastFrameStats = delta;
+    }
+
+    /** Native encoder counters for the most recently presented frame, indexed by {@code MetalConst.STAT_*}. */
+    public long[] lastFrameStats() {
+        return lastFrameStats;
+    }
 
     CelestiaCommandEncoder(CelestiaMetalDevice device) {
         this.device = device;
@@ -48,6 +128,8 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
     }
 
     void onPresentedBySurface() {
+        sampleFrameStats();
+        device.applyEncoderOptions();
         transientMemory.endSubmit();
         runCompletedCallbacks();
         checkDeviceHealth();
@@ -107,11 +189,14 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
             ? depthAtt.textureView().texture().getFormat()
             : null;
         RenderPass.RenderArea area = desc.renderArea();
+        if (colorCount > MAX_COLOR_ATTACHMENTS) {
+            throw new IllegalArgumentException("Too many color attachments: " + colorCount);
+        }
 
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment cViews = colorCount > 0 ? arena.allocate(8L * colorCount, 8) : MemorySegment.NULL;
-            MemorySegment cFlags = colorCount > 0 ? arena.allocate(4L * colorCount, 4) : MemorySegment.NULL;
-            MemorySegment cRgba = colorCount > 0 ? arena.allocate(16L * colorCount, 4) : MemorySegment.NULL;
+        {
+            MemorySegment cViews = colorCount > 0 ? passScratch.asSlice(PASS_VIEWS_OFF, 8L * colorCount) : MemorySegment.NULL;
+            MemorySegment cFlags = colorCount > 0 ? passScratch.asSlice(PASS_FLAGS_OFF, 4L * colorCount) : MemorySegment.NULL;
+            MemorySegment cRgba = colorCount > 0 ? passScratch.asSlice(PASS_RGBA_OFF, 16L * colorCount) : MemorySegment.NULL;
             for (int i = 0; i < colorCount; i++) {
                 var att = colors.get(i);
                 long viewHandle = ((CelestiaTextureView) att.textureView()).handle();
@@ -140,7 +225,10 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
                 }
             }
 
-            String lbl = desc.label() != null ? desc.label().get() : "RenderPass";
+            // Labels are only consumed natively when debug labels are on; skip the string + arena otherwise.
+            String lbl = device.isDebuggingEnabled()
+                ? (desc.label() != null ? desc.label().get() : "RenderPass")
+                : null;
             int ax = area != null ? area.x() : 0;
             int ay = area != null ? area.y() : 0;
             int aw = area != null ? area.width() : 0;
@@ -157,7 +245,7 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
     @Override
     public void submitRenderPass() {
         if (currentRenderPass != null) {
-            MetalNative.passEnd(device.handle());
+            MetalNative.passFinish(device.handle());
             currentRenderPass.closePass();
             currentRenderPass = null;
         }
@@ -200,6 +288,7 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
         GpuBufferSlice staging = transientMemory.uploadStaging(List.of(data), 16L, GpuBuffer.USAGE_COPY_SRC, 0L, 0L);
         if (staging.buffer() instanceof CelestiaBuffer src) {
             MetalNative.blitCopyBuffer(device.handle(), src.handle(), staging.offset(), dst.handle(), slice.offset(), len);
+            dst.markGpuWrite(recordingSerial());
         }
     }
 
@@ -208,6 +297,7 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
         if (srcSlice.buffer() instanceof CelestiaBuffer s && dstSlice.buffer() instanceof CelestiaBuffer d) {
             MetalNative.blitCopyBuffer(device.handle(), s.handle(), srcSlice.offset(),
                 d.handle(), dstSlice.offset(), Math.min(srcSlice.length(), dstSlice.length()));
+            d.markGpuWrite(recordingSerial());
         }
     }
 
@@ -260,6 +350,7 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
             int rowBytes = w * ct.getFormat().blockSize();
             MetalNative.blitCopyTextureToBuffer(device.handle(), ct.handle(), mip, 0, x, y, w, h,
                 cb.handle(), dstOffset, rowBytes);
+            cb.markGpuWrite(recordingSerial());
             if (onComplete != null) {
                 runWhenSubmitDone(onComplete);
             }
@@ -298,5 +389,7 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
         MetalNative.deviceWaitIdle(device.handle());
         runCompletedCallbacks();
         transientMemory.close();
+        drawScratch.close();
+        scratchArena.close();
     }
 }

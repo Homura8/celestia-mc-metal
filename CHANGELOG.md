@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.0-alpha.11
+
+### Performance
+- **Render pass merging**: consecutive RenderPearl passes on identical attachments without clears now continue the same Metal render encoder (`cm_pass_finish` soft end), avoiding a full-resolution tile store/load and a Metal 4 queue barrier per pass. Synthetic 24-pass 3024 × 1752 frame on M1 Pro: ~1.2–2.1 ms → ~0.13–0.27 ms GPU (Metal 4 and Metal 3).
+- **Deferred clears**: `clearColorTexture` / `clearDepthTexture` / `clearColorAndDepthTextures` fold into the next pass's load action instead of running as separate clear encoders.
+- **Metal 4 argument-table dedup**: uniform and vertex buffer GPU addresses are only rewritten when they change.
+- **FFM hot path**: per-frame downcall handles are `static final` (inlinable by C2) and short non-blocking calls use `Linker.Option.critical(false)`; per-pass/per-draw `Arena` allocations were replaced with reusable scratch memory, and interleaved `multiDraw` / `multiDrawIndexed` commands are read natively without Java-side repacking (`cm_pass_multi_draw_packed`, `cm_pass_multi_draw_indexed_packed`). Pass labels are only built when debug labels are enabled.
+
+### Added
+- F3 `Celestia Encoders` line with per-frame passes, render encoders, merges, folded/flushed clears, blit encoders, and draw counts (`cm_device_stats`).
+- **Render Pass Merging** and **Deferred Clears** toggles (Advanced tab and Sodium's Celestia Metal page, `performance.renderPassMerging` / `performance.deferredClears`), applied live on the next frame. `-Dcelestiametal.noPassMerge=true` / `-Dcelestiametal.noDeferClears=true` force them off.
+- Native Test 2h (staging-buffer reuse across buffer->texture uploads in one blit encoder; fails on Metal 4 without the barrier).
+- `BufferReadbackSyncTest` (JUnit, real Metal device) covering read-map synchronization after GPU copies.
+- Native Test 2g (merging, clear folding & ordering, stats, disabled-option path) and a pass-merge GPU benchmark for Metal 4 and Metal 3; FFM smoke coverage for the new entry points.
+
+### Fixed
+- **Corrupted / banded Xaero's Minimap tiles on Metal 4 (missing blit barrier)**: `cm_blit_copy_buffer_to_texture` (used by `copyBufferToTexture` and `writeToTexture`) was the only buffer/texture blit without a Metal 4 intra-encoder `MTLStageBlit` barrier. Xaero's World Map fills a tile's upload buffer with `writeToBuffer` (a buffer->buffer blit) and immediately copies it into the tile texture, so on Metal 4 the texture copy could run before its source was written, uploading the previous tile's or partially written bytes. Present since the first alpha; Metal 3 was unaffected (automatic hazard tracking).
+- **GPU readback race on buffer maps**: `GpuBuffer.map(read = true)` now waits for queued GPU writes into that buffer (`copyTextureToBuffer`, `copyToBuffer`, `writeToBuffer`), submitting the recording command buffer when needed, matching OpenGL's implicit synchronization. Xaero's World Map reads branch-texture downloads by mapping its pack buffer straight away and could previously read stale bytes 1–3 frames early. Write-only maps remain unsynchronized. Present since the first alpha.
+- **Celestia Metal F3 lines hidden**: Minecraft 26.3 only shows debug entries that belong to the active F3 profile or the saved custom layout, so the `celestiametal:status` entry defaulted to `NEVER`. `DebugScreenEntryListMixin` now enables it (`IN_OVERLAY`) unless the player has explicitly chosen a status for it in F3+F6.
+
+### Changed
+- Native ABI bumped to `CM_ABI_VERSION 2` (`cm_pass_finish`, `cm_device_set_option`, `cm_device_stats`, packed multi-draws).
+
 ## 0.1.0-alpha.10
 
 ### Fixed

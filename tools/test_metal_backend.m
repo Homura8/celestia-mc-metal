@@ -388,6 +388,204 @@ static void verify_backend_ops(int32_t preferMetal4) {
     cm_buffer_destroy(ctx, blitArenaA);
     cm_buffer_destroy(ctx, blitStage);
 
+    // 2g. Render pass merging + deferred clear folding (ordering, correctness, and statistics)
+    {
+        const char *mergeMsl =
+            "#include <metal_stdlib>\n"
+            "using namespace metal;\n"
+            "struct VIn { float4 pos [[attribute(0)]]; };\n"
+            "struct VOut { float4 pos [[position]]; };\n"
+            "vertex VOut vs_m(VIn in [[stage_in]]) { VOut o; o.pos = in.pos; return o; }\n"
+            "fragment half4 fs_red() { return half4(1.0h, 0.0h, 0.0h, 1.0h); }\n"
+            "fragment half4 fs_green() { return half4(0.0h, 1.0h, 0.0h, 1.0h); }\n";
+        int64_t libM = cm_compile_msl_library(ctx, mergeMsl, "merge_test", 0, err, sizeof(err));
+        assert(libM != 0);
+        int64_t vsM = cm_compile_function(libM, "vs_m", 0, 0, 0, err, sizeof(err));
+        int64_t fsRed = cm_compile_function(libM, "fs_red", 0, 0, 0, err, sizeof(err));
+        int64_t fsGreen = cm_compile_function(libM, "fs_green", 0, 0, 0, err, sizeof(err));
+        CMVertexBufferDesc mVb = { 0, 16, 0 };
+        CMAttribBindingDesc mAttr = { 0, 0, 0, CM_FMT_RGBA32_FLOAT };
+        int64_t psoRed = cm_render_pipeline_create(ctx, vsM, fsRed, &mVb, 1, &mAttr, 1, &colDesc, 1,
+                                                   CM_FMT_D32_FLOAT, CM_TOPO_TRIANGLES, 0, 0, 1,
+                                                   CM_CMP_ALWAYS, 0, 0.0f, 0.0f, "MergeRed", err, sizeof(err));
+        int64_t psoGreen = cm_render_pipeline_create(ctx, vsM, fsGreen, &mVb, 1, &mAttr, 1, &colDesc, 1,
+                                                     CM_FMT_D32_FLOAT, CM_TOPO_TRIANGLES, 0, 0, 1,
+                                                     CM_CMP_ALWAYS, 0, 0.0f, 0.0f, "MergeGreen", err, sizeof(err));
+        assert(psoRed && psoGreen);
+        // Left half [-1, 0] and right half [0, 1] quads (two triangles each), plus a full-screen quad
+        float leftQ[6 * 4] = { -1,-1,0.5f,1,  0,-1,0.5f,1,  -1,1,0.5f,1,   0,-1,0.5f,1,  0,1,0.5f,1,  -1,1,0.5f,1 };
+        float rightQ[6 * 4] = { 0,-1,0.5f,1,  1,-1,0.5f,1,   0,1,0.5f,1,   1,-1,0.5f,1,  1,1,0.5f,1,   0,1,0.5f,1 };
+        float fullQ[6 * 4] = { -1,-1,0.5f,1, 1,-1,0.5f,1,   -1,1,0.5f,1,   1,-1,0.5f,1,  1,1,0.5f,1,  -1,1,0.5f,1 };
+        int64_t leftVbo = cm_buffer_create(ctx, sizeof(leftQ), leftQ, "MergeLeft");
+        int64_t rightVbo = cm_buffer_create(ctx, sizeof(rightQ), rightQ, "MergeRight");
+        int64_t fullVbo = cm_buffer_create(ctx, sizeof(fullQ), fullQ, "MergeFull");
+        int64_t ctex2 = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, 64, 64, 1, 1, 0, 1, 1, 0, "MergeSideRT");
+        int64_t readBuf2 = cm_buffer_create(ctx, 64 * 64 * 4, NULL, "MergeReadback2");
+        assert(leftVbo && rightVbo && fullVbo && ctex2 && readBuf2);
+        uint8_t *px2 = (uint8_t *)(uintptr_t)cm_buffer_contents(readBuf2);
+        const size_t leftPx = ((size_t)32 * 64u + 8u) * 4u;
+        const size_t rightPx = ((size_t)32 * 64u + 56u) * 4u;
+#define PX_IS(p, R, G, B) (abs((int)(p)[0] - (R)) <= 3 && abs((int)(p)[1] - (G)) <= 3 && abs((int)(p)[2] - (B)) <= 3)
+
+        for (int mode = 0; mode < 2; mode++) {
+            int enabled = mode == 0;
+            cm_device_set_option(ctx, CM_OPT_PASS_MERGE, enabled);
+            cm_device_set_option(ctx, CM_OPT_DEFER_CLEARS, enabled);
+            int64_t st0[CM_STAT_COUNT] = {0};
+            int64_t st1[CM_STAT_COUNT] = {0};
+            cm_device_stats(ctx, st0, CM_STAT_COUNT);
+
+            // (a) deferred clear -> load pass (red, left) -> soft end -> merged load pass (green, right)
+            cm_cmd_begin(ctx);
+            cm_blit_clear_color_depth(ctx, ctex, 0.0f, 0.0f, 1.0f, 1.0f, dtex, 0.0);
+            assert(cm_pass_begin(ctx, &cview, &loadFlag, clearCol, 1, dview, 0, 0.0, 0, 0, 64, 64, "MergeA") == 1);
+            cm_pass_set_pipeline(ctx, psoRed);
+            cm_pass_set_vertex_buffer(ctx, 0, leftVbo, 0, 16);
+            cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 6, 1, 0, 0);
+            cm_pass_finish(ctx);
+            assert(cm_pass_begin(ctx, &cview, &loadFlag, clearCol, 1, dview, 0, 0.0, 0, 0, 64, 64, "MergeB") == 1);
+            cm_pass_set_pipeline(ctx, psoGreen);
+            cm_pass_set_vertex_buffer(ctx, 0, rightVbo, 0, 16);
+            cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 6, 1, 0, 0);
+            cm_pass_finish(ctx);
+            // A deferred clear of an unrelated texture must be flushed before a blit reads it
+            cm_blit_clear_color(ctx, ctex2, 1.0f, 1.0f, 0.0f, 1.0f);
+            cm_blit_copy_texture_to_buffer(ctx, ctex2, 0, 0, 0, 0, 64, 64, readBuf2, 0, 64 * 4);
+            cm_blit_copy_texture_to_buffer(ctx, ctex, 0, 0, 0, 0, 64, 64, readBuf, 0, 64 * 4);
+            uint64_t s2g = cm_cmd_submit(ctx, 2);
+            assert(cm_wait_submit(ctx, s2g, 5000000000ULL) == 1);
+            assert(PX_IS(&px[leftPx], 255, 0, 0));
+            assert(PX_IS(&px[rightPx], 0, 255, 0));
+            assert(PX_IS(&px2[leftPx], 255, 255, 0));
+            cm_device_stats(ctx, st1, CM_STAT_COUNT);
+            assert(st1[CM_STAT_PASSES_BEGUN] - st0[CM_STAT_PASSES_BEGUN] == 2);
+            if (enabled) {
+                assert(st1[CM_STAT_PASSES_MERGED] - st0[CM_STAT_PASSES_MERGED] == 1);
+                assert(st1[CM_STAT_CLEARS_FOLDED] - st0[CM_STAT_CLEARS_FOLDED] == 2);
+                assert(st1[CM_STAT_CLEARS_FLUSHED] - st0[CM_STAT_CLEARS_FLUSHED] == 1);
+                // one merged pass encoder + one flushed side clear
+                assert(st1[CM_STAT_RENDER_ENCODERS] - st0[CM_STAT_RENDER_ENCODERS] == 2);
+            } else {
+                assert(st1[CM_STAT_PASSES_MERGED] - st0[CM_STAT_PASSES_MERGED] == 0);
+                assert(st1[CM_STAT_CLEARS_FOLDED] - st0[CM_STAT_CLEARS_FOLDED] == 0);
+                // color+depth clear, two passes, side clear
+                assert(st1[CM_STAT_RENDER_ENCODERS] - st0[CM_STAT_RENDER_ENCODERS] == 4);
+            }
+
+            // (b) pass (red full) -> clear same target (blue) -> load pass (green left):
+            //     the clear must land after the red pass and before the green pass.
+            cm_cmd_begin(ctx);
+            assert(cm_pass_begin(ctx, &cview, &loadFlag, clearCol, 1, dview, 0, 0.0, 0, 0, 64, 64, "OrderA") == 1);
+            cm_pass_set_pipeline(ctx, psoRed);
+            cm_pass_set_vertex_buffer(ctx, 0, fullVbo, 0, 16);
+            cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 6, 1, 0, 0);
+            cm_pass_finish(ctx);
+            cm_blit_clear_color(ctx, ctex, 0.0f, 0.0f, 1.0f, 1.0f);
+            assert(cm_pass_begin(ctx, &cview, &loadFlag, clearCol, 1, dview, 0, 0.0, 0, 0, 64, 64, "OrderB") == 1);
+            cm_pass_set_pipeline(ctx, psoGreen);
+            cm_pass_set_vertex_buffer(ctx, 0, leftVbo, 0, 16);
+            cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 6, 1, 0, 0);
+            cm_pass_finish(ctx);
+            cm_blit_copy_texture_to_buffer(ctx, ctex, 0, 0, 0, 0, 64, 64, readBuf, 0, 64 * 4);
+            uint64_t s2gb = cm_cmd_submit(ctx, 2);
+            assert(cm_wait_submit(ctx, s2gb, 5000000000ULL) == 1);
+            assert(PX_IS(&px[leftPx], 0, 255, 0));
+            assert(PX_IS(&px[rightPx], 0, 0, 255));
+
+            // (c) a following pass that requests its own clear must never merge into the open encoder
+            cm_device_stats(ctx, st0, CM_STAT_COUNT);
+            cm_cmd_begin(ctx);
+            assert(cm_pass_begin(ctx, &cview, &loadFlag, clearCol, 1, dview, 0, 0.0, 0, 0, 64, 64, "ClearA") == 1);
+            cm_pass_set_pipeline(ctx, psoRed);
+            cm_pass_set_vertex_buffer(ctx, 0, fullVbo, 0, 16);
+            cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 6, 1, 0, 0);
+            cm_pass_finish(ctx);
+            assert(cm_pass_begin(ctx, &cview, &clearFlag, clearCol, 1, dview, 0, 0.0, 0, 0, 64, 64, "ClearB") == 1);
+            cm_pass_finish(ctx);
+            // and submit must close a soft-ended pass on its own
+            uint64_t s2gc = cm_cmd_submit(ctx, 2);
+            assert(cm_wait_submit(ctx, s2gc, 5000000000ULL) == 1);
+            cm_cmd_begin(ctx);
+            cm_blit_copy_texture_to_buffer(ctx, ctex, 0, 0, 0, 0, 64, 64, readBuf, 0, 64 * 4);
+            uint64_t s2gd = cm_cmd_submit(ctx, 2);
+            assert(cm_wait_submit(ctx, s2gd, 5000000000ULL) == 1);
+            assert(PX_IS(&px[leftPx], 0, 0, 0) && PX_IS(&px[rightPx], 0, 0, 0));
+            cm_device_stats(ctx, st1, CM_STAT_COUNT);
+            assert(st1[CM_STAT_PASSES_MERGED] - st0[CM_STAT_PASSES_MERGED] == 0);
+        }
+#undef PX_IS
+        cm_device_set_option(ctx, CM_OPT_PASS_MERGE, 1);
+        cm_device_set_option(ctx, CM_OPT_DEFER_CLEARS, 1);
+        printf("[Backend %s] Test 2g pass merging + clear folding OK\n", preferMetal4 ? "Metal 4" : "Metal 3");
+
+        // 2h. Staging-buffer reuse across tile uploads inside one blit encoder (Xaero's World Map pattern):
+        //     writeToBuffer-style copy (stage_k -> pbo) followed by copyBufferToTexture (pbo -> tile_k).
+        //     Every buffer->texture copy must observe the preceding copy that filled the shared pbo.
+        {
+            enum { TILES = 8, TW = 512, TH = 512 };
+            const size_t tileBytes = (size_t)TW * TH * 4u;
+            int64_t pbo = cm_buffer_create(ctx, (int64_t)tileBytes, NULL, "TilePbo");
+            int64_t stages[TILES], tiles[TILES], reads[TILES];
+            for (int k = 0; k < TILES; k++) {
+                stages[k] = cm_buffer_create(ctx, (int64_t)tileBytes, NULL, "TileStage");
+                tiles[k] = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, TW, TH, 1, 1, 0, 0, 1, 0, "Tile");
+                reads[k] = cm_buffer_create(ctx, (int64_t)tileBytes, NULL, "TileRead");
+                assert(stages[k] && tiles[k] && reads[k]);
+            }
+            assert(pbo);
+            for (int iter = 0; iter < 6; iter++) {
+                for (int k = 0; k < TILES; k++) {
+                    uint32_t *st = (uint32_t *)(uintptr_t)cm_buffer_contents(stages[k]);
+                    uint32_t v = 0xFF000000u | ((uint32_t)(iter * TILES + k + 1) * 0x010307u);
+                    for (size_t i = 0; i < (size_t)TW * TH; i++) st[i] = v;
+                }
+                cm_cmd_begin(ctx);
+                for (int k = 0; k < TILES; k++) {
+                    cm_blit_copy_buffer(ctx, stages[k], 0, pbo, 0, (int64_t)tileBytes);
+                    cm_blit_copy_buffer_to_texture(ctx, pbo, 0, TW * 4, tiles[k], 0, 0, 0, 0, TW, TH);
+                }
+                for (int k = 0; k < TILES; k++) {
+                    cm_blit_copy_texture_to_buffer(ctx, tiles[k], 0, 0, 0, 0, TW, TH, reads[k], 0, TW * 4);
+                }
+                uint64_t s2h = cm_cmd_submit(ctx, 2);
+                assert(cm_wait_submit(ctx, s2h, 5000000000ULL) == 1);
+                for (int k = 0; k < TILES; k++) {
+                    const uint32_t *rd = (const uint32_t *)(uintptr_t)cm_buffer_contents(reads[k]);
+                    uint32_t v = 0xFF000000u | ((uint32_t)(iter * TILES + k + 1) * 0x010307u);
+                    for (size_t i = 0; i < (size_t)TW * TH; i += 4099) {
+                        if (rd[i] != v) {
+                            fprintf(stderr, "FAIL 2h: tile %d texel %zu = %08x, expected %08x (iter %d)\n", k, i, rd[i], v, iter);
+                            exit(1);
+                        }
+                    }
+                    if (rd[(size_t)TW * TH - 1] != v) {
+                        fprintf(stderr, "FAIL 2h: tile %d last texel = %08x, expected %08x\n", k, rd[(size_t)TW * TH - 1], v);
+                        exit(1);
+                    }
+                }
+            }
+            for (int k = 0; k < TILES; k++) {
+                cm_buffer_destroy(ctx, reads[k]);
+                cm_texture_destroy(ctx, tiles[k]);
+                cm_buffer_destroy(ctx, stages[k]);
+            }
+            cm_buffer_destroy(ctx, pbo);
+            printf("[Backend %s] Test 2h staging reuse buffer->texture ordering OK\n", preferMetal4 ? "Metal 4" : "Metal 3");
+        }
+
+        cm_buffer_destroy(ctx, readBuf2);
+        cm_texture_destroy(ctx, ctex2);
+        cm_buffer_destroy(ctx, fullVbo);
+        cm_buffer_destroy(ctx, rightVbo);
+        cm_buffer_destroy(ctx, leftVbo);
+        cm_pipeline_destroy(ctx, psoGreen);
+        cm_pipeline_destroy(ctx, psoRed);
+        cm_function_destroy(fsGreen);
+        cm_function_destroy(fsRed);
+        cm_function_destroy(vsM);
+        cm_library_destroy(libM);
+    }
+
     // 3. MetalFX Spatial & Temporal scaler creation + execution
     int64_t mfxOut = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 128, 128, 1, 1, 0, 1, 1, 1, "MFXOut");
     int64_t mfxIn = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 64, 64, 1, 1, 0, 1, 1, 0, "MFXIn");
@@ -735,6 +933,87 @@ static void benchmark_native_pipelines(NSString *assetsDir, int32_t preferMetal4
     cm_device_destroy(ctx);
 }
 
+// Synthetic Minecraft-like frame: color+depth clear, then many load-only passes on the main target
+// (sky, terrain layers, entities, particles, GUI layers ...). Compares GPU time with pass merging and
+// clear folding enabled vs disabled at the given resolution.
+static double run_pass_merge_frame(int64_t ctx, int64_t pso, int64_t vbo, int64_t ctex, int64_t cview,
+                                   int64_t dtex, int64_t dview, int32_t w, int32_t h, int passes) {
+    int32_t loadFlag = 0;
+    float clr[4] = {0, 0, 0, 1};
+    cm_cmd_begin(ctx);
+    cm_blit_clear_color_depth(ctx, ctex, 0.2f, 0.4f, 0.8f, 1.0f, dtex, 0.0);
+    for (int p = 0; p < passes; p++) {
+        cm_pass_begin(ctx, &cview, &loadFlag, clr, 1, dview, 0, 0.0, 0, 0, w, h, "MergeBench");
+        cm_pass_set_pipeline(ctx, pso);
+        cm_pass_set_vertex_buffer(ctx, 0, vbo, 0, 16);
+        cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+        cm_pass_finish(ctx);
+    }
+    uint64_t s = cm_cmd_submit(ctx, 2);
+    cm_wait_submit(ctx, s, 5000000000ULL);
+    return (double)cm_device_last_gpu_ns(ctx) / 1.0e6;
+}
+
+static void benchmark_pass_merging(int32_t preferMetal4) {
+    const int32_t W = 3024, H = 1752, PASSES = 24, WARM = 4, ITERS = 30;
+    int64_t ctx = cm_device_create(preferMetal4, 0, "");
+    assert(ctx != 0);
+    int64_t ctex = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, W, H, 1, 1, 0, 1, 1, 0, "BenchMain");
+    int64_t cview = cm_texture_view_create(ctx, ctex, 0, 1);
+    int64_t dtex = cm_texture_create(ctx, CM_FMT_D32_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "BenchDepth");
+    int64_t dview = cm_texture_view_create(ctx, dtex, 0, 1);
+    const char *msl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VIn { float4 pos [[attribute(0)]]; };\n"
+        "struct VOut { float4 pos [[position]]; };\n"
+        "vertex VOut vs_b(VIn in [[stage_in]]) { VOut o; o.pos = in.pos; return o; }\n"
+        "fragment half4 fs_b() { return half4(0.9h, 0.6h, 0.3h, 1.0h); }\n";
+    char err[2048] = {0};
+    int64_t lib = cm_compile_msl_library(ctx, msl, "merge_bench", 0, err, sizeof(err));
+    int64_t vs = cm_compile_function(lib, "vs_b", 0, 0, 0, err, sizeof(err));
+    int64_t fs = cm_compile_function(lib, "fs_b", 0, 0, 0, err, sizeof(err));
+    CMVertexBufferDesc vb = { 0, 16, 0 };
+    CMAttribBindingDesc at = { 0, 0, 0, CM_FMT_RGBA32_FLOAT };
+    CMColorAttachmentDesc cd = { CM_FMT_RGBA8_UNORM, 0, 1, 0, 0, 1, 0, 0, 15 };
+    int64_t pso = cm_render_pipeline_create(ctx, vs, fs, &vb, 1, &at, 1, &cd, 1, CM_FMT_D32_FLOAT,
+                                            CM_TOPO_TRIANGLES, 0, 0, 1, CM_CMP_GREATER_EQUAL, 1,
+                                            0.0f, 0.0f, "MergeBenchPSO", err, sizeof(err));
+    // Small triangle: per-pass fragment work is tiny, so the frame cost is dominated by pass overhead
+    float tri[12] = { -0.1f, -0.1f, 0.5f, 1.0f,  0.1f, -0.1f, 0.5f, 1.0f,  0.0f, 0.1f, 0.5f, 1.0f };
+    int64_t vbo = cm_buffer_create(ctx, sizeof(tri), tri, "MergeBenchVbo");
+    assert(ctex && cview && dtex && dview && lib && pso && vbo);
+
+    double avg[2] = {0, 0};
+    for (int mode = 0; mode < 2; mode++) {
+        int on = mode == 0;
+        cm_device_set_option(ctx, CM_OPT_PASS_MERGE, on);
+        cm_device_set_option(ctx, CM_OPT_DEFER_CLEARS, on);
+        for (int i = 0; i < WARM; i++) run_pass_merge_frame(ctx, pso, vbo, ctex, cview, dtex, dview, W, H, PASSES);
+        double sum = 0;
+        for (int i = 0; i < ITERS; i++) sum += run_pass_merge_frame(ctx, pso, vbo, ctex, cview, dtex, dview, W, H, PASSES);
+        avg[mode] = sum / ITERS;
+    }
+    printf("[Benchmark %s @ %dx%d] %d-pass frame GPU avg: merged %.3f ms vs unmerged %.3f ms (%.2fx)\n",
+           preferMetal4 ? "Metal 4" : "Metal 3", W, H, PASSES, avg[0], avg[1], avg[1] / MAX(avg[0], 1e-6));
+
+    char drained[1024] = {0};
+    if (cm_device_drain_errors(ctx, drained, sizeof(drained)) > 0) {
+        fprintf(stderr, "FAIL: GPU reported errors during pass-merge benchmark: %s\n", drained);
+        exit(1);
+    }
+    cm_buffer_destroy(ctx, vbo);
+    cm_pipeline_destroy(ctx, pso);
+    cm_function_destroy(fs);
+    cm_function_destroy(vs);
+    cm_library_destroy(lib);
+    cm_texture_view_destroy(ctx, dview);
+    cm_texture_destroy(ctx, dtex);
+    cm_texture_view_destroy(ctx, cview);
+    cm_texture_destroy(ctx, ctex);
+    cm_device_destroy(ctx);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <assetsDir>\n", argv[0]);
@@ -752,6 +1031,8 @@ int main(int argc, char **argv) {
     verify_backend_ops(0);
     benchmark_native_pipelines([NSString stringWithUTF8String:argv[1]], 1);
     benchmark_native_pipelines([NSString stringWithUTF8String:argv[1]], 0);
+    benchmark_pass_merging(1);
+    benchmark_pass_merging(0);
     printf("ALL CELESTIA METAL NATIVE GPU TESTS PASSED.\n");
     return 0;
 }
