@@ -21,8 +21,12 @@ We gratefully acknowledge and preserve attribution for the following projects an
 
 ## Native MSL Shaders & Shader Ecosystem
 
-- **[Minecraft Metal Shaders](https://github.com/GaelQuinta/minecraft-metal-shaders)** by **GaelQuinta** (`Apache-2.0`)
-  - Apple Silicon GPU profiling insights (`dir.y = v²` sky-view LUT mapping avoiding `asin`, sky-light early-out skipping shadow samples in caves, light-space shadow caster stability, reversed-Z cascade conventions).
+- **[Minecraft Metal Shaders](https://github.com/GaelQuinta/minecraft-metal-shaders)** by **GaelQuinta** & contributors (`Apache-2.0`)
+  - Native MSL shader suite (`mcopt-shade`, upstream commit `dd32304d`) ported onto Celestia Metal's RenderPearl backend: `ShadeFrame` / `ShadeLook` / `ShadeGpu` / `ShadeResources` architecture, `dir.y = v²` sky-view LUT mapping avoiding `asin`, Lottes filmic tone curve + exact `shadeLdrToHdr` inverse, PCSS-lite shadows and reversed-Z cascade conventions, sky-light early-out skipping shadow samples in caves, water SSR/refraction/caustics, volumetric clouds/VL, and TAAU. Every ported file carries `// Adapted from Metal Shaders (GaelQuinta, Apache-2.0): <original path>`.
+  - Incorporates upstream MIT-licensed techniques/portions preserved in `NOTICE` and `LICENSES/MIT-Photon.txt`:
+    - **[Photon Shaders](https://github.com/sixthsurge/photon)** by **Benjamin Stott ("sixthsurge")** (`MIT`, `LICENSES/MIT-Photon.txt`) — volumetric clouds, air-mode volumetric light, and golden-hour mist formulas.
+    - **[SE Natural Bloom & Dirty Lens](https://github.com/sonicether/SE-Natural-Bloom-Dirty-Lens)** by **sonicether** (`MIT`) — energy-conserving bloom composite concept.
+    - **5-tap Catmull-Rom bicubic filter** by **Matt Pettineo (MJP)** (`MIT`) — history/upscale tap pattern.
 - **[Ciderlight](https://github.com/riccqi/ciderlight)** by **riccqi** (`Apache-2.0`)
   - Modular MSL shader passes, native binding cache deduplication, and automated MSL shader unit-check methodology.
 - **[SiliconShaders](https://github.com/rellefnediew/SiliconShaders)** by **rellefnediew** (`Apache-2.0`)
