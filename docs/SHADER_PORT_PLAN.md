@@ -217,3 +217,31 @@ All standalone shade passes (`sky_lut`, `shadow`, `vl`, `clouds`, `taa`, `shade_
 2. **Metal 4 Argument Table & Encoder Re-binding**: `cm_pass_begin` / merged pass continuation binds `ctx.m4VertexArgTable` (`buffers 0..30`, `textures 0..30`, `samplers 0..15`). Any native shade helper (`cm_shade_bind`, `cm_shade_lut_render`, `cm_shade_post_*`) that updates slots `24..27`, textures `16..17`, or samplers `12..13` must either go through `ctx`'s dedup caches or reset the relevant cache entries when switching between shade-owned encoders and RenderPearl world encoders.
 3. **Encoders & Barriers**: Every non-render-pass GPU operation (Sky LUT render pass, bloom chain, compute histogram/exposure, blit copies) **must** call `cm_flush_encoders(ctx)` first so soft-ended RenderPearl passes and deferred clears are never reordered, and emit explicit Metal 4 producer/intra-pass barriers (`emit_m4_render_producer_barrier` / compute `barrierAfterEncoderStages:`) between producer and consumer stages.
 4. **Native ABI & `checkPrivacy`**: Any new `cm_shade_*` entry points in `src/main/native/cm_shade.m` (or `cm_shade_*.m`) must bump `CM_ABI_VERSION` in `celestia_metal.h` + `MetalConst.ABI_VERSION` and wire matching `FunctionDescriptor`s in `MetalNative.java`. Note: `LICENSES/` only needs to be added to `build.gradle`'s `processResources` / `jar` outputs once Photon-derived shaders (P3) are bundled into the JAR.
+
+## 9. P6 progress log (update as you go)
+
+P6 is split: **P6a dynamic lights** (moving sources: hands, mobs holding lights, dropped items, burning entities, blazes,
+projectiles, TNT, ...; upstream `docs/dev/DYNLIGHTS.md`), then **P6b** coloured block lights (upstream `ColorLights`, which
+samples in *own-terrain's vertex stage* at textures 33/34 + vertex bytes 15: needs a fragment-side redesign for
+vanilla/Sodium terrain using free texture slots 26-28), Nether/End looks, aurora, motion blur, labPBR.
+
+P6a status (branch `feat/shader-port-p6a-alpha.21`, based on main after the P5 merge):
+- [x] Native `cm_dynlight.m` (port of upstream `mcdynlight.m` dynamic half): rings for lights + occupancy, visibility /
+      irradiance 3D textures, zeroed fallback, `cm_dl_*` C ABI (ABI 8), bound per render encoder at buffer 29 / textures
+      23-25 via `cm_dynlight_bind_render_encoder`. Removed dead `CM_SHADE_BUF_BLOOM` (it collided with slot 29). Metal 4
+      compute has no `setBytes`: kernel parameters go through a per-ring-slot params buffer + producer barriers.
+- [x] MSL: `dynlight.metal`, `dynlight_vis.metal` in `shaders/ported/` (upstream's `shade_dynlight.metal` m3 seam is not
+      needed: `ShadeShaderPatcher` appends `DynLightMsl.module()` and passes `CEL_DL_PARAMS` / `CEL_DL_ARGS`).
+- [x] Java in `dev.celestia.metal.shade.light`: `DynLightNative` on `cm_dl_*` via `MetalNative.shadeDowncall`, config as
+      `celestiametal.shade.dynLights.*` + `applyLive`, occupancy through vanilla `PalettedContainer.get` (Sodium optional),
+      `ShadeCompile` / `ColorLights` dropped, mixins (`DynLightEntityRendererMixin`, `DynLightClientLevelMixin`) verified
+      against 26.3 with javap.
+- [x] CelestiaShade: `DynLights.frame` (gather + vis/irr compute) in `beginWorld`, fallback bindings at init,
+      `DynLights.disable` when the option is off, `close` in `close`.
+- [x] Shading: terrain, water (above-water only) and entities (not the first-person hand) add
+      `shadeDynamicLightsVol(...) * ambientBlock`; the hand takes its held light through the packed-light mixin.
+- [x] Options: `DYNAMIC_LIGHTS`, `DYNAMIC_LIGHT_STRENGTH`, `DYNAMIC_LIGHT_COUNT` (preset 16/32/48/64),
+      `DYNAMIC_LIGHT_ENTITIES` -> `ShadeSettings.Lights`; F3 `| Lights N`; native Test 2q (M4/M3); 0.1.0-alpha.21.
+- [ ] In-game check by the owner (vanilla + Sodium): held torch, blaze, dropped glowstone, burning mob, light behind walls.
+- [ ] Later (optimization pass): the water specular glint (`shadeDynamicLightsSpec`), entity vertex-stage lights
+      (`DynLightMsl.patch`), visibility volume count per preset (startup switch today, 16).

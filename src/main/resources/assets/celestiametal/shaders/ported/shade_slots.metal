@@ -18,6 +18,18 @@
 #define CM_SHADE_TEX_WATER_WAVES  20
 #define CM_SHADE_TEX_WATER_PYR    21
 #define CM_SHADE_TEX_WATER_DETAIL 22
+#define CM_SHADE_TEX_DL_VIS       23
+#define CM_SHADE_TEX_DL_IRR       24
+#define CM_SHADE_TEX_DL_DIR       25
+
+// Dynamic lights (P6a): extra shading-function parameters / arguments, empty when the module is off.
+#ifdef SHADE_DYNLIGHT
+#define CEL_DL_PARAMS , constant ShadeDynLights &dl, texture3d<half> dlIrr, texture3d<half> dlDir
+#define CEL_DL_ARGS , celDL, celDlIrr, celDlDir
+#else
+#define CEL_DL_PARAMS
+#define CEL_DL_ARGS
+#endif
 
 #define CM_SHADE_SAMP_SHADOW      12
 #define CM_SHADE_SAMP_LINEAR      13

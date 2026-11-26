@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0-alpha.21
+
+### Added
+- **P6a dynamic lights**. Held light sources, glowing and burning mobs, dropped light items, projectiles and other moving sources now light nearby terrain, water and entities. Walls block the light: each of the nearest lights gets a 32³ visibility volume, traced from a block occupancy map around the camera or flood-filled around corners where the GPU supports it. A 96×64×96 irradiance volume carries the light into terrain and water shading. Lights fade in and out, and fire-like sources flicker.
+- New Lighting & Shadows options: Dynamic Lights, Dynamic Light Strength, Dynamic Light Count (16 on Performance, 32 on Balanced, 48 on Quality, 64 on Ultra), and Lights From Entities. They apply live. With Dynamic Lights off, the module releases its buffers and does no per-frame work.
+- F3 shows the per-frame light count in the Celestia shader status line.
+- Native Test 2q checks the zeroed fallback bindings, unoccluded irradiance, ray and flood-fill visibility behind a wall, and the shading read through buffer 29 and textures 24–25 on Metal 4 and Metal 3.
+
+### Changed
+- Native ABI 8 adds the `cm_dl_*` entry points. Buffer slot 29 now carries the dynamic lights, replacing the unused bloom slot.
+
 ## 0.1.0-alpha.20
 
 ### Added

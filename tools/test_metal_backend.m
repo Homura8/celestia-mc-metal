@@ -2510,6 +2510,172 @@ static void verify_p4_taau(NSString *assetsDir, int32_t preferMetal4) {
     cm_device_destroy(ctx);
 }
 
+// P6a dynamic lights: the module's kernels (visibility rays / flood fill, irradiance volume) and the shading read through
+// the render-encoder bindings (buffer 29, textures 24/25), with the zeroed fallback bound before the module exists.
+// One light at (16.5, 16.5, 16.5) with a solid wall at x = 20: the voxel in front stays lit, the one behind goes dark.
+static void verify_p6a_dynlights(NSString *assetsDir, int32_t preferMetal4) {
+    int64_t ctx = cm_device_create(preferMetal4, 0, "");
+    assert(ctx);
+    const char *api = cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3";
+    NSString *ported = [assetsDir stringByAppendingPathComponent:@"shaders/ported"];
+    NSString *dl = read_file_str([ported stringByAppendingPathComponent:@"dynlight.metal"]);
+    NSString *vis = read_file_str([ported stringByAppendingPathComponent:@"dynlight_vis.metal"]);
+    NSString *kernels = [NSString stringWithFormat:@"#define SHADE_DL_KERNELS\n%@\n%@", dl, vis];
+    NSString *probeSrc = [NSString stringWithFormat:@"%@\n"
+        "struct DlProbeOut { float4 position [[position]]; float2 uv; };\n"
+        "vertex DlProbeOut dl_probe_vs(uint vid [[vertex_id]]) {\n"
+        "  float2 p = float2(vid == 1 ? 3.0 : -1.0, vid == 2 ? 3.0 : -1.0);\n"
+        "  DlProbeOut o; o.position = float4(p, 0.0, 1.0); o.uv = float2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5); return o; }\n"
+        "fragment half4 dl_probe_fs(DlProbeOut in [[stage_in]], constant ShadeDynLights &D [[buffer(29)]],\n"
+        "    texture3d<half> irr [[texture(24)]], texture3d<half> dirs [[texture(25)]]) {\n"
+        "  bool front = in.uv.x < 0.5;\n"
+        "  float3 p = front ? float3(12.5, 16.5, 16.5) : float3(22.5, 16.5, 16.5);\n"
+        "  float3 n = front ? float3(1.0, 0.0, 0.0) : float3(-1.0, 0.0, 0.0);\n"
+        "  return half4(half3(shadeDynamicLightsVol(D, irr, dirs, p, n, false, 0.0h)), 1.0h); }\n", dl];
+    char err[4096] = {0};
+    int64_t lib = cm_compile_msl_library(ctx, probeSrc.UTF8String, "P6a probe", 1, err, sizeof(err));
+    if (!lib) { fprintf(stderr, "FAIL 2q compiling dynamic-light probe: %s\n", err); exit(1); }
+    int64_t vs = cm_compile_function(lib, "dl_probe_vs", 0, 0, 0, err, sizeof(err));
+    int64_t fs = cm_compile_function(lib, "dl_probe_fs", 0, 0, 0, err, sizeof(err));
+    assert(vs && fs);
+    CMColorAttachmentDesc color = { CM_FMT_RGBA16_FLOAT, 0, 1, 0, 0, 1, 0, 0, 15 };
+    int64_t pso = cm_render_pipeline_create(ctx, vs, fs, NULL, 0, NULL, 0, &color, 1, -1, CM_TOPO_TRIANGLES,
+                                            0, 0, 0, 0, 0, 0, 0, "dl probe", err, sizeof(err));
+    if (!pso) { fprintf(stderr, "FAIL 2q dynamic-light probe PSO: %s\n", err); exit(1); }
+    int64_t target = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 2, 1, 1, 1, 0, 1, 1, 0, "dl probe target");
+    int64_t read = cm_buffer_create(ctx, 256, NULL, "dl probe read");
+    assert(target && read);
+    const __fp16 *px = (const __fp16 *)(void *)cm_buffer_contents(read);
+
+    enum { DL_BYTES = 28736, OCC_BYTES = 512 * 128 * 4 };
+    #define DL_PROBE() do { \
+        cm_cmd_begin(ctx); \
+        cm_shade_fullscreen_pass(ctx, pso, target, NULL, 0, NULL, 0, NULL, 0); \
+        cm_blit_copy_texture_to_buffer(ctx, target, 0, 0, 0, 0, 2, 1, read, 0, 16); \
+        assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1); \
+    } while (0)
+
+    // 1. Module off: the zeroed fallback is bound, so the probe reads no light (and no stale argument-table entries).
+    assert(cm_dl_fallback(ctx, DL_BYTES) == 1);
+    DL_PROBE();
+    assert(px[0] == 0.0f && px[4] == 0.0f);
+
+    int64_t state = cm_dl_new(ctx, kernels.UTF8String, (int32_t)strlen(kernels.UTF8String) + 1, 3, 4, OCC_BYTES,
+                              96, 64, 96, err, sizeof(err));
+    if (!state) { fprintf(stderr, "FAIL 2q cm_dl_new: %s\n", err); exit(1); }
+    cm_dl_slot(state, 0);
+
+    // Occupancy: a solid plane at absolute x = 20 (all y, z of the 128^3 window).
+    uint32_t *occ = calloc(1, OCC_BYTES);
+    for (int y = 0; y < 128; y++) for (int z = 0; z < 128; z++) {
+        int x = 20;
+        uint32_t slot = ((uint32_t)((y >> 4) & 7) << 6) | ((uint32_t)((z >> 4) & 7) << 3) | (uint32_t)((x >> 4) & 7);
+        uint32_t idx = ((uint32_t)(y & 15) << 8) | ((uint32_t)(z & 15) << 4) | (uint32_t)(x & 15);
+        occ[(slot << 7) | (idx >> 5)] |= 1u << (idx & 31u);
+    }
+    cm_dl_occupancy(state, occ);
+    free(occ);
+
+    // ShadeDynLights (camera at the origin, so camera-relative = absolute): one light, every grid cell lists it.
+    uint8_t *D = (uint8_t *)(uintptr_t)cm_dl_contents(state, 0);
+    assert(D);
+    memset(D, 0, DL_BYTES);
+    uint32_t *info = (uint32_t *)D;
+    float *f = (float *)D;
+    info[0] = 1; info[1] = 1;
+    f[4] = -64; f[5] = -48; f[6] = -64; f[7] = 1.0f / 8.0f;        // grid
+    f[8] = 4; f[9] = 1; f[10] = 1; f[11] = 1;                       // slabs, strength, spec, entity
+    f[12] = -48; f[13] = -32; f[14] = -48; f[15] = 1;               // irradiance volume min corner, computed
+    float *L = f + 16;
+    L[0] = 16.5f; L[1] = 16.5f; L[2] = 16.5f; L[3] = 15.0f;         // pos, reach
+    L[4] = 1; L[5] = 0.8f; L[6] = 0.6f; L[7] = 1;                   // colour
+    L[8] = 0; L[9] = 0; L[10] = 0; L[11] = -1;                      // volume corner, no slab yet
+    L[12] = 0.75f;                                                  // core radius, directional, rays
+    uint32_t *cells = (uint32_t *)(D + 4160);
+    for (int i = 0; i < 16 * 12 * 16; i++) cells[i * 2] = 1u;
+
+    float volParams[4 + 8] = {0};
+    int32_t *vp = (int32_t *)volParams;
+    vp[0] = 1; vp[1] = 0;                                           // one volume, rays
+    vp[4] = 0; vp[5] = 0; vp[6] = 0; vp[7] = 0;                     // origin (absolute), slab 0
+    volParams[8] = 16.5f; volParams[9] = 16.5f; volParams[10] = 16.5f; volParams[11] = 15.0f;
+
+    // 2. No visibility volume: the light reaches through the wall (both probes lit).
+    cm_cmd_begin(ctx);
+    cm_dl_irr(ctx, state, 0, 0, 0, 96, 64, 96);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    DL_PROBE();
+    float openFront = px[0], openBehind = px[4];
+    if (!(openFront > 0.05f && openBehind > 0.02f && px[1] < openFront)) {
+        fprintf(stderr, "FAIL 2q unoccluded light: front=%g behind=%g\n", (double)openFront, (double)openBehind);
+        exit(1);
+    }
+
+    // 3. Ray visibility: the wall blocks the light behind it, the front keeps it.
+    L[11] = 0;
+    cm_cmd_begin(ctx);
+    cm_dl_vis(ctx, state, volParams, sizeof(volParams), 1);
+    cm_dl_irr(ctx, state, 0, 0, 0, 96, 64, 96);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    DL_PROBE();
+    if (!(px[0] > 0.5f * openFront && px[4] < 0.25f * openBehind)) {
+        fprintf(stderr, "FAIL 2q ray visibility: front=%g (open %g) behind=%g (open %g)\n",
+                (double)px[0], (double)openFront, (double)px[4], (double)openBehind);
+        exit(1);
+    }
+
+    // 4. Flood fill (where the device runs it): no detour around an endless wall, so behind stays dimmer than open.
+    int flood = cm_dl_has_flood(state);
+    if (flood) {
+        vp[1] = 1;
+        L[14] = 1;
+        cm_cmd_begin(ctx);
+        cm_dl_vis(ctx, state, volParams, sizeof(volParams), 1);
+        cm_dl_irr(ctx, state, 0, 0, 0, 96, 64, 96);
+        assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+        DL_PROBE();
+        if (!(px[0] > 0.5f * openFront && px[4] < 0.5f * openBehind)) {
+            fprintf(stderr, "FAIL 2q flood visibility: front=%g behind=%g (open %g / %g)\n",
+                    (double)px[0], (double)px[4], (double)openFront, (double)openBehind);
+            exit(1);
+        }
+    }
+    float occFront = px[0], occBehind = px[4];
+
+    // Timing: 4 ray volumes + the full irradiance box (upstream budget ~0.2 ms GPU).
+    float benchParams[4 + 8 * 16] = {0};
+    int32_t *bp = (int32_t *)benchParams;
+    bp[0] = 4;
+    for (int i = 0; i < 4; i++) {
+        bp[4 + i * 8 + 3] = i;
+        benchParams[4 + i * 8 + 4] = 16.5f; benchParams[4 + i * 8 + 5] = 16.5f; benchParams[4 + i * 8 + 6] = 16.5f;
+        benchParams[4 + i * 8 + 7] = 15.0f;
+    }
+    double best = 1e9;
+    for (int it = 0; it < 12; it++) {
+        double t0 = CFAbsoluteTimeGetCurrent();
+        cm_cmd_begin(ctx);
+        cm_dl_vis(ctx, state, benchParams, sizeof(benchParams), 4);
+        cm_dl_irr(ctx, state, 0, 0, 0, 96, 64, 96);
+        assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+        double ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0;
+        if (it >= 2 && ms < best) best = ms;
+    }
+    assert(cm_device_drain_errors(ctx, err, sizeof(err)) == 0);
+    printf("[Backend %s] Test 2q P6a dynamic lights (fallback, irradiance, ray%s visibility: front %.3f behind %.3f, open %.3f / %.3f; "
+           "4 volumes + full irradiance %.3f ms) OK\n",
+           api, flood ? " + flood" : "", (double)occFront, (double)occBehind, (double)openFront, (double)openBehind, best);
+    #undef DL_PROBE
+
+    cm_dl_free(ctx, state);
+    cm_buffer_destroy(ctx, read);
+    cm_texture_destroy(ctx, target);
+    cm_pipeline_destroy(ctx, pso);
+    cm_function_destroy(vs); cm_function_destroy(fs);
+    cm_library_destroy(lib);
+    cm_device_destroy(ctx);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <assetsDir>\n", argv[0]);
@@ -2545,6 +2711,8 @@ int main(int argc, char **argv) {
     verify_p3b_atmosphere([NSString stringWithUTF8String:argv[1]], 0);
     verify_p4_taau([NSString stringWithUTF8String:argv[1]], 1);
     verify_p4_taau([NSString stringWithUTF8String:argv[1]], 0);
+    verify_p6a_dynlights([NSString stringWithUTF8String:argv[1]], 1);
+    verify_p6a_dynlights([NSString stringWithUTF8String:argv[1]], 0);
     printf("ALL CELESTIA METAL NATIVE GPU TESTS PASSED.\n");
     return 0;
 }

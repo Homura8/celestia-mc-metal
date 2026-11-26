@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 
-#define CM_ABI_VERSION 7
+#define CM_ABI_VERSION 8
 #define CM_MAX_COLOR_ATTACHMENTS 8
 #define CM_MAX_VERTEX_BUFFERS 8
 #define CM_MAX_UNIFORM_BUFFERS 15
@@ -28,7 +28,7 @@
 #define CM_SHADE_BUF_GPU       26
 #define CM_SHADE_BUF_RESOURCES 27
 #define CM_SHADE_BUF_WATER     28
-#define CM_SHADE_BUF_BLOOM     29
+#define CM_SHADE_BUF_DYNLIGHTS 29
 #define CM_SHADE_TEX_SHADOW       16
 #define CM_SHADE_TEX_SKY_LUT      17
 #define CM_SHADE_TEX_WATER_SCENE  18
@@ -36,6 +36,9 @@
 #define CM_SHADE_TEX_WATER_WAVES  20
 #define CM_SHADE_TEX_WATER_PYR    21
 #define CM_SHADE_TEX_WATER_DETAIL 22
+#define CM_SHADE_TEX_DL_VIS       23
+#define CM_SHADE_TEX_DL_IRR       24
+#define CM_SHADE_TEX_DL_DIR       25
 #define CM_SHADE_SAMP_SHADOW      12
 #define CM_SHADE_SAMP_LINEAR      13
 #define CM_SHADE_MAX_RES_TEX      16
@@ -366,6 +369,9 @@ __attribute__((objc_direct_members))
 @property (nonatomic, strong) id shadeSkyLutTex;
 @property (nonatomic, strong) id shadeShadowTex;
 @property (nonatomic, strong) id shadeDummyTex;
+// Dynamic lights (P6a, cm_dynlight.m): active module state and the zeroed fallback bound when it is off.
+@property (nonatomic, strong) id dynLightState;
+@property (nonatomic, strong) id dynLightFallback;
 @property (nonatomic, strong) id shadeLinearSampler;
 @property (nonatomic, strong) id shadeShadowSampler;
 // Native sun/moon shadow pass state (P2+, cm_shadow.m)
@@ -422,6 +428,7 @@ void cm_emit_m4_render_producer_barrier(id enc);
 MTLGPUAddress cm_m4_push_ring_alloc(CMContext *ctx, const void *data, NSUInteger size);
 void cm_shade_bind_render_encoder(CMContext *ctx, const int64_t *colorViewPtrs, int32_t colorCount);
 void cm_water_bind_render_encoder(CMContext *ctx, const int64_t *colorViewPtrs, int32_t colorCount);
+void cm_dynlight_bind_render_encoder(CMContext *ctx);
 // Waits for submit `serial`; the blocked time is accounted to *waitUs (may be NULL). timeoutNs == 0 only polls.
 int32_t cm_wait_submit_accounted(CMContext *ctx, uint64_t serial, uint64_t timeoutNs, _Atomic int64_t *waitUs);
 NSUInteger cm_bytes_per_pixel(MTLPixelFormat fmt);
@@ -629,6 +636,19 @@ void cm_water_set_params(int64_t ctxPtr, int64_t paramsBufPtr, int64_t paramsOff
 void cm_water_generate_mipmaps(int64_t ctxPtr, int64_t wavesPtr, int64_t detailPtr, int64_t swellPtr);
 int32_t cm_water_capture(int64_t ctxPtr, int64_t pyrPsoPtr, int64_t pyr2PsoPtr);
 void cm_blit_copy_texture_full(int64_t ctxPtr, int64_t srcTexPtr, int64_t dstTexPtr);
+
+// Dynamic lights (P6a, cm_dynlight.m; adapted from Metal Shaders' mcdynlight.m). Kernels come from MSL source
+// (dynlight.metal with SHADE_DL_KERNELS + dynlight_vis.metal). Returns a state handle, or 0 with the message in err.
+int64_t cm_dl_new(int64_t ctxPtr, const char *source, int32_t bytes, int32_t ring, int32_t slabs, int32_t occBytes,
+                  int32_t irrW, int32_t irrH, int32_t irrD, char *err, int32_t errCap);
+void cm_dl_free(int64_t ctxPtr, int64_t statePtr);
+int64_t cm_dl_contents(int64_t statePtr, int32_t slot);
+void cm_dl_occupancy(int64_t statePtr, const void *src);
+int32_t cm_dl_fallback(int64_t ctxPtr, int32_t bytes);
+void cm_dl_slot(int64_t statePtr, int32_t slot);
+int32_t cm_dl_has_flood(int64_t statePtr);
+void cm_dl_vis(int64_t ctxPtr, int64_t statePtr, const void *params, int32_t length, int32_t volumes);
+void cm_dl_irr(int64_t ctxPtr, int64_t statePtr, int32_t x0, int32_t y0, int32_t z0, int32_t w, int32_t h, int32_t d);
 
 #ifdef __cplusplus
 }
