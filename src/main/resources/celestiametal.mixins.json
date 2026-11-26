@@ -12,6 +12,7 @@
     "HudMixin",
     "KeyboardHandlerMixin",
     "GameRendererMixin",
+    "ViewAreaAccessor",
     "ShadeLevelRendererMixin",
     "ShadeFaceShadeMixin"
   ],

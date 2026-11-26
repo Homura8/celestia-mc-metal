@@ -816,7 +816,7 @@ static void verify_backend_ops(int32_t preferMetal4) {
         NSString *prelude = [NSString stringWithFormat:@"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n%@\n%@\n%@\n%@\n%@\n",
                              slots, lookSrc, commonSrc, m2Src, vuniSrc];
 
-        // Compile-verify every ported P1 .metal file on both Metal 4 and Metal 3
+        // Compile-verify every ported P1 & P2 .metal file on both Metal 4 and Metal 3
         NSString *dummyDefines = @"#define CELESTIA_BUF_Fog 0\n#define CELESTIA_BUF_DynamicTransforms 1\n#define CELESTIA_BUF_Projection 2\n#define CELESTIA_BUF_CloudInfo 0\n#define CELESTIA_TEX_Sampler0 0\n#define CELESTIA_SAMP_Sampler0 0\n";
         NSArray<NSString *> *portedShaders = @[
             @"sky_lut.metal", @"sky.vs.metal", @"sky.fs.metal",
@@ -831,6 +831,15 @@ static void verify_backend_ops(int32_t preferMetal4) {
             int64_t l = cm_compile_msl_library(ctx, src.UTF8String, fn.UTF8String, 1, serr, sizeof(serr));
             if (!l) {
                 fprintf(stderr, "FAIL 2l compiling ported shader %s:\n%s\n", fn.UTF8String, serr);
+                exit(1);
+            }
+            cm_library_destroy(l);
+        }
+        for (NSString *fn in @[@"shadow_sodium.metal", @"shadow_vanilla.metal"]) {
+            NSString *src = read_file_str([portedDir stringByAppendingPathComponent:fn]);
+            int64_t l = cm_compile_msl_library(ctx, src.UTF8String, fn.UTF8String, 1, serr, sizeof(serr));
+            if (!l) {
+                fprintf(stderr, "FAIL 2l compiling ported shadow shader %s:\n%s\n", fn.UTF8String, serr);
                 exit(1);
             }
             cm_library_destroy(l);
@@ -991,6 +1000,134 @@ static void verify_backend_ops(int32_t preferMetal4) {
         cm_function_destroy(fnBu); cm_function_destroy(fnBd); cm_function_destroy(fnBd0);
         cm_function_destroy(fnMw); cm_function_destroy(fnFsVs); cm_function_destroy(fnLutFs); cm_function_destroy(fnLutVs);
         cm_library_destroy(lPost); cm_library_destroy(lLut);
+    }
+
+    // 2m. P2 Shadow depth array render (Vanilla + Sodium pulled-vertex) & compare_sampler verification
+    {
+        NSString *repoAssets = [NSString stringWithUTF8String:getenv("CELESTIA_TEST_ASSETS") ?: "src/main/resources/assets/celestiametal"];
+        NSString *portedDir = [repoAssets stringByAppendingPathComponent:@"shaders/ported"];
+        char serr[4096] = {0};
+
+        int64_t lSod = cm_compile_msl_library(ctx, read_file_str([portedDir stringByAppendingPathComponent:@"shadow_sodium.metal"]).UTF8String, "2m_sod", 1, serr, sizeof(serr));
+        int64_t lVan = cm_compile_msl_library(ctx, read_file_str([portedDir stringByAppendingPathComponent:@"shadow_vanilla.metal"]).UTF8String, "2m_van", 1, serr, sizeof(serr));
+        assert(lSod && lVan);
+        int64_t fnSodVs = cm_compile_function(lSod, "shadow_vs", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnSodCvs = cm_compile_function(lSod, "shadow_cutout_vs", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnSodCfs = cm_compile_function(lSod, "shadow_cutout_fs", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnVanVs = cm_compile_function(lVan, "shadow_vanilla_vs", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnVanCvs = cm_compile_function(lVan, "shadow_vanilla_cutout_vs", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnVanCfs = cm_compile_function(lVan, "shadow_vanilla_cutout_fs", 0, 0, 0, serr, sizeof(serr));
+        assert(fnSodVs && fnSodCvs && fnSodCfs && fnVanVs && fnVanCvs && fnVanCfs);
+
+        int64_t pSodSolid = cm_render_pipeline_create(ctx, fnSodVs, 0, NULL, 0, NULL, 0, NULL, 0, CM_FMT_D16_UNORM, CM_TOPO_TRIANGLES, 0, 0, 1, CM_CMP_GREATER_EQUAL, 1, 0, 0, "2m_sod_s", serr, sizeof(serr));
+        int64_t pSodCut = cm_render_pipeline_create(ctx, fnSodCvs, fnSodCfs, NULL, 0, NULL, 0, NULL, 0, CM_FMT_D16_UNORM, CM_TOPO_TRIANGLES, 0, 0, 1, CM_CMP_GREATER_EQUAL, 1, 0, 0, "2m_sod_c", serr, sizeof(serr));
+        int64_t pVanSolid = cm_render_pipeline_create(ctx, fnVanVs, 0, NULL, 0, NULL, 0, NULL, 0, CM_FMT_D16_UNORM, CM_TOPO_TRIANGLES, 0, 0, 1, CM_CMP_GREATER_EQUAL, 1, 0, 0, "2m_van_s", serr, sizeof(serr));
+        int64_t pVanCut = cm_render_pipeline_create(ctx, fnVanCvs, fnVanCfs, NULL, 0, NULL, 0, NULL, 0, CM_FMT_D16_UNORM, CM_TOPO_TRIANGLES, 0, 0, 1, CM_CMP_GREATER_EQUAL, 1, 0, 0, "2m_van_c", serr, sizeof(serr));
+        assert(pSodSolid && pSodCut && pVanSolid && pVanCut);
+
+        const char *recvSrc =
+            "#include <metal_stdlib>\nusing namespace metal;\n"
+            "struct VOut { float4 pos [[position]]; float2 uv; };\n"
+            "vertex VOut rv_vs(uint vid [[vertex_id]]) {\n"
+            "    float2 ndc = float2(vid == 1u ? 3.0 : -1.0, vid == 2u ? 3.0 : -1.0);\n"
+            "    VOut o; o.pos = float4(ndc, 0.0, 1.0); o.uv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5); return o;\n"
+            "}\n"
+            "fragment float4 rv_fs(VOut in [[stage_in]], depth2d_array<float> sm [[texture(0)]], sampler cmp [[sampler(0)]]) {\n"
+            "    float c0 = sm.sample_compare(cmp, in.uv, 0u, 0.3);\n"
+            "    float c1 = sm.sample_compare(cmp, in.uv, 1u, 0.3);\n"
+            "    return float4(c0, c1, 0.0, 1.0);\n"
+            "}\n";
+        int64_t lRecv = cm_compile_msl_library(ctx, recvSrc, "2m_recv", 1, serr, sizeof(serr));
+        assert(lRecv);
+        int64_t fnRvs = cm_compile_function(lRecv, "rv_vs", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnRfs = cm_compile_function(lRecv, "rv_fs", 0, 0, 0, serr, sizeof(serr));
+        CMColorAttachmentDesc u8Desc = { CM_FMT_RGBA8_UNORM, 0, 1, 0, 0, 1, 0, 0, 15 };
+        int64_t pRecv = cm_render_pipeline_create(ctx, fnRvs, fnRfs, NULL, 0, NULL, 0, &u8Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2m_recv_p", serr, sizeof(serr));
+        assert(pRecv);
+
+        int64_t shdTex = cm_texture_create(ctx, CM_FMT_D16_UNORM, 256, 256, 2, 1, 0, 1, 1, 0, "2m_shd");
+        int64_t outTex = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, 64, 64, 1, 1, 0, 1, 1, 0, "2m_out");
+        int64_t outView = cm_texture_view_create(ctx, outTex, 0, 1);
+        int64_t dummyPre = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, 16, 16, 1, 1, 0, 1, 1, 0, "2m_pre");
+        int64_t dummyPreView = cm_texture_view_create(ctx, dummyPre, 0, 1);
+        int64_t cmpS = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 1, CM_CMP_GREATER_EQUAL);
+        int64_t nearS = cm_sampler_create(ctx, 1, 1, 0, 0, 0, 1, 0, 0);
+        int64_t outRead = cm_buffer_create(ctx, 64 * 64 * 4, NULL, "2m_read");
+
+        float cascadeBytes[20] = {0};
+        set_identity(cascadeBytes); // depthBias = 0
+
+        // Vanilla 28-byte vertex quad covering x in [-1, 0], y in [-1, 1], z = 0.7
+        uint8_t vanVerts[4 * 28] = {0};
+        const float vanPos[4][3] = { {-1.0f, -1.0f, 0.7f}, {0.0f, -1.0f, 0.7f}, {0.0f, 1.0f, 0.7f}, {-1.0f, 1.0f, 0.7f} };
+        for (int k = 0; k < 4; k++) memcpy(vanVerts + k * 28, vanPos[k], 12);
+        int64_t vanBuf = cm_buffer_create(ctx, sizeof(vanVerts), vanVerts, "2m_vanV");
+
+        // Test non-zero draw index (baseInstance=1): draw 0 off-screen, draw 1 at origin 0
+        CMShadowVanillaDraw vanDraws[2] = {
+            { vanBuf, 0, 1, 0, 10.0f, 10.0f, 0.0f, 0.0f },
+            { vanBuf, 0, 1, 0, 0.0f, 0.0f, 0.0f, 0.0f }
+        };
+
+        // Sodium 20-byte vertex quad covering x in [0, 1], y in [-1, 1], z = 0.7 (region origin (-8,-8,0) shifts model +8)
+        uint32_t sodVerts[4 * 5] = {0};
+        const float sodPos[4][3] = { {8.0f, 7.0f, 0.7f}, {9.0f, 7.0f, 0.7f}, {9.0f, 9.0f, 0.7f}, {8.0f, 9.0f, 0.7f} };
+        for (int k = 0; k < 4; k++) {
+            uint32_t qx = (uint32_t)llround((sodPos[k][0] + 8.0) * (1048576.0 / 32.0));
+            uint32_t qy = (uint32_t)llround((sodPos[k][1] + 8.0) * (1048576.0 / 32.0));
+            uint32_t qz = (uint32_t)llround((sodPos[k][2] + 8.0) * (1048576.0 / 32.0));
+            sodVerts[k * 5 + 0] = ((qx >> 10) & 0x3FFu) | (((qy >> 10) & 0x3FFu) << 10) | (((qz >> 10) & 0x3FFu) << 20);
+            sodVerts[k * 5 + 1] = (qx & 0x3FFu) | ((qy & 0x3FFu) << 10) | ((qz & 0x3FFu) << 20);
+        }
+        int64_t sodArena = cm_buffer_create(ctx, sizeof(sodVerts), sodVerts, "2m_sodV");
+        uint32_t sodChunks[4] = { 0u, 0u, 0u, (0u & 63u) | (1u << 6) }; // chunk 1 uses region 1
+        float sodRegions[8] = { 0,0,0,0, -8.0f, -8.0f, 0.0f, 0.0f };
+        int64_t chunksBuf = cm_buffer_create(ctx, sizeof(sodChunks), sodChunks, "2m_chunks");
+        int64_t regionsBuf = cm_buffer_create(ctx, sizeof(sodRegions), sodRegions, "2m_regions");
+        CMShadowSodiumDraw sodDraw = { sodArena, 1, 1, 0, 0 };
+
+        cm_cmd_begin(ctx);
+        // Leave a soft-ended render pass open before shadow passes to verify cm_flush_encoders ordering
+        int32_t doClr = 1; float cZero[4] = {0, 0, 0, 1};
+        cm_pass_begin(ctx, &dummyPreView, &doClr, cZero, 1, 0, 0, 0.0, 0, 0, 16, 16, "2m_soft");
+        cm_pass_finish(ctx);
+
+        cm_shadow_render_vanilla(ctx, shdTex, 0, 256, pVanSolid, pVanCut, cascadeBytes, sizeof(cascadeBytes),
+                                 vanDraws, 2, 0, nearS, 0.0f, 0.0f, 0);
+        cm_shadow_render_sodium(ctx, shdTex, 1, 256, pSodSolid, pSodCut, cascadeBytes, sizeof(cascadeBytes),
+                                chunksBuf, 0, regionsBuf, 0, &sodDraw, 1, 0, nearS, 0.0f, 0.0f, 0);
+
+        cm_pass_begin(ctx, &outView, &doClr, cZero, 1, 0, 0, 0.0, 0, 0, 64, 64, "2m_recvPass");
+        cm_pass_set_pipeline(ctx, pRecv);
+        cm_pass_set_texture_sampler(ctx, 0, shdTex, 0, cmpS);
+        cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+        cm_pass_end(ctx);
+        cm_blit_copy_texture_to_buffer(ctx, outTex, 0, 0, 0, 0, 64, 64, outRead, 0, 64 * 4);
+        assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+
+        const uint8_t *rp = (const uint8_t *)cm_buffer_contents(outRead);
+        const uint8_t *leftPx = rp + (32 * 64 + 16) * 4;
+        const uint8_t *rightPx = rp + (32 * 64 + 48) * 4;
+        if (leftPx[0] > 10 || leftPx[1] < 245 || rightPx[0] < 245 || rightPx[1] > 10) {
+            fprintf(stderr, "FAIL 2m [%s]: left=(%u,%u,%u) right=(%u,%u,%u)\n",
+                    preferMetal4 ? "Metal 4" : "Metal 3",
+                    leftPx[0], leftPx[1], leftPx[2], rightPx[0], rightPx[1], rightPx[2]);
+            exit(1);
+        }
+        printf("[Backend %s] Test 2m P2 Shadow cascades (Vanilla+Sodium+cmp) OK (L=%u,%u R=%u,%u)\n",
+               preferMetal4 ? "Metal 4" : "Metal 3", leftPx[0], leftPx[1], rightPx[0], rightPx[1]);
+
+        cm_buffer_destroy(ctx, regionsBuf); cm_buffer_destroy(ctx, chunksBuf); cm_buffer_destroy(ctx, sodArena);
+        cm_buffer_destroy(ctx, vanBuf); cm_buffer_destroy(ctx, outRead);
+        cm_sampler_destroy(ctx, nearS); cm_sampler_destroy(ctx, cmpS);
+        cm_texture_view_destroy(ctx, dummyPreView); cm_texture_destroy(ctx, dummyPre);
+        cm_texture_view_destroy(ctx, outView); cm_texture_destroy(ctx, outTex); cm_texture_destroy(ctx, shdTex);
+        cm_pipeline_destroy(ctx, pRecv); cm_function_destroy(fnRfs); cm_function_destroy(fnRvs); cm_library_destroy(lRecv);
+        cm_pipeline_destroy(ctx, pVanCut); cm_pipeline_destroy(ctx, pVanSolid);
+        cm_pipeline_destroy(ctx, pSodCut); cm_pipeline_destroy(ctx, pSodSolid);
+        cm_function_destroy(fnVanCfs); cm_function_destroy(fnVanCvs); cm_function_destroy(fnVanVs);
+        cm_function_destroy(fnSodCfs); cm_function_destroy(fnSodCvs); cm_function_destroy(fnSodVs);
+        cm_library_destroy(lVan); cm_library_destroy(lSod);
     }
 
     // 3. MetalFX Spatial & Temporal scaler creation + execution
@@ -1670,6 +1807,74 @@ static void benchmark_p1_hdr_post(NSString *assetsDir, int32_t preferMetal4) {
     cm_device_destroy(ctx);
 }
 
+static void benchmark_p2_shadow(NSString *assetsDir, int32_t preferMetal4) {
+    int64_t ctx = cm_device_create(preferMetal4, 0, "");
+    assert(ctx != 0);
+    const char *api = cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3";
+    NSString *portedDir = [assetsDir stringByAppendingPathComponent:@"shaders/ported"];
+    char err[2048] = {0};
+
+    int64_t lSod = cm_compile_msl_library(ctx, read_file_str([portedDir stringByAppendingPathComponent:@"shadow_sodium.metal"]).UTF8String, "bp2_sod", 1, err, sizeof(err));
+    int64_t fnVs = cm_compile_function(lSod, "shadow_vs", 0, 0, 0, err, sizeof(err));
+    int64_t pSolid = cm_render_pipeline_create(ctx, fnVs, 0, NULL, 0, NULL, 0, NULL, 0, CM_FMT_D16_UNORM, CM_TOPO_TRIANGLES, 0, 0, 1, CM_CMP_GREATER_EQUAL, 1, 0, 0, "bp2_s", err, sizeof(err));
+    assert(pSolid);
+
+    const int QUADS = 50000;
+    const int CHUNK_QUADS = 32;
+    const int CHUNKS = (QUADS + CHUNK_QUADS - 1) / CHUNK_QUADS;
+    uint32_t *verts = (uint32_t *)calloc((size_t)QUADS * 4 * 5, sizeof(uint32_t));
+    for (int q = 0; q < QUADS; q++) {
+        float x0 = -0.9f + (float)(q % 100) * 0.018f;
+        float y0 = -0.9f + (float)((q / 100) % 100) * 0.018f;
+        const float dx[4] = {0.0f, 0.015f, 0.015f, 0.0f};
+        const float dy[4] = {0.0f, 0.0f, 0.015f, 0.015f};
+        for (int c = 0; c < 4; c++) {
+            uint32_t qx = (uint32_t)llround((x0 + dx[c] + 8.0) * (1048576.0 / 32.0));
+            uint32_t qy = (uint32_t)llround((y0 + dy[c] + 8.0) * (1048576.0 / 32.0));
+            uint32_t qz = (uint32_t)llround(8.5 * (1048576.0 / 32.0));
+            size_t base = ((size_t)q * 4 + c) * 5;
+            verts[base + 0] = ((qx >> 10) & 0x3FFu) | (((qy >> 10) & 0x3FFu) << 10) | (((qz >> 10) & 0x3FFu) << 20);
+            verts[base + 1] = (qx & 0x3FFu) | ((qy & 0x3FFu) << 10) | ((qz & 0x3FFu) << 20);
+        }
+    }
+    uint32_t *chunks = (uint32_t *)calloc((size_t)CHUNKS * 2, sizeof(uint32_t));
+    for (int i = 0; i < CHUNKS; i++) {
+        int rem = QUADS - i * CHUNK_QUADS;
+        int q = rem > CHUNK_QUADS ? CHUNK_QUADS : rem;
+        chunks[i * 2 + 0] = (uint32_t)(i * CHUNK_QUADS * 4);
+        chunks[i * 2 + 1] = (uint32_t)((q - 1) & 63);
+    }
+    float regionOrigin[4] = {0, 0, 0, 0};
+    int64_t vBuf = cm_buffer_create(ctx, (int64_t)QUADS * 4 * 20, verts, "bp2_arena");
+    int64_t cBuf = cm_buffer_create(ctx, (int64_t)CHUNKS * 8, chunks, "bp2_chunks");
+    int64_t rBuf = cm_buffer_create(ctx, sizeof(regionOrigin), regionOrigin, "bp2_regions");
+    int64_t shdTex = cm_texture_create(ctx, CM_FMT_D16_UNORM, 2048, 2048, 2, 1, 0, 1, 1, 0, "bp2_shd");
+    free(verts);
+    free(chunks);
+
+    float cascadeBytes[20] = {0};
+    set_identity(cascadeBytes);
+    CMShadowSodiumDraw drawRec = { vBuf, 0, (uint32_t)CHUNKS, 0, 0 };
+
+    const int WARM = 4, ITERS = 20;
+    double gpuMsSum = 0.0;
+    for (int f = 0; f < WARM + ITERS; f++) {
+        cm_cmd_begin(ctx);
+        cm_shadow_render_sodium(ctx, shdTex, 0, 2048, pSolid, 0, cascadeBytes, sizeof(cascadeBytes),
+                                cBuf, 0, rBuf, 0, &drawRec, 1, 0, 0, 1.0f, 0.01f, 0);
+        cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL);
+        if (f >= WARM) gpuMsSum += (double)cm_device_last_gpu_ns(ctx) / 1e6;
+    }
+    double avgMs = gpuMsSum / ITERS;
+    printf("[Benchmark M1 Pro %s @ 2048x2048] P2 Shadow Cascade (50k quads, D16) synthetic avg: %.3f ms GPU\n",
+           api, avgMs);
+
+    cm_texture_destroy(ctx, shdTex);
+    cm_buffer_destroy(ctx, rBuf); cm_buffer_destroy(ctx, cBuf); cm_buffer_destroy(ctx, vBuf);
+    cm_pipeline_destroy(ctx, pSolid); cm_function_destroy(fnVs); cm_library_destroy(lSod);
+    cm_device_destroy(ctx);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <assetsDir>\n", argv[0]);
@@ -1695,6 +1900,8 @@ int main(int argc, char **argv) {
     benchmark_upscale(0);
     benchmark_p1_hdr_post([NSString stringWithUTF8String:argv[1]], 1);
     benchmark_p1_hdr_post([NSString stringWithUTF8String:argv[1]], 0);
+    benchmark_p2_shadow([NSString stringWithUTF8String:argv[1]], 1);
+    benchmark_p2_shadow([NSString stringWithUTF8String:argv[1]], 0);
     printf("ALL CELESTIA METAL NATIVE GPU TESTS PASSED.\n");
     return 0;
 }

@@ -356,7 +356,7 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
         if (!(slice.buffer() instanceof CelestiaBuffer dst) || data == null || !data.hasRemaining()) return;
         int len = data.remaining();
         // Stage via transient unified-memory buffer and ordered blit so writes never race in-flight GPU reads
-        GpuBufferSlice staging = transientMemory.uploadStaging(List.of(data), 16L, GpuBuffer.USAGE_COPY_SRC, 0L, 0L);
+        GpuBufferSlice staging = transientMemory.uploadStaging(List.of(data), 16L, GpuBuffer.USAGE_COPY_SRC, len, 1L);
         if (staging.buffer() instanceof CelestiaBuffer src) {
             MetalNative.blitCopyBuffer(device.handle(), src.handle(), staging.offset(), dst.handle(), slice.offset(), len);
             dst.markGpuWrite(recordingSerial());

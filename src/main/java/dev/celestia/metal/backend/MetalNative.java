@@ -103,6 +103,8 @@ public final class MetalNative {
     private static MethodHandle mhShadeSetResource;
     private static MethodHandle mhShadeFullscreenPass;
     private static MethodHandle mhShadeExposureRun;
+    private static MethodHandle mhShadowRenderSodium;
+    private static MethodHandle mhShadowRenderVanilla;
 
     private MetalNative() {}
 
@@ -276,6 +278,10 @@ public final class MetalNative {
         mhShadeSetResource = downcall("cm_shade_set_resource", FunctionDescriptor.ofVoid(L, I, L));
         mhShadeFullscreenPass = downcall("cm_shade_fullscreen_pass", FunctionDescriptor.ofVoid(L, L, L, P, I, P, I, P, I));
         mhShadeExposureRun = downcall("cm_shade_exposure_run", FunctionDescriptor.ofVoid(L, L, L, L, L, L, L, L, I, I));
+        mhShadowRenderSodium = downcall("cm_shadow_render_sodium", FunctionDescriptor.ofVoid(
+            L, L, I, I, L, L, P, I, L, L, L, L, P, I, L, L, F, F, I));
+        mhShadowRenderVanilla = downcall("cm_shadow_render_vanilla", FunctionDescriptor.ofVoid(
+            L, L, I, I, L, L, P, I, P, I, L, L, F, F, I));
     }
 
     public static ProbeInfo probeDevice() {
@@ -774,6 +780,34 @@ public final class MetalNative {
         try {
             mhShadeExposureRun.invokeExact(ctx, histComputePso, expComputePso, srcTex,
                 gpuBuf, gpuOffset, lookBuf, lookOffset, gx, gy);
+        } catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    public static void shadowRenderSodium(long ctx, long shadowTex, int layer, int resolution,
+                                          long solidPso, long cutoutPso,
+                                          MemorySegment cascadeData, int cascadeBytes,
+                                          long chunksBuf, long chunksOffset,
+                                          long regionsBuf, long regionsOffset,
+                                          MemorySegment draws, int drawCount,
+                                          long atlasTex, long atlasSamp,
+                                          float slopeScale, float clamp, boolean loadExisting) {
+        try {
+            mhShadowRenderSodium.invokeExact(ctx, shadowTex, layer, resolution, solidPso, cutoutPso,
+                segOrNull(cascadeData), cascadeBytes, chunksBuf, chunksOffset, regionsBuf, regionsOffset,
+                segOrNull(draws), drawCount, atlasTex, atlasSamp, slopeScale, clamp, loadExisting ? 1 : 0);
+        } catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    public static void shadowRenderVanilla(long ctx, long shadowTex, int layer, int resolution,
+                                           long solidPso, long cutoutPso,
+                                           MemorySegment cascadeData, int cascadeBytes,
+                                           MemorySegment draws, int drawCount,
+                                           long atlasTex, long atlasSamp,
+                                           float slopeScale, float clamp, boolean loadExisting) {
+        try {
+            mhShadowRenderVanilla.invokeExact(ctx, shadowTex, layer, resolution, solidPso, cutoutPso,
+                segOrNull(cascadeData), cascadeBytes, segOrNull(draws), drawCount,
+                atlasTex, atlasSamp, slopeScale, clamp, loadExisting ? 1 : 0);
         } catch (Throwable t) { throw new RuntimeException(t); }
     }
 }

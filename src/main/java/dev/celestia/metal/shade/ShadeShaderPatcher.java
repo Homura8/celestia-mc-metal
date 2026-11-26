@@ -132,6 +132,14 @@ public final class ShadeShaderPatcher {
         return prelude(true, false, null) + resource("sky_lut.metal") + "\n";
     }
 
+    public static String shadowSodiumSource() {
+        return resource("shadow_sodium.metal");
+    }
+
+    public static String shadowVanillaSource() {
+        return resource("shadow_vanilla.metal");
+    }
+
     /**
      * Produces patched MSL vertex/fragment stages for the requested variant, falling back safely to base
      * or {@link #patchHdrFragment} if a shader stage does not match the expected structure.

@@ -69,7 +69,9 @@ public final class CelestiaTransientMemory implements TransientMemory {
 
     @Override
     public ByteBuffer allocateCpu(long size, long alignment, long unusedOffset, long unusedStep) {
-        var alloc = cpuAllocator.allocate(size, Math.max(1L, alignment), unusedOffset, unusedStep);
+        long min = unusedOffset > 0L ? unusedOffset : size;
+        long step = unusedStep > 0L ? unusedStep : 1L;
+        var alloc = cpuAllocator.allocate(size, Math.max(1L, alignment), min, step);
         return MemoryUtil.memByteBuffer(alloc.block().address() + alloc.offset(), (int) size);
     }
 
@@ -80,7 +82,9 @@ public final class CelestiaTransientMemory implements TransientMemory {
 
     @Override
     public GpuBufferSlice allocateGpu(long size, long alignment, int usage, long unusedOffset, long unusedStep) {
-        var alloc = sharedAllocator.allocate(size, Math.max(16L, alignment), unusedOffset, unusedStep);
+        long min = unusedOffset > 0L ? unusedOffset : size;
+        long step = unusedStep > 0L ? unusedStep : 1L;
+        var alloc = sharedAllocator.allocate(size, Math.max(16L, alignment), min, step);
         return alloc.block().buffer().slice(alloc.offset(), size);
     }
 
@@ -90,7 +94,7 @@ public final class CelestiaTransientMemory implements TransientMemory {
     }
 
     private GpuBufferSlice.MappedView allocateSharedMapped(long size, long alignment) {
-        var alloc = sharedAllocator.allocate(size, Math.max(16L, alignment), 0L, 0L);
+        var alloc = sharedAllocator.allocate(size, Math.max(16L, alignment), size, 1L);
         return alloc.block().buffer().map(alloc.offset(), size, true, true);
     }
 
@@ -108,9 +112,9 @@ public final class CelestiaTransientMemory implements TransientMemory {
         long total = 0L;
         for (ByteBuffer b : buffers) total += b.remaining();
         if (total == 0L) {
-            return allocateGpu(16L, alignment, DEFAULT_USAGE, 0L, 0L);
+            return allocateGpu(16L, alignment, DEFAULT_USAGE, 16L, 1L);
         }
-        var alloc = sharedAllocator.allocate(total, Math.max(16L, alignment), 0L, 0L);
+        var alloc = sharedAllocator.allocate(total, Math.max(16L, alignment), total, 1L);
         ByteBuffer dst = alloc.block().buffer().mappedSegment().asSlice(alloc.offset(), total).asByteBuffer().order(ByteOrder.nativeOrder());
         for (ByteBuffer src : buffers) {
             dst.put(src.duplicate());
@@ -133,7 +137,8 @@ public final class CelestiaTransientMemory implements TransientMemory {
         List<GpuBufferSlice> slices = new ArrayList<>(buffers.size());
         for (ByteBuffer src : buffers) {
             int len = src.remaining();
-            var alloc = sharedAllocator.allocate(Math.max(16L, len), align, 0L, 0L);
+            long allocSize = Math.max(16L, len);
+            var alloc = sharedAllocator.allocate(allocSize, align, allocSize, 1L);
             if (len > 0) {
                 ByteBuffer dst = alloc.block().buffer().mappedSegment().asSlice(alloc.offset(), len).asByteBuffer().order(ByteOrder.nativeOrder());
                 dst.put(src.duplicate());

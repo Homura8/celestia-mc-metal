@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 
-#define CM_ABI_VERSION 4
+#define CM_ABI_VERSION 5
 #define CM_MAX_COLOR_ATTACHMENTS 8
 #define CM_MAX_VERTEX_BUFFERS 8
 #define CM_MAX_UNIFORM_BUFFERS 15
@@ -206,6 +206,25 @@ typedef struct CMAttribBindingDesc {
     int32_t vertexFormat;
 } CMAttribBindingDesc;
 
+typedef struct CMShadowSodiumDraw {
+    int64_t arenaBufPtr;
+    uint32_t firstChunk;
+    uint32_t chunkCount;
+    uint32_t kind;   // 0 = solid, 1 = cutout
+    uint32_t pad;
+} CMShadowSodiumDraw;
+
+typedef struct CMShadowVanillaDraw {
+    int64_t vertexBufPtr;
+    uint64_t vertexByteOffset;
+    uint32_t quadCount;
+    uint32_t kind;   // 0 = solid, 1 = cutout
+    float originX;
+    float originY;
+    float originZ;
+    float pad;
+} CMShadowVanillaDraw;
+
 @interface CMRetiredEntry : NSObject
 @property (nonatomic, strong) id object;
 @property (nonatomic) uint64_t retireSerial;
@@ -344,6 +363,12 @@ __attribute__((objc_direct_members))
 @property (nonatomic, strong) id shadeDummyTex;
 @property (nonatomic, strong) id shadeLinearSampler;
 @property (nonatomic, strong) id shadeShadowSampler;
+// Native sun/moon shadow pass state (P2+, cm_shadow.m)
+@property (nonatomic, strong) id<MTLBuffer> shadowQuadIdx16;
+@property (nonatomic, strong) id<MTLBuffer> shadowQuadIdx32;
+@property (nonatomic) NSUInteger shadowQuadIdx32Cap;
+@property (nonatomic, strong) NSMutableArray *shadowOrigRing;
+@property (nonatomic, strong) id<MTLDepthStencilState> shadowDepthState;
 @end
 
 // Internal helpers shared across native .m modules
@@ -367,6 +392,7 @@ void cm_flush_encoders(CMContext *ctx);
 void cm_ensure_cmd_begun(CMContext *ctx);
 void cm_reset_pass_cache(CMContext *ctx);
 void cm_emit_m4_render_producer_barrier(id enc);
+MTLGPUAddress cm_m4_push_ring_alloc(CMContext *ctx, const void *data, NSUInteger size);
 void cm_shade_bind_render_encoder(CMContext *ctx, const int64_t *colorViewPtrs, int32_t colorCount);
 // Waits for submit `serial`; the blocked time is accounted to *waitUs (may be NULL). timeoutNs == 0 only polls.
 int32_t cm_wait_submit_accounted(CMContext *ctx, uint64_t serial, uint64_t timeoutNs, _Atomic int64_t *waitUs);
@@ -551,6 +577,23 @@ void cm_shade_exposure_run(int64_t ctxPtr,
                            int64_t srcTexPtr, int64_t gpuBufPtr, int64_t gpuOffset,
                            int64_t lookBufPtr, int64_t lookOffset,
                            int32_t gx, int32_t gy);
+
+// Sun/moon shadow depth passes (P2+)
+void cm_shadow_render_sodium(int64_t ctxPtr, int64_t shadowTexPtr, int32_t layer, int32_t resolution,
+                             int64_t solidPsoPtr, int64_t cutoutPsoPtr,
+                             const void *cascadeData, int32_t cascadeBytes,
+                             int64_t chunksBufPtr, int64_t chunksOffset,
+                             int64_t regionsBufPtr, int64_t regionsOffset,
+                             const void *draws, int32_t drawCount,
+                             int64_t atlasTexPtr, int64_t atlasSampPtr,
+                             float slopeScale, float clamp, int32_t loadExisting);
+
+void cm_shadow_render_vanilla(int64_t ctxPtr, int64_t shadowTexPtr, int32_t layer, int32_t resolution,
+                              int64_t solidPsoPtr, int64_t cutoutPsoPtr,
+                              const void *cascadeData, int32_t cascadeBytes,
+                              const void *draws, int32_t drawCount,
+                              int64_t atlasTexPtr, int64_t atlasSampPtr,
+                              float slopeScale, float clamp, int32_t loadExisting);
 
 #ifdef __cplusplus
 }
