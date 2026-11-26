@@ -158,6 +158,7 @@ public final class MetalNative {
         static final MethodHandle mhPassMultiDrawIndexedPacked = downcallCritical("cm_pass_multi_draw_indexed_packed", FunctionDescriptor.ofVoid(L, I, P, I, L, I, I));
         static final MethodHandle mhDeviceStats = downcallCritical("cm_device_stats", FunctionDescriptor.ofVoid(L, P, I));
         static final MethodHandle mhDeviceSetOption = downcall("cm_device_set_option", FunctionDescriptor.ofVoid(L, I, I));
+        static final MethodHandle mhUpscaleTo = downcall("cm_upscale_to", FunctionDescriptor.of(I, L, L, L, I));
         static final MethodHandle mhSurfaceSetNonblocking = downcall("cm_surface_set_nonblocking", FunctionDescriptor.ofVoid(L, I));
 
         private Hot() {}
@@ -674,6 +675,12 @@ public final class MetalNative {
 
     public static void surfaceBlitAndPresent(long ctx, long surf, long srcView, int maxInFlight) {
         try { Hot.mhSurfaceBlitAndPresent.invokeExact(ctx, surf, srcView, maxInFlight); }
+        catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    /** Upscales all of srcTex into dstTex. mode 0 = bilinear, 1 = MetalFX Spatial. Returns the mode used, -1 on error. */
+    public static int upscaleTo(long ctx, long srcTex, long dstTex, int mode) {
+        try { return (int) Hot.mhUpscaleTo.invokeExact(ctx, srcTex, dstTex, mode); }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 

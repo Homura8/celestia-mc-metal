@@ -647,6 +647,62 @@ static void verify_backend_ops(int32_t preferMetal4) {
             printf("[Backend %s] Test 2j push-constant dedup OK\n", preferMetal4 ? "Metal 4" : "Metal 3");
         }
 
+        // 2k. World render-scale upscale (cm_upscale_to): bilinear and MetalFX Spatial, orientation and coverage.
+        {
+            const int SW = 48, SH = 32, DW = 96, DH = 64;
+            int64_t srcT = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, SW, SH, 1, 1, 0, 1, 1, 0, "UpscaleSrc");
+            int64_t srcV = cm_texture_view_create(ctx, srcT, 0, 1);
+            int64_t dstT = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, DW, DH, 1, 1, 0, 1, 1, 0, "UpscaleDst");
+            int64_t upRead = cm_buffer_create(ctx, DW * DH * 4, NULL, "UpscaleRead");
+            assert(srcT && srcV && dstT && upRead);
+            const char *halfMsl =
+                "#include <metal_stdlib>\n"
+                "using namespace metal;\n"
+                "struct VOut { float4 pos [[position]]; };\n"
+                "vertex VOut vs_h(uint vid [[vertex_id]]) { VOut o; float2 p = float2((vid==1)?3.0f:-1.0f, (vid==2)?3.0f:-1.0f); o.pos = float4(p,0.5f,1); return o; }\n"
+                // left half red, right half green, top quarter blue marker (tests vertical orientation)
+                "fragment half4 fs_h(VOut in [[stage_in]]) {\n"
+                "  if (in.pos.y < 8.0f) return half4(0,0,1,1);\n"
+                "  return in.pos.x < 24.0f ? half4(1,0,0,1) : half4(0,1,0,1);\n"
+                "}\n";
+            int64_t libH = cm_compile_msl_library(ctx, halfMsl, "upscale_src", 0, err, sizeof(err));
+            assert(libH != 0);
+            int64_t vsH = cm_compile_function(libH, "vs_h", 0, 0, 0, err, sizeof(err));
+            int64_t fsH = cm_compile_function(libH, "fs_h", 0, 0, 0, err, sizeof(err));
+            int64_t psoH = cm_render_pipeline_create(ctx, vsH, fsH, NULL, 0, NULL, 0, &colDesc, 1, -1, CM_TOPO_TRIANGLES,
+                                                     0, 0, 0, CM_CMP_ALWAYS, 0, 0.0f, 0.0f, "UpscaleSrcPSO", err, sizeof(err));
+            assert(psoH != 0);
+            for (int mode = 0; mode < 2; mode++) {
+                cm_cmd_begin(ctx);
+                assert(cm_pass_begin(ctx, &srcV, &clearFlag, clearCol, 1, 0, 0, 0.0, 0, 0, SW, SH, "UpscaleSrcPass") == 1);
+                cm_pass_set_pipeline(ctx, psoH);
+                cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+                cm_pass_finish(ctx);
+                int32_t used = cm_upscale_to(ctx, srcT, dstT, mode);
+                assert(used == 0 || (mode == 1 && used == 1));
+                cm_blit_copy_texture_to_buffer(ctx, dstT, 0, 0, 0, 0, DW, DH, upRead, 0, DW * 4);
+                uint64_t s2k = cm_cmd_submit(ctx, 2);
+                assert(cm_wait_submit(ctx, s2k, 5000000000ULL) == 1);
+                const uint8_t *u = (const uint8_t *)(uintptr_t)cm_buffer_contents(upRead);
+                const uint8_t *top = &u[((size_t)4 * DW + 48) * 4];
+                const uint8_t *left = &u[((size_t)40 * DW + 16) * 4];
+                const uint8_t *right = &u[((size_t)40 * DW + 80) * 4];
+                if (!(top[2] > 200 && top[0] < 60 && left[0] > 200 && left[1] < 60 && right[1] > 200 && right[0] < 60)) {
+                    fprintf(stderr, "FAIL 2k: upscale mode %d (used %d) top=%d,%d,%d left=%d,%d,%d right=%d,%d,%d\n", mode, used,
+                            top[0], top[1], top[2], left[0], left[1], left[2], right[0], right[1], right[2]);
+                    exit(1);
+                }
+                printf("[Backend %s] Test 2k upscale %s OK (path used: %s)\n", preferMetal4 ? "Metal 4" : "Metal 3",
+                       mode ? "MetalFX Spatial" : "bilinear", used ? "MetalFX Spatial" : "bilinear");
+            }
+            cm_pipeline_destroy(ctx, psoH);
+            cm_function_destroy(fsH); cm_function_destroy(vsH); cm_library_destroy(libH);
+            cm_buffer_destroy(ctx, upRead);
+            cm_texture_destroy(ctx, dstT);
+            cm_texture_view_destroy(ctx, srcV);
+            cm_texture_destroy(ctx, srcT);
+        }
+
         // 2i. Non-blocking (MAILBOX-style) presentation with VSync off: acquire never blocks, frames keep flowing even
         //     when presented handlers never report "shown" (offscreen layer = worst case), and teardown is safe.
         {
@@ -1262,6 +1318,34 @@ static void benchmark_draw_overhead(int32_t preferMetal4) {
     cm_device_destroy(ctx);
 }
 
+// GPU cost of the world upscale at real sizes: 75% and 50% of 3024x1752 -> 3024x1752, bilinear vs MetalFX Spatial.
+static void benchmark_upscale(int32_t preferMetal4) {
+    const int OW = 3024, OH = 1752, ITERS = 30;
+    int64_t ctx = cm_device_create(preferMetal4, 0, "");
+    assert(ctx != 0);
+    int64_t dst = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, OW, OH, 1, 1, 0, 1, 1, 0, "UpBenchDst");
+    const int pct[2] = { 75, 50 };
+    for (int pi = 0; pi < 2; pi++) {
+        int iw = OW * pct[pi] / 100, ih = OH * pct[pi] / 100;
+        int64_t src = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, iw, ih, 1, 1, 0, 1, 1, 0, "UpBenchSrc");
+        for (int mode = 0; mode < 2; mode++) {
+            double sum = 0; int used = -1;
+            for (int i = 0; i < ITERS + 5; i++) {
+                cm_cmd_begin(ctx);
+                used = cm_upscale_to(ctx, src, dst, mode);
+                uint64_t sv = cm_cmd_submit(ctx, 2);
+                cm_wait_submit(ctx, sv, 5000000000ULL);
+                if (i >= 5) sum += (double)cm_device_last_gpu_ns(ctx) / 1e6;
+            }
+            printf("[Benchmark %s upscale] %d%% %dx%d -> %dx%d %-16s %.3f ms GPU\n", preferMetal4 ? "Metal 4" : "Metal 3",
+                   pct[pi], iw, ih, OW, OH, used == 1 ? "MetalFX Spatial" : "bilinear", sum / ITERS);
+        }
+        cm_texture_destroy(ctx, src);
+    }
+    cm_texture_destroy(ctx, dst);
+    cm_device_destroy(ctx);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <assetsDir>\n", argv[0]);
@@ -1283,6 +1367,8 @@ int main(int argc, char **argv) {
     benchmark_pass_merging(0);
     benchmark_draw_overhead(1);
     benchmark_draw_overhead(0);
+    benchmark_upscale(1);
+    benchmark_upscale(0);
     printf("ALL CELESTIA METAL NATIVE GPU TESTS PASSED.\n");
     return 0;
 }

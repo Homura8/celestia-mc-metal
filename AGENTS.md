@@ -23,7 +23,7 @@ Practical guidance for AI agents and contributors working on **Celestia Metal** 
   - `cm_upscaler.m`: `MTL4FX*` / `MTLFX*` Spatial & Temporal upscaling.
   - `cm_shader_runtime.m`: Compute dispatch helper for shader packs.
 - **Java Backend (`src/main/java/dev/celestia/metal/backend/`)**: RenderPearl backend (`CelestiaMetalBackend`, `CelestiaMetalDevice`, `CelestiaCommandEncoder`, `CelestiaRenderPass`, `CelestiaSurface`, `CelestiaPipeline`, `CelestiaTransientMemory`, `MetalNative`, `MetalConst`, `MetalShaderTranslator`, `StartupGuard`).
-- **Mixins (`src/main/java/dev/celestia/metal/mixin/`)**: Entry points into MC 26.3 (`PreferredGraphicsApiMixin`, `GameRendererMixin`, `GuiMixin`, `HudMixin`, `KeyboardHandlerMixin`, `MinecraftMixin`, `DebugScreenEntriesMixin`, `DebugScreenEntryListMixin`).
+- **Mixins (`src/main/java/dev/celestia/metal/mixin/`)**: Entry points into MC 26.3 (`PreferredGraphicsApiMixin`, `GameRendererMixin`, `GuiMixin`, `HudMixin`, `KeyboardHandlerMixin`, `MinecraftMixin`, `DebugScreenEntriesMixin`, `DebugScreenEntryListMixin`) and world render scale (`dev.celestia.metal.render.WorldRenderScale`).
 - **Shader Packs (`src/main/java/dev/celestia/metal/shader/` & `src/main/resources/assets/celestiametal/`)**: Native MSL packs (`celestia-native`, `celestia-minimal`, `celestia_common.metal`) and Iris/OptiFine parser/bridge (`IrisPackParser`, `IrisGlslBridge`).
 - **CelestiaGlow UI (`src/main/java/dev/celestia/metal/ui/`) & Perf (`dev.celestia.metal.perf`)**: Tabbed video settings, shader pack/option screens, performance engine, and HUD pill.
 - **Tests & Benchmarks**: `src/test/java/dev/celestia/metal/` (JUnit 5 + FFM) and `tools/test_metal_backend.m` (live Metal 4 & Metal 3 GPU verification + 3024 × 1752 synthetic benchmark).
@@ -89,10 +89,14 @@ ls "$(xcrun --show-sdk-path)/System/Library/Frameworks/Metal.framework/Headers/"
 7. **Presentation (`cm_surface.m`)**:
    - With VSync off and `nonBlocking` on, the render thread must never call `nextDrawable`: frames go into present slots and the serial `presentQueue` owns drawables. Any change to `CAMetalLayer` properties must run on `presentQueue` (`cm_surface_configure` uses `dispatch_sync`) so the layer never changes while that queue is inside `nextDrawable`. Never `dispatch_sync` onto `presentQueue` from code already running on it.
 
-8. **Buffer Map Synchronization (`CelestiaBuffer.map`)**:
+8. **World Render Scale (`WorldRenderScale`, `GameRendererMixin`)**:
+   - Between `preparePostEffects` (ordinal 0, inside `shouldRenderLevel`) and `applyPostEffects`, `GameRenderer.mainRenderTarget()` / `hud3DTarget` are the *scaled* targets. Code that must target the full window (GUI, screenshots of the final image, present) runs after the swap back. Anything new that renders the world (native shader packs) must render into `GameRenderer.mainRenderTarget()` during that window, not cache the full-size target.
+   - `render()` HEAD and RETURN always restore the full-size targets, so an exception mid-frame cannot leave them swapped.
+
+9. **Buffer Map Synchronization (`CelestiaBuffer.map`)**:
    - Mods are often written against OpenGL, where mapping a buffer for read implicitly waits for GPU writes. Every GPU write into a `CelestiaBuffer` (`copyTextureToBuffer`, `copyToBuffer`, `writeToBuffer`, and any new blit/compute path that writes buffers) must call `markGpuWrite(recordingSerial())` so `map(read = true)` can submit and wait. Keep write-only maps unsynchronized (Minecraft's ring buffers rely on fences instead).
 
-9. **Privacy Check (`checkPrivacy`) & Workspace Boundaries**:
+10. **Privacy Check (`checkPrivacy`) & Workspace Boundaries**:
    - `./gradlew check` scans tracked files and non-native resources to ensure no machine-specific home directory paths or local OS usernames are committed. Always use `~/` or environment variables in docs and scripts.
    - Do not modify external user launcher instances (e.g., PrismLauncher `mods/` or `options.txt`); only inspect logs/crash reports read-only when debugging user reports.
 

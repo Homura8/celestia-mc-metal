@@ -259,18 +259,20 @@ public final class CelestiaVideoSettingsScreen extends Screen {
                     () -> workingConfig.appleSilicon.autoRenderScale,
                     v -> { workingConfig.appleSilicon.autoRenderScale = v; dirty = true; }));
                 list.add(new OptionEntry.IntSlider("Internal Render Scale",
-                    "Internal world rendering resolution percentage before MetalFX upscaling.",
+                    "Renders the 3D world at this percentage of the window resolution and upscales it; menus, HUD and "
+                        + "overlays stay sharp. Lowers GPU cost, most useful with shader packs.",
                     ShaderOptionDef.Impact.HIGH, 50, 100, 5,
                     () -> workingConfig.appleSilicon.renderScalePercent,
                     v -> { workingConfig.appleSilicon.renderScalePercent = v; dirty = true; },
                     v -> v + "%"));
                 list.add(new OptionEntry.Cycle<>("Upscaler",
-                    "Hardware-accelerated MetalFX Temporal or Spatial upscaling on Apple Silicon.",
+                    "How the scaled world is upscaled when Internal Render Scale is below 100%. MetalFX Temporal currently "
+                        + "uses MetalFX Spatial (temporal needs motion vectors, coming with native shader packs).",
                     ShaderOptionDef.Impact.MEDIUM, Arrays.asList(CelestiaConfig.UpscalerMode.values()),
                     () -> workingConfig.appleSilicon.upscaler,
                     v -> { workingConfig.appleSilicon.upscaler = v; dirty = true; },
                     u -> switch (u) {
-                        case METALFX_TEMPORAL -> "MetalFX Temporal";
+                        case METALFX_TEMPORAL -> "MetalFX Temporal (Spatial for now)";
                         case METALFX_SPATIAL -> "MetalFX Spatial";
                         case BILINEAR -> "Bilinear";
                     }));

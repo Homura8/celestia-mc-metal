@@ -312,6 +312,9 @@ __attribute__((objc_direct_members))
 @property (nonatomic) BOOL passMergeable;       // the open encoder can accept a following load-only pass
 @property (nonatomic) int32_t passColorCount;
 @property (nonatomic) uintptr_t passDepthView;
+
+// World render-scale upscaling state (CMUpscalePath, cm_upscaler.m)
+@property (nonatomic, strong) id upscalePath;
 @end
 
 // Internal helpers shared across native .m modules
@@ -481,6 +484,9 @@ void cm_surface_set_nonblocking(int64_t surfPtr, int32_t enabled);
 int64_t cm_upscaler_create(int64_t ctxPtr, int32_t temporal, int32_t colorFmt, int32_t outputFmt,
                            int32_t inW, int32_t inH, int32_t outW, int32_t outH, int32_t hdrMode);
 void cm_upscaler_destroy(int64_t ctxPtr, int64_t upscalerPtr);
+// Upscales the whole of srcTex into the whole of dstTex (world render scale). mode 0 = bilinear, 1 = MetalFX Spatial
+// (falls back to bilinear when MetalFX is unavailable). Returns the mode actually used, or -1 on bad arguments.
+int32_t cm_upscale_to(int64_t ctxPtr, int64_t srcTexPtr, int64_t dstTexPtr, int32_t mode);
 void cm_upscaler_encode(int64_t ctxPtr, int64_t upscalerPtr, int64_t colorTexPtr,
                         int64_t depthTexPtr, int64_t motionTexPtr, int64_t outTexPtr,
                         float jitterX, float jitterY, int32_t resetHistory);
