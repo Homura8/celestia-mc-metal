@@ -351,11 +351,14 @@ public final class MetalNative {
         try { mhDeviceWaitIdle.invokeExact(ctx); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
+    private static MemorySegment segOrNull(MemorySegment seg) {
+        return seg != null ? seg : MemorySegment.NULL;
+    }
+
     public static long bufferCreate(long ctx, long sizeBytes, MemorySegment initialData, String label) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment lbl = label != null ? arena.allocateFrom(label) : MemorySegment.NULL;
-            MemorySegment ptr = initialData != null ? initialData : MemorySegment.NULL;
-            return (long) mhBufferCreate.invokeExact(ctx, sizeBytes, ptr, lbl);
+            return (long) mhBufferCreate.invokeExact(ctx, sizeBytes, segOrNull(initialData), lbl);
         } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
@@ -448,9 +451,9 @@ public final class MetalNative {
             MemorySegment errBuf = arena.allocate(4096);
             long h = (long) mhRenderPipelineCreate.invokeExact(
                 ctx, vsFn, fsFn,
-                vtxBufs != null ? vtxBufs : MemorySegment.NULL, vtxBufCount,
-                attribs != null ? attribs : MemorySegment.NULL, attribCount,
-                colors != null ? colors : MemorySegment.NULL, colorCount,
+                segOrNull(vtxBufs), vtxBufCount,
+                segOrNull(attribs), attribCount,
+                segOrNull(colors), colorCount,
                 depthFmt, topo, polyMode,
                 cull ? 1 : 0, depthTest ? 1 : 0, depthCmp, depthWrite ? 1 : 0,
                 biasSlope, biasConst, lbl, errBuf, 4096);
@@ -537,9 +540,9 @@ public final class MetalNative {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment lbl = label != null ? arena.allocateFrom(label) : MemorySegment.NULL;
             return ((int) mhPassBegin.invokeExact(ctx,
-                colorViews != null ? colorViews : MemorySegment.NULL,
-                colorClearsFlags != null ? colorClearsFlags : MemorySegment.NULL,
-                colorClearsRgba != null ? colorClearsRgba : MemorySegment.NULL,
+                segOrNull(colorViews),
+                segOrNull(colorClearsFlags),
+                segOrNull(colorClearsRgba),
                 colorCount, depthView, depthClearFlag ? 1 : 0, depthClear,
                 areaX, areaY, areaW, areaH, lbl)) != 0;
         } catch (Throwable t) { throw new RuntimeException(t); }
@@ -597,7 +600,7 @@ public final class MetalNative {
     public static void passMultiDrawIndexed(long ctx, int topo, MemorySegment idxOffsets, MemorySegment idxCounts,
                                             MemorySegment baseVtx, int count, int instCount, int firstInst) {
         try { mhPassMultiDrawIndexed.invokeExact(ctx, topo, idxOffsets, idxCounts,
-            baseVtx != null ? baseVtx : MemorySegment.NULL, count, instCount, firstInst); }
+            segOrNull(baseVtx), count, instCount, firstInst); }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 
@@ -652,10 +655,10 @@ public final class MetalNative {
                                        int gx, int gy, int gz, int tx, int ty, int tz) {
         try {
             mhComputeDispatch.invokeExact(ctx, pipe,
-                bufs != null ? bufs : MemorySegment.NULL,
-                offs != null ? offs : MemorySegment.NULL, bufCount,
-                texs != null ? texs : MemorySegment.NULL, texCount,
-                samps != null ? samps : MemorySegment.NULL, sampCount,
+                segOrNull(bufs),
+                segOrNull(offs), bufCount,
+                segOrNull(texs), texCount,
+                segOrNull(samps), sampCount,
                 gx, gy, gz, tx, ty, tz);
         } catch (Throwable t) { throw new RuntimeException(t); }
     }

@@ -599,13 +599,19 @@ int64_t cm_render_pipeline_create(int64_t ctxPtr, int64_t vsFnPtr, int64_t fsFnP
             MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
             for (int32_t i = 0; i < vtxBufCount; i++) {
                 NSUInteger slot = CM_VERTEX_BUFFER_BASE + (NSUInteger)vtxBufs[i].slot;
-                vd.layouts[slot].stride = (NSUInteger)vtxBufs[i].stride;
-                if (vtxBufs[i].stepRate > 0) {
-                    vd.layouts[slot].stepFunction = MTLVertexStepFunctionPerInstance;
-                    vd.layouts[slot].stepRate = (NSUInteger)vtxBufs[i].stepRate;
+                if (vtxBufs[i].stride == 0) {
+                    vd.layouts[slot].stride = 16;
+                    vd.layouts[slot].stepFunction = MTLVertexStepFunctionConstant;
+                    vd.layouts[slot].stepRate = 0;
                 } else {
-                    vd.layouts[slot].stepFunction = MTLVertexStepFunctionPerVertex;
-                    vd.layouts[slot].stepRate = 1;
+                    vd.layouts[slot].stride = (NSUInteger)vtxBufs[i].stride;
+                    if (vtxBufs[i].stepRate > 0) {
+                        vd.layouts[slot].stepFunction = MTLVertexStepFunctionPerInstance;
+                        vd.layouts[slot].stepRate = (NSUInteger)vtxBufs[i].stepRate;
+                    } else {
+                        vd.layouts[slot].stepFunction = MTLVertexStepFunctionPerVertex;
+                        vd.layouts[slot].stepRate = 1;
+                    }
                 }
             }
             for (int32_t i = 0; i < attribCount; i++) {
@@ -661,7 +667,9 @@ int64_t cm_render_pipeline_create(int64_t ctxPtr, int64_t vsFnPtr, int64_t fsFnP
         }
         if (ctx.binaryArchive) {
             NSError *archErr = nil;
-            [ctx.binaryArchive addRenderPipelineFunctionsWithDescriptor:rpd error:&archErr];
+            @synchronized(ctx.binaryArchive) {
+                [ctx.binaryArchive addRenderPipelineFunctionsWithDescriptor:rpd error:&archErr];
+            }
         }
 
         CMPipelineBox *box = [CMPipelineBox new];
@@ -711,7 +719,9 @@ int64_t cm_compute_pipeline_create(int64_t ctxPtr, int64_t csFnPtr, const char *
         }
         if (ctx.binaryArchive) {
             NSError *archErr = nil;
-            [ctx.binaryArchive addComputePipelineFunctionsWithDescriptor:cpd error:&archErr];
+            @synchronized(ctx.binaryArchive) {
+                [ctx.binaryArchive addComputePipelineFunctionsWithDescriptor:cpd error:&archErr];
+            }
         }
         return (int64_t)(__bridge_retained void *)cps;
     }
