@@ -68,6 +68,18 @@ static inline float3 shadeDynamicLights(ShadeDynIn d, constant ShadeFrame &f, co
 }
 #endif
 
+// Water dev switches (upstream shade_common.metal parity)
+#ifndef SHADE_WDEV_IS
+#define SHADE_WDEV_NO_SSR 1
+#define SHADE_WDEV_SSR_OLD 2
+#define SHADE_WDEV_SSR_THICK 3
+#define SHADE_WDEV_SSR_BEHIND 4
+#define SHADE_WDEV_SSR_BOTH 5
+#define SHADE_WDEV_NO_FOG 6
+#define SHADE_WDEV_NO_DETAIL 7
+#define SHADE_WDEV_IS(f, k) false
+#endif
+
 // ---- small utilities --------------------------------------------------------------------------------------------------
 static inline uint shadeHash(uint x) { // lowbias32 (C. Wellons, public domain)
 	x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
@@ -177,6 +189,47 @@ static float3 shadeLit2(half3 albedo, half3 n, half sky, half block, half shadow
 		lit += float3(sun) * mix(float3(1.0), saturate(float3(albedo) / max(dot(float3(albedo), float3(0.2126, 0.7152, 0.0722)), 0.02)), L.look2a.z)
 			* (L.look2a.x * look2Near * float(shadow * gate) * (thin ? 1.0 : 0.5));
 	return lit;
+}
+
+// ---- caustic focusing (bottom seen through surface or underwater) ----------------------------------------------------
+#define SHADE_CAUSTIC_COUNT 6
+constant float4 SHADE_CAUSTIC_K[SHADE_CAUSTIC_COUNT] = {
+	float4( 0.940,  0.342, 2.41660973, 2.67833043),
+	float4(-0.276,  0.961, 2.99199300, 2.97900703),
+	float4( 0.454, -0.891, 3.69599135, 3.31190018),
+	float4(-0.866, -0.500, 4.58626664, 3.68928179),
+	float4( 0.643,  0.766, 5.66052730, 4.09887836),
+	float4(-0.985,  0.174, 7.05975876, 4.57597128),
+};
+constant float3 SHADE_CAUSTIC_A[SHADE_CAUSTIC_COUNT] = {
+	float3(0.10512004, 0.2520, 0.0),
+	float3(0.13428033, 0.2100, 1.9),
+	float3(0.16392423, 0.1680, 3.8),
+	float3(0.19982147, 0.1330, 5.7),
+	float3(0.24031177, 0.1050, 7.6),
+	float3(0.29904116, 0.0840, 9.5),
+};
+
+static float shadeCausticFocus(float2 x, float t, float kk) {
+	half3 hs = 0.0h;
+	for (int i = 0; i < SHADE_CAUSTIC_COUNT; i++) {
+		float4 w = SHADE_CAUSTIC_K[i];
+		float3 a = SHADE_CAUSTIC_A[i];
+		float th = w.z * dot(w.xy, x) + w.w * t + a.z;
+		float c;
+		float s = sincos(th, c);
+		half e = exp2(half(s - 1.0) * 1.442695h);
+		half q = half(a.x) * half(c * c - s) * e;
+		half2 wd = half2(w.xy);
+		hs += q * half3(wd.x * wd.x, wd.y * wd.y, wd.x * wd.y);
+		x -= w.xy * (c * float(e) * a.y);
+	}
+	float det = (1.0 + kk * float(hs.x)) * (1.0 + kk * float(hs.y)) - kk * kk * float(hs.z) * float(hs.z);
+	return min(1.0 / max(abs(det), 0.18), 4.0);
+}
+
+static inline float2 shadeCausticLod(float footprint) {
+	return float2(1.0 - 0.7 * smoothstep(0.04, 0.16, footprint), 1.0 - smoothstep(0.16, 0.32, footprint));
 }
 
 // ---- height haze, mist and border fog -------------------------------------------------------------------------------------

@@ -143,6 +143,7 @@ void cm_shade_bind_render_encoder(CMContext *ctx, const int64_t *colorViewPtrs, 
                 ctx->_boundSamplers[CM_SHADE_SAMP_LINEAR] = (uintptr_t)(__bridge void *)linSamp;
             }
         }
+        cm_water_bind_render_encoder(ctx, colorViewPtrs, colorCount);
     } else {
         id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)ctx.activeRenderEnc;
         if (fBuf) {
@@ -200,6 +201,7 @@ void cm_shade_bind_render_encoder(CMContext *ctx, const int64_t *colorViewPtrs, 
             [enc setFragmentSamplerState:linSamp atIndex:CM_SHADE_SAMP_LINEAR];
             ctx->_boundSamplers[CM_SHADE_SAMP_LINEAR] = (uintptr_t)(__bridge void *)linSamp;
         }
+        cm_water_bind_render_encoder(ctx, colorViewPtrs, colorCount);
     }
 }
 

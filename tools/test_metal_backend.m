@@ -1875,6 +1875,321 @@ static void benchmark_p2_shadow(NSString *assetsDir, int32_t preferMetal4) {
     cm_device_destroy(ctx);
 }
 
+static NSString *build_water_bake_msl(NSString *portedDir) {
+    NSMutableString *s = [NSMutableString stringWithString:
+        @"#define MCOPT_SHADE 1\n"
+         "#define MCOPT_HDR 1\n"
+         "#define SHADE_WATER 1\n"
+         "#define SHADE_SSR 1\n"
+         "#define SHADE_SSR_HIER 1\n"
+         "#define SHADE_SSRH_THICK 2.0\n"
+         "#define SHADE_SSRH_BUDGET 32\n"
+         "#define SHADE_SSRH_OWN 1\n"
+         "#define SHADE_SSRH_THIN 1\n"
+         "#define SHADE_SSR_STEPS 24\n"
+         "#define SHADE_SSR_RAWZ 1\n"
+         "#define SHADE_SSR_LEAN2 1\n"
+         "#define SHADE_SSR_EDGE 1\n"
+         "#define SHADE_SSR_THICK_K 1.5\n"
+         "#define SHADE_SSR_BEHIND 0\n"
+         "#define SHADE_SSR_TOP 0.15\n"
+         "#define SHADE_SSR_SIDE 0.25\n"
+         "#define SHADE_SSR_SIDE_END 0.0\n"
+         "#define SHADE_SSR_PREV 1\n"
+         "#define SHADE_CAUSTICS 1\n"
+         "#define SHADE_FOAM 1\n"
+         "#define SHADE_GLOSSY 1\n"
+         "#define SHADE_WATER_DETAIL 1\n"
+         "#define SHADE_WATER_DETAIL_SIZE 256\n"
+         "#define SHADE_WATER_DETAIL_FAR 112.0\n"
+         "#define SHADE_WATER_PATTERN_FAR 0.075\n"
+         "#define SHADE_WATER_DETAIL_EXTRAS 1\n"
+         "#define SHADE_WATER_SMOOTH 1\n"
+         "#define SHADE_WATER_GLINT_GRAZE 1\n"
+         "#define SHADE_WAVE_BAKE 1\n"
+         "#define SHADE_WAVE_BAKE_SIZE 1024\n"
+         "#define SHADE_WATER_SWELL 1\n"
+         "#define SHADE_WATER_SWELL_BAKED 1\n"
+         "#define SHADE_WATER_GLITTER 1\n"
+         "#define SHADE_WATER_SUBRECT 1\n"];
+    [s appendString:read_file_str([portedDir stringByAppendingPathComponent:@"shade_slots.metal"])];
+    [s appendString:@"\n"];
+    [s appendString:read_file_str([portedDir stringByAppendingPathComponent:@"shade_look.metal"])];
+    [s appendString:@"\n"];
+    [s appendString:read_file_str([portedDir stringByAppendingPathComponent:@"shade_common.metal"])];
+    [s appendString:@"\n"];
+    [s appendString:read_file_str([portedDir stringByAppendingPathComponent:@"shade_m2.metal"])];
+    [s appendString:@"\n"];
+    [s appendString:read_file_str([portedDir stringByAppendingPathComponent:@"shade_post.metal"])];
+    [s appendString:@"\n"];
+    [s appendString:read_file_str([portedDir stringByAppendingPathComponent:@"water.metal"])];
+    return s;
+}
+
+static void verify_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
+    int64_t ctx = cm_device_create(preferMetal4, 0, "");
+    assert(ctx != 0);
+    const char *api = cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3";
+    NSString *portedDir = [assetsDir stringByAppendingPathComponent:@"shaders/ported"];
+    char err[4096] = {0};
+
+    NSString *waterSrc = build_water_bake_msl(portedDir);
+    int64_t wLib = cm_compile_msl_library(ctx, waterSrc.UTF8String, "2n_water", 1, err, sizeof(err));
+    if (!wLib) {
+        fprintf(stderr, "FAIL compiling water.metal (%s):\n%s\n", api, err);
+        exit(1);
+    }
+    int64_t fnFsVs = cm_compile_function(wLib, "shade_fs_vs", 0, 0, 0, err, sizeof(err));
+    int64_t fnBake = cm_compile_function(wLib, "shade_water_bake_fs", 0, 0, 0, err, sizeof(err));
+    int64_t fnDet  = cm_compile_function(wLib, "shade_water_bake_detail_fs", 0, 0, 0, err, sizeof(err));
+    int64_t fnSwl  = cm_compile_function(wLib, "shade_water_bake_swell_fs", 0, 0, 0, err, sizeof(err));
+    int64_t fnPyr  = cm_compile_function(wLib, "shade_water_pyr_fs", 0, 0, 0, err, sizeof(err));
+    int64_t fnPyr2 = cm_compile_function(wLib, "shade_water_pyr2_fs", 0, 0, 0, err, sizeof(err));
+    assert(fnFsVs && fnBake && fnDet && fnSwl && fnPyr && fnPyr2);
+
+    CMColorAttachmentDesc f16Desc = { CM_FMT_RGBA16_FLOAT, 0, 1, 0, 0, 1, 0, 0, 15 };
+    CMColorAttachmentDesc rg16Desc = { CM_FMT_RG16_FLOAT, 0, 1, 0, 0, 1, 0, 0, 15 };
+    int64_t pBake = cm_render_pipeline_create(ctx, fnFsVs, fnBake, NULL, 0, NULL, 0, &f16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2n_bake", err, sizeof(err));
+    int64_t pDet  = cm_render_pipeline_create(ctx, fnFsVs, fnDet,  NULL, 0, NULL, 0, &f16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2n_det", err, sizeof(err));
+    int64_t pSwl  = cm_render_pipeline_create(ctx, fnFsVs, fnSwl,  NULL, 0, NULL, 0, &f16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2n_swl", err, sizeof(err));
+    int64_t pPyr  = cm_render_pipeline_create(ctx, fnFsVs, fnPyr,  NULL, 0, NULL, 0, &rg16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2n_pyr", err, sizeof(err));
+    int64_t pPyr2 = cm_render_pipeline_create(ctx, fnFsVs, fnPyr2, NULL, 0, NULL, 0, &rg16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2n_pyr2", err, sizeof(err));
+    assert(pBake && pDet && pSwl && pPyr && pPyr2);
+
+    // Probe shader that draws opaque quad on left half and samples captured water bindings on right half
+    NSString *probeMsl = [NSString stringWithFormat:
+        @"%@\n"
+         "struct POut { float4 pos [[position]]; float2 uv; };\n"
+         "vertex POut p_vs(uint vid [[vertex_id]]) {\n"
+         "    POut o;\n"
+         "    float2 p = float2(vid == 1 ? 3.0 : -1.0, vid == 2 ? 3.0 : -1.0);\n"
+         "    o.pos = float4(p, 0.75, 1.0);\n"
+         "    o.uv = float2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);\n"
+         "    return o;\n"
+         "}\n"
+         "fragment float4 p_opq_fs(POut in [[stage_in]]) {\n"
+         "    if (in.uv.x > 0.5) discard_fragment();\n"
+         "    return float4(0.25, 0.85, 0.35, 1.0);\n"
+         "}\n"
+         "fragment float4 p_wtr_fs(POut in [[stage_in]],\n"
+         "                         texture2d<half> sc [[texture(%d)]],\n"
+         "                         depth2d<float> dc [[texture(%d)]],\n"
+         "                         texture2d<half> wv [[texture(%d)]],\n"
+         "                         texture2d<float> pyr [[texture(%d)]],\n"
+         "                         texture2d<half> det [[texture(%d)]],\n"
+         "                         constant float4 *wp [[buffer(%d)]]) {\n"
+         "    if (in.uv.x <= 0.5) discard_fragment();\n"
+         "    constexpr sampler ls(filter::linear, mip_filter::linear, address::repeat);\n"
+         "    float3 opq = float3(sc.read(uint2(32, 64)).rgb);\n"
+         "    float dep = dc.read(uint2(32, 64));\n"
+         "    float2 p16 = pyr.read(uint2(2, 4)).xy;\n"
+         "    uint row128 = (128u + 15u) / 16u;\n"
+         "    float2 p128 = pyr.read(uint2(0, row128)).xy;\n"
+         "    float2 wSlope0 = float2(wv.sample(ls, float2(0.13, 0.27), level(0.0)).xy);\n"
+         "    float2 wSlope3 = float2(wv.sample(ls, float2(0.13, 0.27), level(3.0)).xy);\n"
+         "    float dLen = length(float2(det.sample(ls, float2(0.41, 0.19), level(1.0)).xy));\n"
+         "    return float4(opq.g > 0.7 && dep > 0.7 ? 1.0 : 0.0,\n"
+         "                  p16.x > 0.7 && p128.x > 0.7 ? 1.0 : 0.0,\n"
+         "                  (length(wSlope0) + length(wSlope3) + dLen) > 1e-4 ? 1.0 : 0.0,\n"
+         "                  wp[2].w > 0.5 ? 1.0 : 0.0);\n"
+         "}\n",
+        waterSrc,
+        CM_SHADE_TEX_WATER_SCENE, CM_SHADE_TEX_WATER_DEPTH, CM_SHADE_TEX_WATER_WAVES,
+        CM_SHADE_TEX_WATER_PYR, CM_SHADE_TEX_WATER_DETAIL, CM_SHADE_BUF_WATER];
+
+    int64_t pLib = cm_compile_msl_library(ctx, probeMsl.UTF8String, "2n_probe", 1, err, sizeof(err));
+    assert(pLib != 0);
+    int64_t pVs = cm_compile_function(pLib, "p_vs", 0, 0, 0, err, sizeof(err));
+    int64_t pOpqFs = cm_compile_function(pLib, "p_opq_fs", 0, 0, 0, err, sizeof(err));
+    int64_t pWtrFs = cm_compile_function(pLib, "p_wtr_fs", 0, 0, 0, err, sizeof(err));
+    int64_t pOpqPso = cm_render_pipeline_create(ctx, pVs, pOpqFs, NULL, 0, NULL, 0, &f16Desc, 1, CM_FMT_D32_FLOAT, CM_TOPO_TRIANGLES, 0, 0, 1, CM_CMP_GREATER_EQUAL, 1, 0, 0, "2n_opq", err, sizeof(err));
+    int64_t pWtrPso = cm_render_pipeline_create(ctx, pVs, pWtrFs, NULL, 0, NULL, 0, &f16Desc, 1, CM_FMT_D32_FLOAT, CM_TOPO_TRIANGLES, 0, 0, 1, CM_CMP_GREATER_EQUAL, 1, 0, 0, "2n_wtr", err, sizeof(err));
+    assert(pOpqPso && pWtrPso);
+
+    uint8_t zeroFrame[1024] = {0};
+    float *ff = (float *)zeroFrame;
+    ff[0]=1; ff[5]=1; ff[10]=1; ff[15]=1;
+    ff[248] = 1.25f; // sunPath.w = waterTime = 1.25s so wave height/slopes are non-zero
+    uint8_t zeroLook[1136] = {0};
+    uint8_t zeroGpu[512] = {0};
+    float waterParams[40] = {0};
+    waterParams[8] = 1.0f;  // state.x
+    waterParams[11] = 1.0f; // state.w = baked waves ready
+    waterParams[12] = 1.0f; // tune.x
+
+    int64_t fBuf = cm_buffer_create(ctx, sizeof(zeroFrame), zeroFrame, "2n_frame");
+    int64_t lBuf = cm_buffer_create(ctx, sizeof(zeroLook), zeroLook, "2n_look");
+    int64_t gBuf = cm_buffer_create(ctx, sizeof(zeroGpu), zeroGpu, "2n_gpu");
+    int64_t rBuf = cm_buffer_create(ctx, 256, NULL, "2n_res");
+    int64_t wpBuf = cm_buffer_create(ctx, 256, waterParams, "2n_wp");
+    int64_t dShd = cm_texture_create(ctx, CM_FMT_D32_FLOAT, 1, 1, 2, 1, 0, 1, 1, 0, "2n_shd");
+    int64_t sLut = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 8, 8, 1, 1, 0, 1, 1, 0, "2n_lut");
+    int64_t cmpS = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 1, CM_CMP_GREATER_EQUAL);
+    int64_t linS = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 0, 0);
+
+    int64_t wavesTex = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 1024, 1024, 1, 11, 0, 1, 1, 0, "2n_waves");
+    int64_t detTex   = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 256, 256, 1, 9, 0, 1, 1, 0, "2n_detT");
+    int64_t swlTex   = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 256, 256, 1, 9, 0, 1, 1, 0, "2n_swlT");
+
+    const int W = 128, H = 128;
+    int64_t colTex = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "2n_col");
+    int64_t colView = cm_texture_view_create(ctx, colTex, 0, 1);
+    int64_t depTex = cm_texture_create(ctx, CM_FMT_D32_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "2n_dep");
+    int64_t depView = cm_texture_view_create(ctx, depTex, 0, 1);
+    int64_t rb = cm_buffer_create(ctx, (int64_t)W * H * 8, NULL, "2n_rb");
+
+    cm_cmd_begin(ctx);
+    cm_blit_clear_depth(ctx, dShd, 1.0);
+    cm_shade_set_globals(ctx, fBuf, 0, lBuf, 0, gBuf, 0, rBuf, 0, dShd, sLut, cmpS, linS);
+    cm_shade_set_enabled(ctx, 1);
+    cm_water_set_params(ctx, wpBuf, 0, wavesTex, detTex, 1);
+
+    // Bake waves + ripples + swell & generate mipmaps
+    cm_shade_fullscreen_pass(ctx, pBake, wavesTex, NULL, 0, NULL, 0, NULL, 0);
+    cm_water_generate_mipmaps(ctx, wavesTex);
+    cm_shade_fullscreen_pass(ctx, pDet, detTex, NULL, 0, NULL, 0, NULL, 0);
+    cm_water_generate_mipmaps(ctx, detTex);
+    cm_shade_fullscreen_pass(ctx, pSwl, swlTex, NULL, 0, NULL, 0, NULL, 0);
+    cm_water_generate_mipmaps(ctx, swlTex);
+
+    // Render opaque left half, capture scene+depth+pyramid mid-pass, draw probing water on right half
+    int32_t clrOn = 1;
+    float clrVal[4] = { 0.05f, 0.05f, 0.1f, 1.0f };
+    cm_pass_begin(ctx, &colView, &clrOn, clrVal, 1, depView, 1, 0.0, 0, 0, W, H, "2n_world");
+    cm_pass_set_pipeline(ctx, pOpqPso);
+    cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+
+    int32_t captured = cm_water_capture(ctx, pPyr, pPyr2);
+    assert(captured == 1);
+
+    cm_pass_set_pipeline(ctx, pWtrPso);
+    cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+    cm_pass_end(ctx);
+
+    cm_blit_copy_texture_to_buffer(ctx, colTex, 0, 0, 0, 0, W, H, rb, 0, W * 8);
+    cm_shade_set_enabled(ctx, 0);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+
+    char drained[1024] = {0};
+    int errCnt = cm_device_drain_errors(ctx, drained, sizeof(drained));
+    assert(errCnt == 0);
+
+    const uint16_t *px = (const uint16_t *)cm_buffer_contents(rb);
+    // Left half pixel (32, 64) preserved MTLLoadActionLoad green (g=0.85h -> > 0x3900)
+    const uint16_t *leftH = px + (64 * W + 32) * 4;
+    // Right half pixel (96, 64): r=1 (scene+depth copy), g=1 (pyr16+pyr128), b=1 (waves+detail mips), a=1 (params)
+    const uint16_t *rightH = px + (64 * W + 96) * 4;
+    if (leftH[1] < 0x3800 || rightH[0] != 0x3C00 || rightH[1] != 0x3C00 || rightH[2] != 0x3C00 || rightH[3] != 0x3C00) {
+        fprintf(stderr, "FAIL 2n [%s]: left=(0x%04x,0x%04x,0x%04x,0x%04x) right=(0x%04x,0x%04x,0x%04x,0x%04x)\n",
+                api, leftH[0], leftH[1], leftH[2], leftH[3], rightH[0], rightH[1], rightH[2], rightH[3]);
+        exit(1);
+    }
+    printf("[Backend %s] Test 2n P3a Water (scene+depth capture, 3-pass RG16F pyramid, wave/detail/swell bake+mips, reopened pass) OK\n", api);
+
+    cm_shade_set_globals(ctx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    cm_water_set_params(ctx, 0, 0, 0, 0, 0);
+    cm_buffer_destroy(ctx, rb);
+    cm_texture_view_destroy(ctx, depView); cm_texture_destroy(ctx, depTex);
+    cm_texture_view_destroy(ctx, colView); cm_texture_destroy(ctx, colTex);
+    cm_texture_destroy(ctx, swlTex); cm_texture_destroy(ctx, detTex); cm_texture_destroy(ctx, wavesTex);
+    cm_sampler_destroy(ctx, linS); cm_sampler_destroy(ctx, cmpS);
+    cm_texture_destroy(ctx, sLut); cm_texture_destroy(ctx, dShd);
+    cm_buffer_destroy(ctx, wpBuf); cm_buffer_destroy(ctx, rBuf); cm_buffer_destroy(ctx, gBuf); cm_buffer_destroy(ctx, lBuf); cm_buffer_destroy(ctx, fBuf);
+    cm_pipeline_destroy(ctx, pWtrPso); cm_pipeline_destroy(ctx, pOpqPso);
+    cm_function_destroy(pWtrFs); cm_function_destroy(pOpqFs); cm_function_destroy(pVs); cm_library_destroy(pLib);
+    cm_pipeline_destroy(ctx, pPyr2); cm_pipeline_destroy(ctx, pPyr);
+    cm_pipeline_destroy(ctx, pSwl); cm_pipeline_destroy(ctx, pDet); cm_pipeline_destroy(ctx, pBake);
+    cm_function_destroy(fnPyr2); cm_function_destroy(fnPyr);
+    cm_function_destroy(fnSwl); cm_function_destroy(fnDet); cm_function_destroy(fnBake); cm_function_destroy(fnFsVs);
+    cm_library_destroy(wLib);
+    cm_device_destroy(ctx);
+}
+
+static void benchmark_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
+    const int W = 3024, H = 1752, WARM = 3, ITERS = 12;
+    int64_t ctx = cm_device_create(preferMetal4, 0, "");
+    assert(ctx != 0);
+    const char *api = cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3";
+    NSString *portedDir = [assetsDir stringByAppendingPathComponent:@"shaders/ported"];
+    char err[4096] = {0};
+
+    int64_t wLib = cm_compile_msl_library(ctx, build_water_bake_msl(portedDir).UTF8String, "bp3a", 1, err, sizeof(err));
+    int64_t fnFsVs = cm_compile_function(wLib, "shade_fs_vs", 0, 0, 0, err, sizeof(err));
+    int64_t fnBake = cm_compile_function(wLib, "shade_water_bake_fs", 0, 0, 0, err, sizeof(err));
+    int64_t fnDet  = cm_compile_function(wLib, "shade_water_bake_detail_fs", 0, 0, 0, err, sizeof(err));
+    int64_t fnSwl  = cm_compile_function(wLib, "shade_water_bake_swell_fs", 0, 0, 0, err, sizeof(err));
+    int64_t fnPyr  = cm_compile_function(wLib, "shade_water_pyr_fs", 0, 0, 0, err, sizeof(err));
+    int64_t fnPyr2 = cm_compile_function(wLib, "shade_water_pyr2_fs", 0, 0, 0, err, sizeof(err));
+    CMColorAttachmentDesc f16Desc = { CM_FMT_RGBA16_FLOAT, 0, 1, 0, 0, 1, 0, 0, 15 };
+    CMColorAttachmentDesc rg16Desc = { CM_FMT_RG16_FLOAT, 0, 1, 0, 0, 1, 0, 0, 15 };
+    int64_t pBake = cm_render_pipeline_create(ctx, fnFsVs, fnBake, NULL, 0, NULL, 0, &f16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "bp3a_bake", err, sizeof(err));
+    int64_t pDet  = cm_render_pipeline_create(ctx, fnFsVs, fnDet,  NULL, 0, NULL, 0, &f16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "bp3a_det", err, sizeof(err));
+    int64_t pSwl  = cm_render_pipeline_create(ctx, fnFsVs, fnSwl,  NULL, 0, NULL, 0, &f16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "bp3a_swl", err, sizeof(err));
+    int64_t pPyr  = cm_render_pipeline_create(ctx, fnFsVs, fnPyr,  NULL, 0, NULL, 0, &rg16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "bp3a_pyr", err, sizeof(err));
+    int64_t pPyr2 = cm_render_pipeline_create(ctx, fnFsVs, fnPyr2, NULL, 0, NULL, 0, &rg16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "bp3a_pyr2", err, sizeof(err));
+
+    uint8_t zero[1136] = {0};
+    ((float *)zero)[248] = 2.0f;
+    int64_t fBuf = cm_buffer_create(ctx, 1024, zero, "bp3a_f");
+    int64_t lBuf = cm_buffer_create(ctx, 1136, zero, "bp3a_l");
+    int64_t gBuf = cm_buffer_create(ctx, 512, zero, "bp3a_g");
+    int64_t rBuf = cm_buffer_create(ctx, 256, NULL, "bp3a_r");
+    int64_t wpBuf = cm_buffer_create(ctx, 256, zero, "bp3a_wp");
+    int64_t dShd = cm_texture_create(ctx, CM_FMT_D32_FLOAT, 1, 1, 2, 1, 0, 1, 1, 0, "bp3a_d");
+    int64_t sLut = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 8, 8, 1, 1, 0, 1, 1, 0, "bp3a_lut");
+    int64_t cmpS = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 1, CM_CMP_GREATER_EQUAL);
+    int64_t linS = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 0, 0);
+    int64_t wavesTex = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 1024, 1024, 1, 11, 0, 1, 1, 0, "bp3a_w");
+    int64_t detTex   = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 256, 256, 1, 9, 0, 1, 1, 0, "bp3a_dt");
+    int64_t swlTex   = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 256, 256, 1, 9, 0, 1, 1, 0, "bp3a_sw");
+    int64_t colTex   = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "bp3a_c");
+    int64_t colView  = cm_texture_view_create(ctx, colTex, 0, 1);
+    int64_t depTex   = cm_texture_create(ctx, CM_FMT_D32_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "bp3a_dp");
+    int64_t depView  = cm_texture_view_create(ctx, depTex, 0, 1);
+
+    cm_cmd_begin(ctx);
+    cm_blit_clear_depth(ctx, dShd, 1.0);
+    cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL);
+    cm_shade_set_globals(ctx, fBuf, 0, lBuf, 0, gBuf, 0, rBuf, 0, dShd, sLut, cmpS, linS);
+    cm_water_set_params(ctx, wpBuf, 0, wavesTex, detTex, 1);
+
+    double gpuMsSum = 0.0;
+    int32_t noClr = 0; float clr[4] = {0};
+    for (int f = 0; f < WARM + ITERS; f++) {
+        cm_cmd_begin(ctx);
+        cm_shade_set_enabled(ctx, 1);
+        cm_shade_fullscreen_pass(ctx, pBake, wavesTex, NULL, 0, NULL, 0, NULL, 0);
+        cm_water_generate_mipmaps(ctx, wavesTex);
+        cm_shade_fullscreen_pass(ctx, pDet, detTex, NULL, 0, NULL, 0, NULL, 0);
+        cm_water_generate_mipmaps(ctx, detTex);
+        cm_shade_fullscreen_pass(ctx, pSwl, swlTex, NULL, 0, NULL, 0, NULL, 0);
+        cm_water_generate_mipmaps(ctx, swlTex);
+        cm_pass_begin(ctx, &colView, &noClr, clr, 1, depView, 0, 0.0, 0, 0, W, H, "bp3a_main");
+        cm_water_capture(ctx, pPyr, pPyr2);
+        cm_pass_end(ctx);
+        cm_shade_set_enabled(ctx, 0);
+        cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL);
+        if (f >= WARM) gpuMsSum += (double)cm_device_last_gpu_ns(ctx) / 1e6;
+    }
+    printf("[Benchmark M1 Pro %s @ %dx%d] P3a Water Prep (1024^2 waves+256^2 ripples/swell+mips+copy+3-pass pyr) synthetic avg: %.3f ms GPU\n",
+           api, W, H, gpuMsSum / ITERS);
+
+    cm_shade_set_globals(ctx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    cm_water_set_params(ctx, 0, 0, 0, 0, 0);
+    cm_texture_view_destroy(ctx, depView); cm_texture_destroy(ctx, depTex);
+    cm_texture_view_destroy(ctx, colView); cm_texture_destroy(ctx, colTex);
+    cm_texture_destroy(ctx, swlTex); cm_texture_destroy(ctx, detTex); cm_texture_destroy(ctx, wavesTex);
+    cm_sampler_destroy(ctx, linS); cm_sampler_destroy(ctx, cmpS);
+    cm_texture_destroy(ctx, sLut); cm_texture_destroy(ctx, dShd);
+    cm_buffer_destroy(ctx, wpBuf); cm_buffer_destroy(ctx, rBuf); cm_buffer_destroy(ctx, gBuf); cm_buffer_destroy(ctx, lBuf); cm_buffer_destroy(ctx, fBuf);
+    cm_pipeline_destroy(ctx, pPyr2); cm_pipeline_destroy(ctx, pPyr);
+    cm_pipeline_destroy(ctx, pSwl); cm_pipeline_destroy(ctx, pDet); cm_pipeline_destroy(ctx, pBake);
+    cm_function_destroy(fnPyr2); cm_function_destroy(fnPyr);
+    cm_function_destroy(fnSwl); cm_function_destroy(fnDet); cm_function_destroy(fnBake); cm_function_destroy(fnFsVs);
+    cm_library_destroy(wLib);
+    cm_device_destroy(ctx);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <assetsDir>\n", argv[0]);
@@ -1902,6 +2217,10 @@ int main(int argc, char **argv) {
     benchmark_p1_hdr_post([NSString stringWithUTF8String:argv[1]], 0);
     benchmark_p2_shadow([NSString stringWithUTF8String:argv[1]], 1);
     benchmark_p2_shadow([NSString stringWithUTF8String:argv[1]], 0);
+    verify_p3a_water([NSString stringWithUTF8String:argv[1]], 1);
+    verify_p3a_water([NSString stringWithUTF8String:argv[1]], 0);
+    benchmark_p3a_water([NSString stringWithUTF8String:argv[1]], 1);
+    benchmark_p3a_water([NSString stringWithUTF8String:argv[1]], 0);
     printf("ALL CELESTIA METAL NATIVE GPU TESTS PASSED.\n");
     return 0;
 }

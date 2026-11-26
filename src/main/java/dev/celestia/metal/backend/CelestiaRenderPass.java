@@ -11,6 +11,7 @@ import com.mojang.renderpearl.api.pipeline.UniformType;
 import com.mojang.renderpearl.backend.api.BackendRenderPipeline;
 import com.mojang.renderpearl.backend.api.RenderPassBackend;
 import com.mojang.renderpearl.util.TextureViewAndSampler;
+import dev.celestia.metal.shade.CelestiaShade;
 import dev.celestia.metal.shade.ShadeShaderPatcher;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -87,6 +88,12 @@ public final class CelestiaRenderPass implements RenderPassBackend {
             if (vb.bufferSlot() >= 0 && vb.bufferSlot() < vtxStrides.length) {
                 vtxStrides[vb.bufferSlot()] = vb.stride();
             }
+        }
+        if (shadeVariant == ShadeShaderPatcher.Variant.HDR_WORLD
+            && depthFormat != CelestiaPipeline.NO_DEPTH
+            && this.pipeline.isTranslucentTerrain()) {
+            CelestiaShade shade = CelestiaShade.current();
+            if (shade != null) shade.onTranslucentTerrainBind();
         }
         long pso = this.pipeline.getOrCreatePso(colorFormatOverride, depthFormat, shadeVariant);
         MetalNative.passSetPipeline(device.handle(), pso);

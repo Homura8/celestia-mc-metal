@@ -87,6 +87,7 @@ public final class ShadeLook {
     private final Matrix4f scratchMat = new Matrix4f();
     private final float[] scratchGold = new float[7];
     private boolean snapExposure = true;
+    private boolean hasPrevScene;
     private float dt;
     private int features;
     private int lookPreset;
@@ -113,6 +114,11 @@ public final class ShadeLook {
 
     public void snapExposure() {
         this.snapExposure = true;
+        this.hasPrevScene = false;
+    }
+
+    public void setHasPrevScene(boolean hasPrevScene) {
+        this.hasPrevScene = hasPrevScene;
     }
 
     public void setLookPreset(int preset) {
@@ -278,7 +284,7 @@ public final class ShadeLook {
         put4(b, SKY_GOLD_H, this.skyGold[0], this.skyGold[1], this.skyGold[2], 1f);
         put4(b, SKY_GOLD_Z, this.skyGold[3], this.skyGold[4], this.skyGold[5], this.skyRose);
         put4(b, NIGHT, this.starBrightness, 1f, 0f, this.moonPhaseAngle);
-        put4(b, SSR, 0f, 0f, 0f, 0f);
+        put4(b, SSR, this.hasPrevScene ? 1f : 0f, 0f, 0f, 0f);
         float nightUp = EV_UP - (EV_UP - EV_UP_NIGHT) * (1f - smooth(-10f, -2f, this.elevation)) * this.outdoor;
         put4(b, EXPOSURE_CFG, EV_DOWN, nightUp, TAU_UP, TAU_DOWN);
         put4(b, DIM_TINT, 0f, 0f, 0f, 0f);
