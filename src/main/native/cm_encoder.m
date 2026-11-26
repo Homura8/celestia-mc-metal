@@ -952,6 +952,19 @@ void cm_pass_set_texture_sampler(int64_t ctxPtr, int32_t texSlot, int64_t texVie
     }
 }
 
+MTLGPUAddress cm_m4_push_ring_alloc(CMContext *ctx, const void *data, NSUInteger size) {
+    NSUInteger aligned = (size + 15UL) & ~15UL;
+    NSUInteger slotLimit = ((ctx.activeM4AllocatorIdx + 1) * (ctx.pushRingSize / CM_INFLIGHT_SLOTS));
+    if (ctx.pushRingOffset + aligned > slotLimit) {
+        ctx.pushRingOffset = ctx.activeM4AllocatorIdx * (ctx.pushRingSize / CM_INFLIGHT_SLOTS);
+    }
+    uint8_t *dst = (uint8_t *)ctx.pushRingBuffer.contents + ctx.pushRingOffset;
+    memcpy(dst, data, (size_t)size);
+    MTLGPUAddress addr = ctx.pushRingBuffer.gpuAddress + ctx.pushRingOffset;
+    ctx.pushRingOffset += aligned;
+    return addr;
+}
+
 void cm_pass_push_constants(int64_t ctxPtr, int32_t slot, const void *data, int32_t size) {
     if (!ctxPtr || !data || size <= 0 || slot < 0) return;
     CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
@@ -962,15 +975,7 @@ void cm_pass_push_constants(int64_t ctxPtr, int32_t slot, const void *data, int3
                 && memcmp(ctx->_lastPush, data, (size_t)size) == 0) {
                 return; // identical to the bytes already bound at this slot
             }
-            NSUInteger aligned = (((NSUInteger)size) + 15UL) & ~15UL;
-            NSUInteger slotLimit = ((ctx.activeM4AllocatorIdx + 1) * (ctx.pushRingSize / CM_INFLIGHT_SLOTS));
-            if (ctx.pushRingOffset + aligned > slotLimit) {
-                ctx.pushRingOffset = ctx.activeM4AllocatorIdx * (ctx.pushRingSize / CM_INFLIGHT_SLOTS);
-            }
-            uint8_t *dst = (uint8_t *)ctx.pushRingBuffer.contents + ctx.pushRingOffset;
-            memcpy(dst, data, (size_t)size);
-            MTLGPUAddress addr = ctx.pushRingBuffer.gpuAddress + ctx.pushRingOffset;
-            ctx.pushRingOffset += aligned;
+            MTLGPUAddress addr = cm_m4_push_ring_alloc(ctx, data, (NSUInteger)size);
             [(id<MTL4ArgumentTable>)ctx.m4VertexArgTable setAddress:addr atIndex:(NSUInteger)slot];
             if (slot == CM_PUSH_CONSTANT_SLOT && size <= (int32_t)sizeof(ctx->_lastPush)) {
                 memcpy(ctx->_lastPush, data, (size_t)size);

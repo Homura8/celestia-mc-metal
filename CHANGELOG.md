@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.0-alpha.16
+
+### Added
+- **Native MSL Shader Suite Port — Phase P2 (`dev.celestia.metal.shade.shadow.*`)**:
+  - **2-Cascade Sun/Moon Shadow Maps (`2048×2048×2` `Depth16Unorm` default, configurable via `-Dcelestiametal.shade.shadowRes` / `-Dcelestiametal.shade.shadowDepth=32`)**:
+    - Implemented stable texel-snapped orthographic cascade fitting (`ShadowCascade`) with reversed-Z depth (`MTLCompareFunctionGreaterEqual`), depth clamping/pancaking (`MTLDepthClipModeClamp`), slope-scaled raster bias, adaptive sun angle quantization near the horizon, near cascade (32-block half-width shifted 40% ahead, updated every frame) and far cascade (128-block half-width updated every 4 frames or on camera/sun step).
+    - **Sodium 0.9.x + Vanilla 26.3 support without hard Sodium dependency**: `SodiumShadowCasters` uses cached `MethodHandle` reflection to pull Sodium's compact 20-byte section vertices with per-facing culling and zero Sodium compile/link dependency; `VanillaShadowCasters` reads vanilla `ViewArea` + `SectionRenderDispatcher` 28-byte block vertices (`DefaultVertexFormat.BLOCK`).
+    - Added native `cm_shadow_render_sodium` and `cm_shadow_render_vanilla` encoders (`src/main/native/cm_shadow.m`, `CM_ABI_VERSION 5`) supporting both Metal 4 (`MTL4RenderCommandEncoder` + explicit producer barriers) and Metal 3, encoded cleanly before `FrameGraphBuilder.execute` via `ShadeLevelRendererMixin` so main-pass encoder merging stays intact.
+    - Updated F3 `Celestia Shade:` diagnostic line with live shadow resolution, active caster backend (`Sodium` / `Vanilla`), and near/far quad counts.
+    - Added `ShadeP2Test` (JUnit 5 + FFM) and native **Test 2m** (2-cascade Vanilla + Sodium depth render & `sample_compare` verification) plus 2048×2048 P2 shadow cascade GPU benchmark in `tools/test_metal_backend.m` across Metal 4 and Metal 3.
+
+### Fixed
+- **Vanilla chunk upload `/ by zero` crash at transient block boundaries**: `CelestiaTransientMemory` and `CelestiaCommandEncoder.writeToBuffer` passed `0L, 0L` instead of `(minimumAllocation, step)` (`size, 1L`) into RenderPearl's `TransientBlockAllocator.allocate(...)`, triggering `ArithmeticException: / by zero` (`line 128`) whenever a 4 MiB shared transient block filled mid-frame during large initial vanilla section uploads. Fixed across all allocation paths and covered by `ShadeP2Test.transientBlockAllocatorBoundaryDoesNotDivideByZero`.
+
+### Verified Performance (Apple M1 Pro, 3024×1752 native, Metal 4)
+- **In-game (Sodium 0.9.4-beta.2 + Xaero's Minimap)**:
+  - Day (`elev 24 deg`): **124 FPS** (`9.40 ms` GPU, `73k/419k q`)
+  - Sunset (`elev 3 deg`): **97 FPS** (`11.87 ms` GPU, `102k/385k q`)
+  - Night (`elev -34 deg`): **101 FPS** (`10.84 ms` GPU, `61k/421k q`)
+- **In-game (Vanilla 26.3 terrain + Xaero's Minimap, no Sodium)**:
+  - Day: **103 FPS** (`10.92 ms` GPU)
+  - Sunset (`elev 2 deg`): **86–89 FPS** (`12.19 ms` GPU, `36k/343k q`)
+  - Twilight: **90 FPS** (`11.42 ms` GPU)
+- **Synthetic P2 Shadow Cascade Benchmark (`tools/test_metal_backend.m` @ 2048×2048 `D16`, 50k quads)**: **0.285 ms** GPU (Metal 4) / **0.321 ms** GPU (Metal 3).
+
 ## 0.1.0-alpha.15
 
 ### Added

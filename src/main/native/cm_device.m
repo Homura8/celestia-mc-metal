@@ -333,6 +333,12 @@ void cm_device_destroy(int64_t ctxPtr) {
         ctx.shadeLinearSampler = nil;
         ctx.shadeShadowSampler = nil;
         for (int i = 0; i < CM_SHADE_MAX_RES_TEX; i++) ctx->_shadeResTextures[i] = nil;
+        ctx.shadowQuadIdx16 = nil;
+        ctx.shadowQuadIdx32 = nil;
+        ctx.shadowQuadIdx32Cap = 0;
+        [ctx.shadowOrigRing removeAllObjects];
+        ctx.shadowOrigRing = nil;
+        ctx.shadowDepthState = nil;
         ctx.residencySet = nil;
         ctx.fanIndexBuffer = nil;
         ctx.fanIndexCapacity = 0;

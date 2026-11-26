@@ -20,6 +20,7 @@ import dev.celestia.metal.backend.CelestiaTexture;
 import dev.celestia.metal.backend.CelestiaTextureView;
 import dev.celestia.metal.backend.MetalConst;
 import dev.celestia.metal.backend.MetalNative;
+import dev.celestia.metal.shade.shadow.ShadowPass;
 import dev.celestia.metal.shader.pack.ShaderPipelineManager;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -68,6 +69,7 @@ public final class CelestiaShade {
     private final CelestiaMetalDevice device;
     private final ShadeFrame frame = new ShadeFrame();
     private final ShadeLook look = new ShadeLook();
+    private final ShadowPass shadowPass = new ShadowPass();
 
     private final Matrix4f pendingProjection = new Matrix4f();
     private boolean projectionSet;
@@ -266,12 +268,13 @@ public final class CelestiaShade {
         long frameOff = (long) slot * RING_SLOT_STRIDE;
         long lookOff = frameOff + LOOK_OFFSET;
         long resOff = (long) slot * RES_SLOT_STRIDE;
+        long activeShadowTex = (shadowPass != null && shadowPass.isActive()) ? shadowPass.texture() : dummyShadowTex;
         MetalNative.shadeSetGlobals(device.handle(),
             ringBuf, frameOff,
             ringBuf, lookOff,
             gpuBuf, 0L,
             resBuf, resOff,
-            dummyShadowTex, skyLutTex,
+            activeShadowTex, skyLutTex,
             shadowCompareSamp, linearClampSamp);
         MetalNative.shadeSetResource(device.handle(), 0, milkyWayTex);
     }
@@ -377,8 +380,7 @@ public final class CelestiaShade {
         var lightmap = game.lightmapRenderState;
         frame.nightVision = lightmap.nightVisionEffectIntensity;
         frame.minAmbient = 0.0025f + 0.02f * lightmap.brightness + 0.25f * frame.nightVision;
-        frame.shadowsEnabled = false;
-        frame.cascades = 0;
+        shadowPass.prepare(device.handle(), camera, sky, frame);
 
         frame.frameIndex = ++frameCounter;
         long now = System.nanoTime();
@@ -414,6 +416,12 @@ public final class CelestiaShade {
         worldDepth = main.getDepthTexture();
         worldRedirectActive = true;
         handPassActive = false;
+    }
+
+    /** Encodes shadow depth cascades just before the main frame graph executes. */
+    public void renderShadows() {
+        if (!isEnabled() || !isReady()) return;
+        shadowPass.render(device.handle());
     }
 
     /** Called before {@code render3dHud} (or {@code FogRenderer.endFrame}): bloom + auto-exposure + tonemap to mainColor. */
@@ -571,6 +579,12 @@ public final class CelestiaShade {
         if (failed) return "Fallback (init failed)";
         if (!initialized) return "Pending";
         float ex = gpuView != null ? gpuView.getFloat(176) : 1.0f;
+        if (shadowPass.isActive()) {
+            return String.format(java.util.Locale.ROOT,
+                "P2 HDR (%dx%d) | Shadows %d %s (%dk/%dk q) | ev x%.2f | elev %.0f deg",
+                hdrWidth, hdrHeight, shadowPass.resolution(), shadowPass.sourceName(),
+                shadowPass.lastNearQuads() / 1000, shadowPass.lastFarQuads() / 1000, ex, look.elevation);
+        }
         return String.format(java.util.Locale.ROOT, "P1 HDR (%dx%d) | ev x%.2f | elev %.0f deg",
             hdrWidth, hdrHeight, ex, look.elevation);
     }
@@ -630,6 +644,7 @@ public final class CelestiaShade {
         worldRedirectActive = false;
         handPassActive = false;
         long ctx = device.handle();
+        shadowPass.close(ctx);
         if (ctx != 0L) {
             MetalNative.shadeSetEnabled(ctx, false);
             MetalNative.shadeSetGlobals(ctx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);

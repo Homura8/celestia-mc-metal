@@ -33,4 +33,16 @@ public abstract class ShadeLevelRendererMixin {
             dev.shade().beginWorld(cameraState);
         }
     }
+
+    @Inject(method = "render", at = @At(value = "INVOKE",
+        target = "Lcom/mojang/blaze3d/framegraph/FrameGraphBuilder;execute(Lcom/mojang/blaze3d/resource/GraphicsResourceAllocator;Lcom/mojang/blaze3d/framegraph/FrameGraphBuilder$Inspector;)V"))
+    private void celestiametal$shadeRenderShadows(GraphicsResourceAllocator resourceAllocator, boolean renderOutline,
+                                                  CameraRenderState cameraState, GpuBufferSlice terrainFog,
+                                                  Vector4f fogColor, boolean shouldRenderSky,
+                                                  boolean consistentDepthRequired, CallbackInfo ci) {
+        CelestiaMetalDevice dev = CelestiaMetalDevice.current;
+        if (dev != null) {
+            dev.shade().renderShadows();
+        }
+    }
 }

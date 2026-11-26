@@ -250,15 +250,7 @@ void cm_shade_fullscreen_pass(int64_t ctxPtr, int64_t psoPtr, int64_t colorTexPt
                     }
                 }
                 if (pushData && pushBytes > 0) {
-                    NSUInteger aligned = (((NSUInteger)pushBytes) + 15UL) & ~15UL;
-                    NSUInteger slotLimit = ((ctx.activeM4AllocatorIdx + 1) * (ctx.pushRingSize / CM_INFLIGHT_SLOTS));
-                    if (ctx.pushRingOffset + aligned > slotLimit) {
-                        ctx.pushRingOffset = ctx.activeM4AllocatorIdx * (ctx.pushRingSize / CM_INFLIGHT_SLOTS);
-                    }
-                    uint8_t *dst = (uint8_t *)ctx.pushRingBuffer.contents + ctx.pushRingOffset;
-                    memcpy(dst, pushData, (size_t)pushBytes);
-                    MTLGPUAddress addr = ctx.pushRingBuffer.gpuAddress + ctx.pushRingOffset;
-                    ctx.pushRingOffset += aligned;
+                    MTLGPUAddress addr = cm_m4_push_ring_alloc(ctx, pushData, (NSUInteger)pushBytes);
                     [at setAddress:addr atIndex:0];
                 }
 
