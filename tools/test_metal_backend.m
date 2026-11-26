@@ -337,6 +337,57 @@ static void verify_backend_ops(int32_t preferMetal4) {
     cm_function_destroy(vsFan);
     cm_library_destroy(libFan);
 
+    // 2f. Chained BufferArena upload->resize blits and overlapping memmove-safe buffer copies
+    const uint32_t arenaCount = 4096;
+    const size_t arenaBytes = arenaCount * sizeof(uint32_t);
+    int64_t blitStage = cm_buffer_create(ctx, arenaBytes, NULL, "BlitStage");
+    int64_t blitArenaA = cm_buffer_create(ctx, arenaBytes, NULL, "BlitArenaA");
+    int64_t blitArenaB = cm_buffer_create(ctx, arenaBytes, NULL, "BlitArenaB");
+    assert(blitStage && blitArenaA && blitArenaB);
+    uint32_t *stageU32 = (uint32_t *)(uintptr_t)cm_buffer_contents(blitStage);
+    uint32_t *arenaBU32 = (uint32_t *)(uintptr_t)cm_buffer_contents(blitArenaB);
+    for (int iter = 0; iter < 8; iter++) {
+        uint32_t seed = (uint32_t)(0x10000000u + (uint32_t)iter * 0x01000000u);
+        for (uint32_t i = 0; i < arenaCount; i++) {
+            stageU32[i] = seed + i;
+            arenaBU32[i] = 0xDEAD0000u;
+        }
+        cm_cmd_begin(ctx);
+        cm_blit_copy_buffer(ctx, blitStage, 0, blitArenaA, 0, arenaBytes);
+        cm_blit_copy_buffer(ctx, blitArenaA, 0, blitArenaB, 0, arenaBytes);
+        uint64_t s2f = cm_cmd_submit(ctx, 2);
+        assert(cm_wait_submit(ctx, s2f, 5000000000ULL) == 1);
+        for (uint32_t i = 0; i < arenaCount; i++) {
+            assert(arenaBU32[i] == seed + i);
+        }
+    }
+
+    int64_t overlapBuf = cm_buffer_create(ctx, 512, NULL, "OverlapBuf");
+    assert(overlapBuf != 0);
+    uint8_t *ov = (uint8_t *)(uintptr_t)cm_buffer_contents(overlapBuf);
+    for (int i = 0; i < 512; i++) ov[i] = (uint8_t)(i & 0xFF);
+    // Shift left: [64, 320) -> [32, 288)
+    cm_cmd_begin(ctx);
+    cm_blit_copy_buffer(ctx, overlapBuf, 64, overlapBuf, 32, 256);
+    uint64_t s2fL = cm_cmd_submit(ctx, 2);
+    assert(cm_wait_submit(ctx, s2fL, 5000000000ULL) == 1);
+    for (int i = 0; i < 256; i++) {
+        assert(ov[32 + i] == (uint8_t)((64 + i) & 0xFF));
+    }
+    // Reset & shift right: [32, 288) -> [64, 320)
+    for (int i = 0; i < 512; i++) ov[i] = (uint8_t)(i & 0xFF);
+    cm_cmd_begin(ctx);
+    cm_blit_copy_buffer(ctx, overlapBuf, 32, overlapBuf, 64, 256);
+    uint64_t s2fR = cm_cmd_submit(ctx, 2);
+    assert(cm_wait_submit(ctx, s2fR, 5000000000ULL) == 1);
+    for (int i = 0; i < 256; i++) {
+        assert(ov[64 + i] == (uint8_t)((32 + i) & 0xFF));
+    }
+    cm_buffer_destroy(ctx, overlapBuf);
+    cm_buffer_destroy(ctx, blitArenaB);
+    cm_buffer_destroy(ctx, blitArenaA);
+    cm_buffer_destroy(ctx, blitStage);
+
     // 3. MetalFX Spatial & Temporal scaler creation + execution
     int64_t mfxOut = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 128, 128, 1, 1, 0, 1, 1, 1, "MFXOut");
     int64_t mfxIn = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 64, 64, 1, 1, 0, 1, 1, 0, "MFXIn");

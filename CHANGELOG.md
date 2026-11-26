@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.0-alpha.10
+
+### Fixed
+- **Sodium Chunk Geometry Spikes (`cm_blit_copy_buffer` Metal 4 Barriers & Overlap Guard)**:
+  - Emitted intra-encoder `MTLStageBlit -> MTLStageBlit` barriers (`MTL4VisibilityOptionDevice`) between chained blit operations in `cm_encoder.m` (`cm_blit_copy_buffer`, `cm_blit_copy_texture_to_buffer`, `cm_blit_copy_texture`) so Sodium's `BufferArena` staging-to-arena upload followed immediately by arena resize or compaction copies never race concurrently on Metal 4.
+  - Handled overlapping same-buffer `cm_blit_copy_buffer` ranges safely through a retired temporary staging buffer so incremental arena defragmentation behaves like `memmove`.
+  - Guarded `cm_pass_multi_draw_indexed` against out-of-range byte offsets before computing `indexBufferLength`.
+- **Non-Blocking Fence Polls & `TEXEL_BUFFER` Whole-Buffer Binding**:
+  - Updated `CelestiaFence.awaitCompletion(0L)` to return `false` without flushing an active recording command buffer when polling unsubmitted staging fences (such as Sodium's `MappedStagingBuffer.flip()`).
+  - Handled `CelestiaBuffer` directly in `CelestiaRenderPass.flushUniforms()` for `TEXEL_BUFFER` uniforms (`u_SectionTimeInfo` in Sodium).
+
+### Added
+- Chained blit upload/resize and overlapping bidirectional `memmove` GPU regression test (`Test 2f` in `tools/test_metal_backend.m`) for both Metal 4 and Metal 3.
+
 ## 0.1.0-alpha.9
 
 ### Added

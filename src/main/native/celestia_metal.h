@@ -216,6 +216,7 @@ typedef struct CMAttribBindingDesc {
 @property (nonatomic) NSUInteger activeM4AllocatorIdx;
 @property (nonatomic, strong) id activeRenderEnc;   // id<MTLRenderCommandEncoder> or id<MTL4RenderCommandEncoder>
 @property (nonatomic, strong) id activeBlitEnc;     // id<MTLBlitCommandEncoder> or id<MTL4ComputeCommandEncoder>
+@property (nonatomic) BOOL blitHasOps;
 @property (nonatomic, strong) id m4VertexArgTable;  // id<MTL4ArgumentTable>
 @property (nonatomic, strong) id m4FragmentArgTable;// id<MTL4ArgumentTable>
 

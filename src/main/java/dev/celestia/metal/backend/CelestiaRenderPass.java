@@ -134,6 +134,14 @@ public final class CelestiaRenderPass implements RenderPassBackend {
                         if (viewHandle != 0L) {
                             MetalNative.passSetTextureSampler(device.handle(), sb.textureSlot(), viewHandle, -1, 0L);
                         }
+                    } else if (value instanceof CelestiaBuffer cb) {
+                        int nativeFmt = MetalConst.toNativeFormat(desc.gpuFormat());
+                        TexelKey key = new TexelKey(cb.handle(), 0L, cb.size(), nativeFmt);
+                        long viewHandle = texelBufferViews.computeIfAbsent(key, k ->
+                            MetalNative.textureBufferCreate(device.handle(), k.bufHandle(), k.offset(), k.length(), k.format()));
+                        if (viewHandle != 0L) {
+                            MetalNative.passSetTextureSampler(device.handle(), sb.textureSlot(), viewHandle, -1, 0L);
+                        }
                     } else if (value instanceof CelestiaTextureView tv) {
                         MetalNative.passSetTextureSampler(device.handle(), sb.textureSlot(), tv.handle(), -1, 0L);
                     }

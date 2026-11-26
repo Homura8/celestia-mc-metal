@@ -17,8 +17,13 @@ public final class CelestiaFence implements GpuFence {
     @Override
     public boolean awaitCompletion(long timeoutNs) {
         if (closed || submitSerial <= 0L) return true;
-        if (submitSerial > MetalNative.deviceNextSubmit(device.handle()) && MetalNative.cmdHasActive(device.handle())) {
-            encoder.submit();
+        if (submitSerial > MetalNative.deviceNextSubmit(device.handle())) {
+            if (timeoutNs == 0L) {
+                return false;
+            }
+            if (MetalNative.cmdHasActive(device.handle())) {
+                encoder.submit();
+            }
         }
         return MetalNative.waitSubmit(device.handle(), submitSerial, timeoutNs);
     }

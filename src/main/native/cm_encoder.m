@@ -55,6 +55,17 @@ void cm_end_blit_if_active(CMContext *ctx) {
         [(id<MTLBlitCommandEncoder>)ctx.activeBlitEnc endEncoding];
     }
     ctx.activeBlitEnc = nil;
+    ctx.blitHasOps = NO;
+}
+
+static void emit_m4_blit_intra_barrier_if_needed(CMContext *ctx, id enc) {
+    if (ctx.metal4Active && ctx.blitHasOps) {
+        if (@available(macOS 26.0, *)) {
+            [(id<MTL4ComputeCommandEncoder>)enc barrierAfterEncoderStages:MTLStageBlit
+                                                      beforeEncoderStages:MTLStageBlit
+                                                        visibilityOptions:MTL4VisibilityOptionDevice];
+        }
+    }
 }
 
 static id ensure_blit_encoder(CMContext *ctx) {
@@ -70,6 +81,7 @@ static id ensure_blit_encoder(CMContext *ctx) {
         } else {
             ctx.activeBlitEnc = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf blitCommandEncoder];
         }
+        ctx.blitHasOps = NO;
     }
     return ctx.activeBlitEnc;
 }
@@ -300,9 +312,44 @@ void cm_blit_copy_buffer(int64_t ctxPtr, int64_t srcBuf, int64_t srcOff, int64_t
     if (!ctxPtr || !srcBuf || !dstBuf || size <= 0) return;
     @autoreleasepool {
         CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
-        id enc = ensure_blit_encoder(ctx);
         id<MTLBuffer> s = (__bridge id<MTLBuffer>)(void *)srcBuf;
         id<MTLBuffer> d = (__bridge id<MTLBuffer>)(void *)dstBuf;
+        if (s == d && srcOff == dstOff) return;
+        id enc = ensure_blit_encoder(ctx);
+        emit_m4_blit_intra_barrier_if_needed(ctx, enc);
+        BOOL overlaps = (s == d)
+            && ((NSUInteger)srcOff < (NSUInteger)dstOff + (NSUInteger)size)
+            && ((NSUInteger)dstOff < (NSUInteger)srcOff + (NSUInteger)size);
+        if (overlaps) {
+            id<MTLBuffer> tmp = [ctx.device newBufferWithLength:(NSUInteger)size options:MTLResourceStorageModeShared];
+            if (!tmp) return;
+            cm_track_allocation(ctx, tmp);
+            if (ctx.metal4Active) {
+                if (@available(macOS 26.0, *)) {
+                    id<MTL4ComputeCommandEncoder> m4 = (id<MTL4ComputeCommandEncoder>)enc;
+                    [m4 copyFromBuffer:s sourceOffset:(NSUInteger)srcOff
+                              toBuffer:tmp destinationOffset:0
+                                  size:(NSUInteger)size];
+                    [m4 barrierAfterEncoderStages:MTLStageBlit
+                              beforeEncoderStages:MTLStageBlit
+                                visibilityOptions:MTL4VisibilityOptionDevice];
+                    [m4 copyFromBuffer:tmp sourceOffset:0
+                              toBuffer:d destinationOffset:(NSUInteger)dstOff
+                                  size:(NSUInteger)size];
+                }
+            } else {
+                id<MTLBlitCommandEncoder> m3 = (id<MTLBlitCommandEncoder>)enc;
+                [m3 copyFromBuffer:s sourceOffset:(NSUInteger)srcOff
+                          toBuffer:tmp destinationOffset:0
+                              size:(NSUInteger)size];
+                [m3 copyFromBuffer:tmp sourceOffset:0
+                          toBuffer:d destinationOffset:(NSUInteger)dstOff
+                              size:(NSUInteger)size];
+            }
+            cm_retire_object(ctx, tmp, atomic_load(&ctx->_nextSubmitSerial) + 1);
+            ctx.blitHasOps = YES;
+            return;
+        }
         if (ctx.metal4Active) {
             if (@available(macOS 26.0, *)) {
                 [(id<MTL4ComputeCommandEncoder>)enc copyFromBuffer:s sourceOffset:(NSUInteger)srcOff
@@ -314,6 +361,7 @@ void cm_blit_copy_buffer(int64_t ctxPtr, int64_t srcBuf, int64_t srcOff, int64_t
                                                   toBuffer:d destinationOffset:(NSUInteger)dstOff
                                                       size:(NSUInteger)size];
         }
+        ctx.blitHasOps = YES;
     }
 }
 
@@ -359,6 +407,7 @@ void cm_blit_copy_buffer_to_texture(int64_t ctxPtr, int64_t srcBuf, int64_t srcO
                                           destinationLevel:(NSUInteger)mip
                                          destinationOrigin:MTLOriginMake((NSUInteger)dstX, (NSUInteger)dstY, 0)];
         }
+        ctx.blitHasOps = YES;
     }
 }
 
@@ -372,11 +421,9 @@ void cm_blit_copy_texture_to_buffer(int64_t ctxPtr, int64_t srcTex, int32_t mip,
         id<MTLTexture> t = (__bridge id<MTLTexture>)(void *)srcTex;
         id<MTLBuffer> d = (__bridge id<MTLBuffer>)(void *)dstBuf;
         NSUInteger bpr = dstRowBytes > 0 ? (NSUInteger)dstRowBytes : ((NSUInteger)w * cm_bytes_per_pixel(t.pixelFormat));
+        emit_m4_blit_intra_barrier_if_needed(ctx, enc);
         if (ctx.metal4Active) {
             if (@available(macOS 26.0, *)) {
-                [(id<MTL4ComputeCommandEncoder>)enc barrierAfterEncoderStages:MTLStageBlit
-                                                          beforeEncoderStages:MTLStageBlit
-                                                            visibilityOptions:MTL4VisibilityOptionDevice];
                 [(id<MTL4ComputeCommandEncoder>)enc copyFromTexture:t sourceSlice:(NSUInteger)slice
                                                        sourceLevel:(NSUInteger)mip
                                                       sourceOrigin:MTLOriginMake((NSUInteger)srcX, (NSUInteger)srcY, 0)
@@ -392,6 +439,7 @@ void cm_blit_copy_texture_to_buffer(int64_t ctxPtr, int64_t srcTex, int32_t mip,
                                                    toBuffer:d destinationOffset:(NSUInteger)dstOff
                                      destinationBytesPerRow:bpr destinationBytesPerImage:0];
         }
+        ctx.blitHasOps = YES;
     }
 }
 
@@ -404,11 +452,9 @@ void cm_blit_copy_texture(int64_t ctxPtr, int64_t srcTex, int32_t srcMip, int32_
         id enc = ensure_blit_encoder(ctx);
         id<MTLTexture> s = (__bridge id<MTLTexture>)(void *)srcTex;
         id<MTLTexture> d = (__bridge id<MTLTexture>)(void *)dstTex;
+        emit_m4_blit_intra_barrier_if_needed(ctx, enc);
         if (ctx.metal4Active) {
             if (@available(macOS 26.0, *)) {
-                [(id<MTL4ComputeCommandEncoder>)enc barrierAfterEncoderStages:MTLStageBlit
-                                                          beforeEncoderStages:MTLStageBlit
-                                                            visibilityOptions:MTL4VisibilityOptionDevice];
                 [(id<MTL4ComputeCommandEncoder>)enc copyFromTexture:s sourceSlice:(NSUInteger)srcSlice
                                                        sourceLevel:(NSUInteger)srcMip
                                                       sourceOrigin:MTLOriginMake((NSUInteger)srcX, (NSUInteger)srcY, 0)
@@ -426,6 +472,7 @@ void cm_blit_copy_texture(int64_t ctxPtr, int64_t srcTex, int32_t srcMip, int32_
                                            destinationLevel:(NSUInteger)dstMip
                                           destinationOrigin:MTLOriginMake((NSUInteger)dstX, (NSUInteger)dstY, 0)];
         }
+        ctx.blitHasOps = YES;
     }
 }
 
@@ -909,6 +956,7 @@ void cm_pass_multi_draw_indexed(int64_t ctxPtr, int32_t topology,
                 int32_t ic = indexCounts[i];
                 if (ic <= 0) continue;
                 NSUInteger off = (NSUInteger)indexOffsetsBytes[i];
+                if (off >= ilen) continue;
                 NSInteger bv = baseVertices ? (NSInteger)baseVertices[i] : 0;
                 [enc drawIndexedPrimitives:pt indexCount:(NSUInteger)ic indexType:ctx.boundIndexType
                                indexBuffer:ibase + off indexBufferLength:ilen - off
