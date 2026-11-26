@@ -1,0 +1,118 @@
+{
+  "apiVersion": 1,
+  "id": "builtin:celestia-minimal",
+  "name": "Celestia Minimal",
+  "author": "Celestia Metal Contributors",
+  "version": "1.0.0",
+  "description": "Ultra-lightweight native MSL enhancement pack targeting 120 Hz ProMotion and low battery draw: atmospheric sky LUT, crisp water reflections, warm torchlight, and AgX tone mapping.",
+  "categories": [
+    "Lighting & Atmosphere",
+    "Water",
+    "Color & HDR"
+  ],
+  "presets": {
+    "Ultra-Light": {
+      "WATER_SPECULAR": "false",
+      "WARM_TORCHLIGHT": "true",
+      "AERIAL_FOG": "true",
+      "SATURATION": "1.04",
+      "EXPOSURE": "1.0"
+    },
+    "Crisp": {
+      "WATER_SPECULAR": "true",
+      "WARM_TORCHLIGHT": "true",
+      "AERIAL_FOG": "true",
+      "SATURATION": "1.08",
+      "EXPOSURE": "1.05"
+    }
+  },
+  "options": [
+    {
+      "id": "WARM_TORCHLIGHT",
+      "label": "Warm Block Lighting",
+      "description": "Applies warm amber tinting to torch, lantern, and glowstone illumination.",
+      "category": "Lighting & Atmosphere",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "NEGLIGIBLE"
+    },
+    {
+      "id": "AERIAL_FOG",
+      "label": "Horizon Sky Fog",
+      "description": "Smoothly blends distant terrain into the atmospheric sky LUT.",
+      "category": "Lighting & Atmosphere",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "LOW"
+    },
+    {
+      "id": "WATER_SPECULAR",
+      "label": "Water Fresnel & Sun Glint",
+      "description": "Adds sky-LUT Fresnel reflections and sun specular highlights on water.",
+      "category": "Water",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "LOW"
+    },
+    {
+      "id": "EXPOSURE",
+      "label": "Exposure",
+      "description": "Scene brightness multiplier prior to AgX tone mapping.",
+      "category": "Color & HDR",
+      "type": "FLOAT_SLIDER",
+      "min": 0.7,
+      "max": 1.4,
+      "step": 0.05,
+      "default": "1.05",
+      "impact": "NEGLIGIBLE"
+    },
+    {
+      "id": "SATURATION",
+      "label": "Vibrance",
+      "description": "Color saturation balance.",
+      "category": "Color & HDR",
+      "type": "FLOAT_SLIDER",
+      "min": 0.85,
+      "max": 1.3,
+      "step": 0.05,
+      "default": "1.08",
+      "impact": "NEGLIGIBLE"
+    }
+  ],
+  "passes": [
+    {
+      "name": "sky_lut",
+      "stage": "COMPUTE",
+      "shader": "sky_lut.metal",
+      "entryPoint": "celestia_min_sky_lut_cs",
+      "scale": 1.0,
+      "format": "RGBA16_FLOAT",
+      "threadgroupX": 8,
+      "threadgroupY": 8
+    },
+    {
+      "name": "fast_lighting",
+      "stage": "FULLSCREEN",
+      "shader": "fast_lighting.metal",
+      "entryPoint": "celestia_min_lighting_fs",
+      "scale": 1.0,
+      "format": "RGBA16_FLOAT"
+    },
+    {
+      "name": "water_minimal",
+      "stage": "FULLSCREEN",
+      "shader": "water_minimal.metal",
+      "entryPoint": "celestia_min_water_fs",
+      "scale": 1.0,
+      "format": "RGBA16_FLOAT"
+    },
+    {
+      "name": "tonemap_minimal",
+      "stage": "FULLSCREEN",
+      "shader": "tonemap_minimal.metal",
+      "entryPoint": "celestia_min_tonemap_fs",
+      "scale": 1.0,
+      "format": "RGBA16_FLOAT"
+    }
+  ]
+}
