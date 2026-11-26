@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0-alpha.9
+
+### Added
+- **Sodium 0.9+ / Reese's Sodium Options Config API Integration**: Implemented `CelestiaSodiumConfigEntrypoint` (`sodium:config_api_user` in `fabric.mod.json`) so **Celestia Metal** appears directly in Sodium's Video Settings sidebar with `Apple Silicon`, `Performance`, `Shader Packs`, and `CelestiaGlow UI` pages while keeping zero hard dependency when Sodium is not installed.
+- **Updated Roadmap ([ARCHITECTURE.md](ARCHITECTURE.md))**: Added zero-allocation hot-path FFM encoding, Metal 4 uniform/vertex GPU-address deduplication, and full-frame GPU timestamp accumulation alongside live `LevelRenderer` G-buffer/shadow injection, Iris frame-graph execution, and standalone indirect terrain meshing.
+
 ## 0.1.0-alpha.8
 
 ### Fixed

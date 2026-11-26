@@ -25,7 +25,7 @@ Celestia Metal replaces Minecraft's legacy OpenGL path with Apple's native **Met
   - Load third-party native MSL packs or **Iris / OptiFine GLSL packs** from `shaderpacks/` (with `shaders.properties`, `.lang` labels, and `.txt` config compatibility).
   - Hotkeys in-game: **`O`** (Shader Packs), **`K`** (Pause/Resume Shaders), **`R`** (Hot-Reload Shaders).
 - **CelestiaGlow Frosted Observatory UI**:
-  - Replaces Vanilla Video Settings with a Reese's Sodium Options–inspired tabbed, searchable screen (`General`, `Quality`, `Performance`, `Apple Silicon`, `Shaders`, `Advanced`), plus dedicated Shader Packs and Shader Options screens and a live Performance HUD pill.
+  - Replaces Vanilla Video Settings with a Reese's Sodium Options–inspired tabbed, searchable screen (`General`, `Quality`, `Performance`, `Apple Silicon`, `Shaders`, `Advanced`), integrates cleanly into Sodium 0.9+ / Reese's Sodium Options via Sodium's Config API when Sodium is installed, and includes dedicated Shader Packs and Shader Options screens plus a live Performance HUD pill.
 
 ---
 
@@ -42,7 +42,7 @@ Celestia Metal replaces Minecraft's legacy OpenGL path with Apple's native **Met
 ## Installation
 
 1. Install **Fabric Loader 0.19.5+** for **Minecraft 26.3**.
-2. Download `celestia-metal-0.1.0-alpha.8.jar` from Releases (or build with `./gradlew build`).
+2. Download `celestia-metal-0.1.0-alpha.9.jar` from Releases (or build with `./gradlew build`).
 3. Place the JAR in your instance's `mods/` folder.
 4. Launch Minecraft. Celestia Metal activates automatically when **Graphics API** is set to **Default** (press **F3** to check the `Celestia Metal` debug entry).
 
@@ -75,7 +75,7 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@25 ./gradlew build check
 JAVA_HOME=/opt/homebrew/opt/openjdk@25 ./gradlew runNativeTests
 ```
 
-The output single JAR is written to `build/libs/celestia-metal-0.1.0-alpha.8.jar`.
+The output single JAR is written to `build/libs/celestia-metal-0.1.0-alpha.9.jar`.
 
 ---
 

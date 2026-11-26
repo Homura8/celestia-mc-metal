@@ -13,7 +13,8 @@
   "license": "Apache-2.0",
   "environment": "client",
   "entrypoints": {
-    "client": ["dev.celestia.metal.CelestiaMetalMod"]
+    "client": ["dev.celestia.metal.CelestiaMetalMod"],
+    "sodium:config_api_user": ["dev.celestia.metal.ui.CelestiaSodiumConfigEntrypoint"]
   },
   "accessWidener": "celestiametal.accesswidener",
   "mixins": ["celestiametal.mixins.json"],
