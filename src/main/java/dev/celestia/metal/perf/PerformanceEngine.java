@@ -17,6 +17,16 @@ public final class PerformanceEngine {
     private double ewmaGpuMs = 0.0;
     private double ewmaFrameMs = 8.33;
     private int effectiveScalePercent = 100;
+    // Auto Render Scale trial: a step down is kept only if it measurably shortens the frame (the upscaler has a fixed
+    // GPU cost, ~2 ms for MetalFX Spatial at 3024x1752, so a lower scale can be slower on light scenes).
+    private int trialFromPercent = -1;
+    private double trialBaselineFrameMs;
+    private int trialFramesLeft;
+    private int noStepBelowPercent;
+    private long noStepBelowUntilMs;
+    static final int TRIAL_FRAMES = 90;
+    static final double TRIAL_MIN_GAIN = 0.03;
+    static final long TRIAL_BACKOFF_MS = 15_000L;
     private long lastTelemetryPollMs;
     private int thermalState;
     private boolean lowPowerMode;
@@ -69,6 +79,20 @@ public final class PerformanceEngine {
         CelestiaConfig.AppleSiliconSection cfg = CelestiaConfig.get().appleSilicon;
         if (!cfg.autoRenderScale) {
             effectiveScalePercent = cfg.renderScalePercent;
+            trialFromPercent = -1;
+            return;
+        }
+        if (trialFromPercent >= 0) {
+            if (--trialFramesLeft > 0) return;
+            boolean helped = ewmaFrameMs < trialBaselineFrameMs * (1.0 - TRIAL_MIN_GAIN);
+            if (!helped) {
+                // Not faster at the lower scale: go back and don't try below it for a while.
+                effectiveScalePercent = trialFromPercent;
+                noStepBelowPercent = trialFromPercent;
+                noStepBelowUntilMs = System.currentTimeMillis() + TRIAL_BACKOFF_MS;
+            }
+            trialFromPercent = -1;
+            autoScaleCooldownFrames = 45;
             return;
         }
         if (autoScaleCooldownFrames > 0) {
@@ -79,11 +103,15 @@ public final class PerformanceEngine {
         if (lowPowerMode || cfg.thermalMode == CelestiaConfig.ThermalMode.BATTERY_SAVER) {
             targetBudgetMs = 1000.0 / 60.0;
         }
-        if (ewmaGpuMs > targetBudgetMs * 0.92 && effectiveScalePercent > 65) {
+        int maxPercent = cfg.renderScalePercent;
+        boolean backoff = System.currentTimeMillis() < noStepBelowUntilMs && effectiveScalePercent <= noStepBelowPercent;
+        if (ewmaGpuMs > targetBudgetMs * 0.92 && effectiveScalePercent > 65 && !backoff) {
+            trialFromPercent = effectiveScalePercent;
+            trialBaselineFrameMs = ewmaFrameMs;
+            trialFramesLeft = TRIAL_FRAMES;
             effectiveScalePercent = Math.max(65, effectiveScalePercent - 5);
-            autoScaleCooldownFrames = 45;
-        } else if (ewmaGpuMs > 0.0 && ewmaGpuMs < targetBudgetMs * 0.65 && effectiveScalePercent < cfg.renderScalePercent) {
-            effectiveScalePercent = Math.min(cfg.renderScalePercent, effectiveScalePercent + 5);
+        } else if (ewmaGpuMs > 0.0 && ewmaGpuMs < targetBudgetMs * 0.65 && effectiveScalePercent < maxPercent) {
+            effectiveScalePercent = Math.min(maxPercent, effectiveScalePercent + 5);
             autoScaleCooldownFrames = 90;
         }
         if (cfg.thermalMode != CelestiaConfig.ThermalMode.OFF && thermalState >= 2) {

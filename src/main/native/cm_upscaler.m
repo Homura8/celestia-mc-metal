@@ -140,3 +140,215 @@ void cm_upscaler_encode(int64_t ctxPtr, int64_t upscalerPtr, int64_t colorTexPtr
         }
     }
 }
+
+
+// ---- World render scale: whole-texture upscale (bilinear pass or MetalFX Spatial) ----
+
+static const char *const kUpscaleBlitMSL = R"MSL(
+#include <metal_stdlib>
+using namespace metal;
+struct BlitOut { float4 pos [[position]]; float2 uv; };
+vertex BlitOut cm_upscale_vs(uint vid [[vertex_id]]) {
+    BlitOut o;
+    float2 p = float2((vid == 1) ? 3.0f : -1.0f, (vid == 2) ? 3.0f : -1.0f);
+    o.pos = float4(p, 0.0f, 1.0f);
+    // Same orientation in source and destination (no Y flip, unlike the present pass).
+    o.uv = float2((p.x + 1.0f) * 0.5f, (1.0f - p.y) * 0.5f);
+    return o;
+}
+fragment float4 cm_upscale_fs(BlitOut in [[stage_in]], texture2d<float> src [[texture(0)]], sampler s [[sampler(0)]]) {
+    return src.sample(s, in.uv);
+}
+)MSL";
+
+@interface CMUpscalePath : NSObject
+@property (nonatomic, strong) id<MTLLibrary> lib;
+@property (nonatomic, strong) NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *blitPsos;
+@property (nonatomic, strong) id<MTLSamplerState> linear;
+@property (nonatomic, strong) id spatial;            // MTLFXSpatialScaler or MTL4FXSpatialScaler
+@property (nonatomic) BOOL spatialM4;
+@property (nonatomic) BOOL spatialUnavailable;
+@property (nonatomic) NSUInteger inW, inH, outW, outH;
+@property (nonatomic) MTLPixelFormat inFmt, outFmt;
+@property (nonatomic, strong) id<MTLTexture> spatialOut;
+@end
+@implementation CMUpscalePath
+@end
+
+static CMUpscalePath *upscale_path(CMContext *ctx) {
+    CMUpscalePath *p = (CMUpscalePath *)ctx.upscalePath;
+    if (p) return p;
+    p = [CMUpscalePath new];
+    p.blitPsos = [NSMutableDictionary dictionary];
+    MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
+    sd.minFilter = MTLSamplerMinMagFilterLinear;
+    sd.magFilter = MTLSamplerMinMagFilterLinear;
+    sd.sAddressMode = MTLSamplerAddressModeClampToEdge;
+    sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
+    sd.supportArgumentBuffers = YES;
+    p.linear = [ctx.device newSamplerStateWithDescriptor:sd];
+    ctx.upscalePath = p;
+    return p;
+}
+
+static id<MTLRenderPipelineState> blit_pso(CMContext *ctx, CMUpscalePath *p, MTLPixelFormat fmt) {
+    id<MTLRenderPipelineState> pso = p.blitPsos[@(fmt)];
+    if (pso) return pso;
+    NSError *err = nil;
+    if (!p.lib) {
+        p.lib = [ctx.device newLibraryWithSource:[NSString stringWithUTF8String:kUpscaleBlitMSL] options:nil error:&err];
+        if (!p.lib) { cm_record_error(ctx, err ? err.localizedDescription : @"upscale blit shader failed"); return nil; }
+    }
+    MTLRenderPipelineDescriptor *rpd = [MTLRenderPipelineDescriptor new];
+    rpd.vertexFunction = [p.lib newFunctionWithName:@"cm_upscale_vs"];
+    rpd.fragmentFunction = [p.lib newFunctionWithName:@"cm_upscale_fs"];
+    rpd.colorAttachments[0].pixelFormat = fmt;
+    pso = [ctx.device newRenderPipelineStateWithDescriptor:rpd error:&err];
+    if (!pso) { cm_record_error(ctx, err ? err.localizedDescription : @"upscale blit pipeline failed"); return nil; }
+    p.blitPsos[@(fmt)] = pso;
+    return pso;
+}
+
+static BOOL encode_bilinear(CMContext *ctx, CMUpscalePath *p, id<MTLTexture> src, id<MTLTexture> dst) {
+    id<MTLRenderPipelineState> pso = blit_pso(ctx, p, dst.pixelFormat);
+    if (!pso) return NO;
+    MTLViewport vp = { 0.0, 0.0, (double)dst.width, (double)dst.height, 0.0, 1.0 };
+    MTLScissorRect sr = { 0, 0, dst.width, dst.height };
+    ctx->_stats[CM_STAT_RENDER_ENCODERS]++;
+    if (ctx.metal4Active) {
+        if (@available(macOS 26.0, *)) {
+            MTL4RenderPassDescriptor *rpd = [MTL4RenderPassDescriptor new];
+            rpd.colorAttachments[0].texture = dst;
+            rpd.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+            rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
+            id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
+            if (!enc) return NO;
+            [enc setViewport:vp];
+            [enc setScissorRect:sr];
+            [enc setCullMode:MTLCullModeNone];
+            [enc setRenderPipelineState:pso];
+            id<MTL4ArgumentTable> at = (id<MTL4ArgumentTable>)ctx.m4FragmentArgTable;
+            [at setTexture:src.gpuResourceID atIndex:0];
+            [at setSamplerState:p.linear.gpuResourceID atIndex:0];
+            [enc setArgumentTable:at atStages:MTLRenderStageVertex | MTLRenderStageFragment];
+            [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+            [enc barrierAfterStages:MTLStageFragment
+                  beforeQueueStages:MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit
+                  visibilityOptions:MTL4VisibilityOptionDevice];
+            [enc endEncoding];
+        }
+    } else {
+        MTLRenderPassDescriptor *rpd = [MTLRenderPassDescriptor renderPassDescriptor];
+        rpd.colorAttachments[0].texture = dst;
+        rpd.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+        rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> enc = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf renderCommandEncoderWithDescriptor:rpd];
+        if (!enc) return NO;
+        [enc setViewport:vp];
+        [enc setScissorRect:sr];
+        [enc setCullMode:MTLCullModeNone];
+        [enc setRenderPipelineState:pso];
+        [enc setFragmentTexture:src atIndex:0];
+        [enc setFragmentSamplerState:p.linear atIndex:0];
+        [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [enc endEncoding];
+    }
+    return YES;
+}
+
+static BOOL ensure_spatial(CMContext *ctx, CMUpscalePath *p, id<MTLTexture> src, id<MTLTexture> dst) {
+    if (p.spatialUnavailable) return NO;
+    if (p.spatial && p.inW == src.width && p.inH == src.height && p.outW == dst.width && p.outH == dst.height
+        && p.inFmt == src.pixelFormat && p.outFmt == dst.pixelFormat) {
+        return YES;
+    }
+    if (![MTLFXSpatialScalerDescriptor supportsDevice:ctx.device]) { p.spatialUnavailable = YES; return NO; }
+    MTLFXSpatialScalerDescriptor *sd = [MTLFXSpatialScalerDescriptor new];
+    sd.colorTextureFormat = src.pixelFormat;
+    sd.outputTextureFormat = dst.pixelFormat;
+    sd.inputWidth = src.width;
+    sd.inputHeight = src.height;
+    sd.outputWidth = dst.width;
+    sd.outputHeight = dst.height;
+    sd.colorProcessingMode = (dst.pixelFormat == MTLPixelFormatRGBA16Float)
+        ? MTLFXSpatialScalerColorProcessingModeHDR : MTLFXSpatialScalerColorProcessingModePerceptual;
+    id scaler = nil;
+    BOOL m4 = NO;
+    if (ctx.metal4Active && ctx.m4Compiler && [MTLFXSpatialScalerDescriptor respondsToSelector:@selector(supportsMetal4FX:)]
+        && [MTLFXSpatialScalerDescriptor supportsMetal4FX:ctx.device]) {
+        if (@available(macOS 26.0, *)) {
+            scaler = [sd newSpatialScalerWithDevice:ctx.device compiler:(id<MTL4Compiler>)ctx.m4Compiler];
+            m4 = scaler != nil;
+        }
+    }
+    if (!scaler && !ctx.metal4Active) scaler = [sd newSpatialScalerWithDevice:ctx.device];
+    if (!scaler) { p.spatialUnavailable = YES; return NO; }
+    // MetalFX writes an output texture with the usage it requests; Minecraft's main target is copied from it.
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:dst.pixelFormat
+                                                                                   width:dst.width height:dst.height mipmapped:NO];
+    td.storageMode = MTLStorageModePrivate;
+    td.usage = [(id<MTLFXSpatialScalerBase>)scaler outputTextureUsage] | MTLTextureUsageShaderRead;
+    id<MTLTexture> out = [ctx.device newTextureWithDescriptor:td];
+    if (!out) { p.spatialUnavailable = YES; return NO; }
+    if (ctx.debugLabels) out.label = @"CelestiaMetal.WorldUpscaleOut";
+    if (p.spatialOut) {
+        cm_untrack_allocation(ctx, p.spatialOut);
+        cm_retire_object(ctx, p.spatialOut, atomic_load(&ctx->_nextSubmitSerial) + 1);
+    }
+    if (p.spatial) cm_retire_object(ctx, p.spatial, atomic_load(&ctx->_nextSubmitSerial) + 1);
+    cm_track_allocation(ctx, out);
+    p.spatial = scaler;
+    p.spatialM4 = m4;
+    p.spatialOut = out;
+    p.inW = src.width; p.inH = src.height; p.outW = dst.width; p.outH = dst.height;
+    p.inFmt = src.pixelFormat; p.outFmt = dst.pixelFormat;
+    return YES;
+}
+
+static BOOL encode_spatial(CMContext *ctx, CMUpscalePath *p, id<MTLTexture> src, id<MTLTexture> dst) {
+    if (!ensure_spatial(ctx, p, src, dst)) return NO;
+    id<MTLFXSpatialScalerBase> ss = (id<MTLFXSpatialScalerBase>)p.spatial;
+    ss.colorTexture = src;
+    ss.outputTexture = p.spatialOut;
+    ss.inputContentWidth = src.width;
+    ss.inputContentHeight = src.height;
+    if (ctx.metal4Active) {
+        if (@available(macOS 26.0, *)) {
+            if (!p.spatialM4) return NO;
+            [(id<MTL4FXSpatialScaler>)ss encodeToCommandBuffer:(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf];
+            // Copy MetalFX's output into the destination: the copy must wait for MetalFX's write (consumer barrier)
+            // and later render passes must see the copy (producer barrier).
+            id<MTL4ComputeCommandEncoder> ce = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf computeCommandEncoder];
+            [ce barrierAfterQueueStages:MTLStageDispatch | MTLStageBlit | MTLStageFragment | MTLStageVertex
+                           beforeStages:MTLStageBlit
+                      visibilityOptions:MTL4VisibilityOptionDevice];
+            [ce copyFromTexture:p.spatialOut toTexture:dst];
+            [ce barrierAfterStages:MTLStageBlit
+                 beforeQueueStages:MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit
+                 visibilityOptions:MTL4VisibilityOptionDevice];
+            [ce endEncoding];
+            ctx->_stats[CM_STAT_BLIT_ENCODERS]++;
+        }
+    } else {
+        [(id<MTLFXSpatialScaler>)ss encodeToCommandBuffer:(id<MTLCommandBuffer>)ctx.activeM3CmdBuf];
+        id<MTLBlitCommandEncoder> be = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf blitCommandEncoder];
+        [be copyFromTexture:p.spatialOut toTexture:dst];
+        [be endEncoding];
+        ctx->_stats[CM_STAT_BLIT_ENCODERS]++;
+    }
+    return YES;
+}
+
+int32_t cm_upscale_to(int64_t ctxPtr, int64_t srcTexPtr, int64_t dstTexPtr, int32_t mode) {
+    if (!ctxPtr || !srcTexPtr || !dstTexPtr) return -1;
+    @autoreleasepool {
+        CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
+        id<MTLTexture> src = (__bridge id<MTLTexture>)(void *)srcTexPtr;
+        id<MTLTexture> dst = (__bridge id<MTLTexture>)(void *)dstTexPtr;
+        cm_cmd_begin(ctxPtr);
+        cm_flush_encoders(ctx);
+        CMUpscalePath *p = upscale_path(ctx);
+        if (mode == 1 && encode_spatial(ctx, p, src, dst)) return 1;
+        return encode_bilinear(ctx, p, src, dst) ? 0 : -1;
+    }
+}

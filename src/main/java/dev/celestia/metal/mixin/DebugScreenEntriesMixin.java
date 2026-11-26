@@ -3,6 +3,7 @@ package dev.celestia.metal.mixin;
 import dev.celestia.metal.backend.CelestiaMetalDevice;
 import dev.celestia.metal.backend.MetalConst;
 import dev.celestia.metal.perf.PerformanceEngine;
+import dev.celestia.metal.render.WorldRenderScale;
 import dev.celestia.metal.shader.pack.ShaderPipelineManager;
 import net.minecraft.client.gui.components.debug.DebugScreenDisplayer;
 import net.minecraft.client.gui.components.debug.DebugScreenEntries;
@@ -41,9 +42,10 @@ public abstract class DebugScreenEntriesMixin {
                 String api = dev.isMetal4() ? "Metal 4" : "Metal 3";
                 String shader = ShaderPipelineManager.get().activeDisplayName();
                 displayer.addLine(String.format(
-                    "Celestia Metal: %s (%s) | GPU %.2f ms | Scale %d%% | %s | Shader: %s",
+                    "Celestia Metal: %s (%s) | GPU %.2f ms | Scale %d%% (%s) | %s | Shader: %s",
                     api, dev.probeInfo().gpuName(), perf.ewmaGpuMs(),
-                    perf.effectiveRenderScalePercent(), perf.thermalLabel(), shader
+                    perf.effectiveRenderScalePercent(), WorldRenderScale.statusLabel(),
+                    perf.thermalLabel(), shader
                 ));
                 long[] st = dev.lastFrameStats();
                 displayer.addLine(String.format(

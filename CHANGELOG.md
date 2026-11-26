@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-alpha.14
+
+### Added
+- **World render scale (Internal Render Scale / Auto Render Scale now work)**: these settings previously had no effect. The 3D world (vanilla and Sodium terrain, entities, post effects, entity outlines, the first-person hand) now renders into a scaled target and is upscaled into the full-size main target right before the GUI, so the HUD, chat, F3 and mod overlays such as Xaero's minimap stay at full resolution. `GameRendererMixin` swaps `GameRenderer.mainRenderTarget` / `hud3DTarget` from just before `preparePostEffects` until after `applyPostEffects`; `WorldRenderScale` owns the scaled targets, replays the frame clear onto them and keeps the level renderer's targets at the scaled size. Auto Render Scale (65%–max, driven by GPU frame time) now acts on it. This scaled target is also where native shader packs will render.
+- **Upscalers**: `cm_upscale_to` with a bilinear pass or **MetalFX Spatial** (`MTL4FXSpatialScaler` on Metal 4, `MTLFXSpatialScaler` on Metal 3, written to an intermediate with the usage MetalFX requires and copied into the main target behind Metal 4 consumer/producer barriers); falls back to bilinear if MetalFX is unavailable. *MetalFX Temporal* currently uses Spatial (temporal needs motion vectors and jitter, planned with native shader packs).
+- **Auto Render Scale only keeps a step that helps**: each step down is held for 90 frames and reverted if the frame did not get at least 3% faster, with a 15 s back-off before trying below that scale again (adapted from Pure Metal's Auto Render Scale behaviour). Needed because the upscaler has a fixed cost: measured ~2.0 ms GPU for MetalFX Spatial and ~0.7 ms for bilinear into 3024x1752 (`benchmark_upscale`), so on light (non-shader) scenes a lower scale can be slower. In-game on M1 Pro with Xaero's minimap: 100% 260 FPS, 75% 200 FPS, 50% 210 FPS with MetalFX Spatial. Render scale is meant for heavy scenes and shader packs; defaults stay 100% with Auto off.
+- F3 shows the active upscale path and internal size (e.g. `Scale 75% (MetalFX Spatial 2268x1314)`).
+- Native Test 2k (bilinear and MetalFX Spatial upscale: orientation, coverage, path used) on Metal 4 and Metal 3.
+
 ## 0.1.0-alpha.13
 
 ### Performance
