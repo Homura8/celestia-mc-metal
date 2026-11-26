@@ -137,3 +137,83 @@ Key architectural facts:
 - Sodium classes must never load when Sodium is absent (separate classes + `isModLoaded` guard).
 - Reversed-Z in MC 26.3 (depth 1 near, 0 far); MC render targets are Vulkan-layout (Y flipped vs Metal, present flips).
 - Keep `checkPrivacy` passing (no absolute home paths in committed files).
+
+---
+
+## 8. P0 Inventory & Celestia Slot Mapping
+
+Reference checkout: `GaelQuinta/minecraft-metal-shaders` at commit `dd32304de37257808c19793ea504d3c2f1f650a2` (`2026-11-26`, kept outside this repo at `~/minecraft-metal-shaders-ref`).
+
+### 8.1 Celestia Backend Slot Budget vs. Upstream Metal Shaders
+
+Celestia's `MTL4ArgumentTableDescriptor` (`src/main/native/cm_device.m`) uses one unified render argument table across `MTLRenderStageVertex | MTLRenderStageFragment` with:
+- `maxBufferBindCount = 31` (indices `0..30`, Apple Silicon Metal 4 limit)
+- `maxTextureBindCount = 32` (indices `0..31`)
+- `maxSamplerStateBindCount = 16` (indices `0..15`)
+
+| Resource Type | Upstream Metal Shaders (World Passes) | Celestia Existing Allocation (`celestia_metal.h`) | Celestia Port Mapping |
+|---|---|---|---|
+| **Buffers `0..14`** | Game uniform blocks (`0..N`) | Game `UNIFORM_BUFFER` slots (`CM_MAX_UNIFORM_BUFFERS = 15`) | **Unchanged (`0..14`)** |
+| **Buffer `15`** | — | Push constants (`CM_PUSH_CONSTANT_SLOT = 15`) | **Unchanged (`15`)** |
+| **Buffers `16..23`** | `16` `ShadeFrame`, `17` `ShadeLook`, `18` `ShadeGpu`, `19` `ShadeResources`, `23` `ShadeWaterParams`/`Head` | Vertex buffers (`CM_VERTEX_BUFFER_BASE = 16`, `CM_MAX_VERTEX_BUFFERS = 8`) | **Conflict resolved** — vertex buffers stay at `16..23`; shade globals move to `24..30` |
+| **Buffers `24..30`** | `24` `ShadeDynLights`, `28..30` own-terrain | **Free** (7 slots) | `24` `ShadeFrame`, `25` `ShadeLook`, `26` `ShadeGpu`, `27` `ShadeResources`, `28` `ShadeWaterParams` (P3), `29` `ShadeDynLights` (P6), `30` reserved |
+| **Textures `0..15`** | Game textures (`0..N`) | Game `COMBINED_IMAGE_SAMPLER` & `TEXEL_BUFFER` (`0..15`, typically `0..3`) | **Unchanged (`0..15`)** |
+| **Textures `16..30`** | `16` `shadowMap`, `17` `skyLut`, `18..22` water, `23..25` dynlights, `29..30` water ripple history | **Free** (`CM_MAX_TEXTURES = 31`, indices `0..30`) | **Kept 1:1 (`16..30`)** (`16` shadowMap, `17` skyLut, `18..22` water, `23..25` dynlights, `29..30` ripple history) |
+| **Texture `31`** | Optional debug `waterCoarse` (`hz`) | `CM_MAX_TEXTURES = 31` guards `< 31` (`maxTextureBindCount = 32`) | Unused in P1–P6; bump `CM_MAX_TEXTURES` to `32` if ever needed |
+| **Samplers `0..11`** | Game samplers (`0..N`) | Game `COMBINED_IMAGE_SAMPLER` samplers (`0..11`, typically `0..3`) | **Unchanged (`0..11`)** |
+| **Samplers `12..15`** | `12` `shadowCompare`, `13` `skyLutSmplr` | **Free** (`CM_MAX_SAMPLERS = 16`, indices `0..15`) | **Kept 1:1 (`12..15`)** (`12` shadowCompare, `13` skyLut/linear, `14..15` spare) |
+
+> [!IMPORTANT]
+> **Uniform Slot Defines (`MCOPT_SLOT_*` vs. RenderPearl `SlotBinding`)**: Upstream `MetalShaderRegistry.slotDefines` assigns a single unified index `i` across buffers and textures (`MCOPT_SLOT_Sampler0 = i`). Celestia's `MetalShaderTranslator.buildBindings` assigns **independent** counters per resource type (`bufferSlot`, `textureSlot`, `samplerSlot`). Replaced stages in Celestia (e.g. `sky`, `celestial`) must emit separate buffer/texture/sampler defines from `celestiaBindings` (`CELESTIA_BUF_<name>`, `CELESTIA_TEX_<name>`, `CELESTIA_SAMP_<name>`).
+
+### 8.2 Global Buffer & Resource Struct Inventory
+
+| Struct / Buffer | Size (Bytes) | Update Frequency & Ringing | Consuming Stages | Celestia Slot | Phase |
+|---|---|---|---|---|---|
+| `ShadeFrame` (`shade_common.metal`) | **1024 B** (`0..1008`) | CPU per-frame in shared ring (`RING = CM_INFLIGHT_SLOTS + 1 = 5`) | World VS/FS, Sky LUT, Post, Shadow, VL, Clouds, Water | **`buffer(24)`** (`CM_SHADE_BUF_FRAME`) | P1 |
+| `ShadeLook` (`shade_look.metal`) | **1136 B** (`0..1120`) | CPU per-frame in same ring slot (`offset 1024`, slot stride `2304 B`) | World VS/FS, Sky LUT, Post, Water, Clouds, VL, Motion Blur | **`buffer(25)`** (`CM_SHADE_BUF_LOOK`) | P1 |
+| `ShadeGpu` (`shade_look.metal`) | **512 B** (`468 B` used) | GPU-written (`exposure` at `176`, `scene` at `192`, `histogram[64]` at `208`, `xdrHot` at `464`); single shared buffer | World FS, Sky, Bloom down0, Histogram, Exposure, TAA | **`buffer(26)`** (`CM_SHADE_BUF_GPU`) | P1 |
+| `ShadeResources` (`shade_look.metal`) | **128 B** (`16 x uint64_t`) | CPU per-frame ring (`RING = 5`); holds `MTLResourceID` of 16 textures | World FS, Sky, Celestial, Post, VL, Water | **`buffer(27)`** (`CM_SHADE_BUF_RESOURCES`) | P1 |
+| `ShadeWaterParams` / `Head` (`water.metal`) | `float4` block | CPU per-frame | Translucent terrain / water (`ShadeWaterHead` in opaque UW caustics) | **`buffer(28)`** (`CM_SHADE_BUF_WATER`) | P3 |
+| `ShadeDynLights` (`dynlight.metal`) | Dynamic ring | CPU per-frame ring | World VS/FS, Compute `shade_dl_irr` | **`buffer(29)`** (`CM_SHADE_BUF_DYNLIGHTS`) | P6 |
+
+### 8.3 `ShadeResources` Argument Buffer Entries (`buffer(27)`)
+
+| Index | Field | Format & Size | Producer | Phase |
+|---|---|---|---|---|
+| `0` | `milkyWay` | `RGBA16F` (baked once; alpha holds fbm noise in P6) | `shade_milkyway_bake` | P1 |
+| `1` | `prevScene` | `RGBA16F` / `RG11B10F` (last frame HDR world or TAA history) | `ShadePost` / TAAU | P1 (dummy), P3/P4 |
+| `2` | `scene` | `RGBA16F` / `RG11B10F` (this frame HDR world; dummy during world pass) | World pass | P1 |
+| `3` | `bloom` | `RGBA16F` (quarter-res bloom accumulation) | `shade_bloom_up` | P1 |
+| `4` | `weatherNoise` | `RG16F` `1024x1024` (puddle/snow tile, baked once) | Weather init | P3 |
+| `5` | `prevDepth` | `R16F` (linear view depth of `prevScene`) | TAAU / Depth copy | P3 / P4 |
+| `6` | `shadowTint` | `RGBA16F` (near-cascade translucent caster tint) | Shadow tint pass | P3 |
+| `7..8` | `pbrNormal`, `pbrSpecular` | `RGBA8` / `float` | Resource pack PBR | P6 |
+| `9` | `waterOpen` | `RGBA8` `128x128` toroidal open-water map | `WaterOpenScan` | P3 |
+| `10` | `reflPano` | `RGBA16F` `2048x512` directional reflection panorama | `shade_water_pano_fs` | P3 |
+| `11` | `aurora` | `RGBA16F` scaled | `shade_aurora_pass` | P6 |
+| `12` | `cloudShadow` | `R8` / `R16F` `256x256` | `cloud_shadow` | P3 |
+| `13` | `cloudDome` | `RGBA16F` upper hemisphere dome | `cloud_dome` | P3 |
+| `14` | `cloudScreen` | `RGBA16F` screen-reconstructed cloud history | `cloud_resolve` | P3 |
+| `15` | `waterSwell` | `RGBA16F` `256x256` mipmapped baked sea swell | `shade_water_bake_swell_fs` | P3 |
+
+### 8.4 Pass-Local Uniforms & Dedicated Encoder Passes
+
+All standalone shade passes (`sky_lut`, `shadow`, `vl`, `clouds`, `taa`, `shade_post`, `motion_blur`, `dynlight`) run in their own render or compute encoders with **no RenderPearl vertex buffers bound** (full-screen triangle via `vertex_id`, vertex pulling in `shadow.metal`, or compute `thread_position_in_grid`). Therefore, pass-local inputs cleanly use `buffer(0..4)` and `texture(0..6)` while keeping global shade bindings at `buffer(24..27)`, `texture(16..17)`, and `sampler(12..13)`:
+
+| Pass / Module | Pass-Local Buffers | Pass-Local Textures | Notes | Phase |
+|---|---|---|---|---|
+| **Sky LUT** (`sky_lut.metal`) | `buffer(24..25)` (`ShadeFrame`, `ShadeLook`) | Out: `skyLut` (`128x80 RGBA16F`) | No pass-local inputs | P1 |
+| **Post Chain** (`shade_post.metal`) | `buffer(0)` (`float4` / `ShadeBloomUp` / `ShadeFinalParams` 96 B), `buffer(24..27)` | `texture(0..6)` (`scene`, `bloom`, `depth`, `bloom0`, `vlT`, `vlD`, `taaDepth`) + `texture(17)` `skyLut` | `shade_histogram` & `shade_exposure` run as compute dispatches on `buffer(26)` (`ShadeGpu`) | P1 |
+| **Sun Shadows** (`shadow.metal`) | `buffer(0..4)` (`arena`, `chunks`, `regions`, `ShadowCascade` 80 B, `EntityCast` 32 B / `ShadowTintParams` 48 B) | `texture(0)` + `sampler(0)` (atlas/entity texture for cutout/tint); Out: `depth2d_array<float>` (2 slices) | Separate shadow pass; rebinds globals afterward | P2 |
+| **Water** (`water.metal`) | `buffer(28)` (`ShadeWaterParams`) in world translucent pass; `buffer(0)` in `hz`/`pyr`/`bake`/`pano` passes | `texture(18..22, 29..30)` in world pass; `texture(0)` in pre/capture passes | Scene copy splits world pass; requires `cm_flush_encoders` + Metal 4 barriers | P3 |
+| **Volumetric Light** (`vl.metal`) | `buffer(0)` (`VlParams`), `buffer(1)` (`VlState` 16 B) + `buffer(24..27)` | `texture(0..4)` (`depth`, `prevSky`, `shadeGrid`, `history`, `veil`/`od`) + `texture(16..17)` | Compute (`canopy` + `shade_grid`) + fragment (`march`, `fold`, `veil`, `composite`) | P3 |
+| **Clouds** (`clouds.metal`) | `buffer(0)` (`CloudParams` / `mode`) + `buffer(24..26)` | `texture(0..3)` (`weather`, `noise`, `cur`/`hist`, `depth`) + `texture(17)` | Compute bake (`noise`/`weather`) + fragment (`march`, `resolve`, `over`, `dome`, `shadow`) | P3 |
+| **TAAU** (`taa.metal`) | `buffer(0)` (`TaaParams`), `buffer(1)` (`exposure` / `ShadeGpu + 176`), `buffer(2)` (`TaaMovers`) | `texture(0..4)` (`cur`, `curDepth`, `hist`, `histDepth`, `reactive`) | Or MetalFX Temporal via `cm_upscaler_encode` inside `cm_upscale_to` | P4 |
+
+### 8.5 Metal 4 Residency, Barriers, and Native Helper Contract (for P1+)
+
+1. **Residency (`MTLResidencySet`)**: Every buffer and texture backing `ShadeFrame`/`ShadeLook` rings, `ShadeGpu`, `ShadeResources` (and every texture placed inside `ShadeResources`), `skyLut`, HDR world target, bloom mip chain, and `dummyShadow`/`dummyTexture` must be registered with `cm_track_allocation(ctx, obj)` on creation and retired via `cm_retire_object(ctx, obj, serial)` on destruction/resize. On Metal 3, encoders reading `ShadeResources` call `[enc useResources:list count:n usage:MTLResourceUsageRead stages:MTLRenderStageVertex | MTLRenderStageFragment]` (skipping any texture bound as an active render attachment).
+2. **Metal 4 Argument Table & Encoder Re-binding**: `cm_pass_begin` / merged pass continuation binds `ctx.m4VertexArgTable` (`buffers 0..30`, `textures 0..30`, `samplers 0..15`). Any native shade helper (`cm_shade_bind`, `cm_shade_lut_render`, `cm_shade_post_*`) that updates slots `24..27`, textures `16..17`, or samplers `12..13` must either go through `ctx`'s dedup caches or reset the relevant cache entries when switching between shade-owned encoders and RenderPearl world encoders.
+3. **Encoders & Barriers**: Every non-render-pass GPU operation (Sky LUT render pass, bloom chain, compute histogram/exposure, blit copies) **must** call `cm_flush_encoders(ctx)` first so soft-ended RenderPearl passes and deferred clears are never reordered, and emit explicit Metal 4 producer/intra-pass barriers (`emit_m4_render_producer_barrier` / compute `barrierAfterEncoderStages:`) between producer and consumer stages.
+4. **Native ABI & `checkPrivacy`**: Any new `cm_shade_*` entry points in `src/main/native/cm_shade.m` (or `cm_shade_*.m`) must bump `CM_ABI_VERSION` in `celestia_metal.h` + `MetalConst.ABI_VERSION` and wire matching `FunctionDescriptor`s in `MetalNative.java`. Note: `LICENSES/` only needs to be added to `build.gradle`'s `processResources` / `jar` outputs once Photon-derived shaders (P3) are bundled into the JAR.

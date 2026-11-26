@@ -17,3 +17,26 @@ Referenced / Credited Upstream Projects:
 - Metallum (kokodio/metallum) — MIT License
 - Reese's Sodium Options (FlashyReese/reeses-sodium-options) — MIT License
 - CelestiaGlow (Homura8/celestiaglow) — Design tokens & frosted observatory palette
+
+---
+
+Upstream NOTICE preserved from Minecraft Metal Shaders (GaelQuinta/minecraft-metal-shaders, Apache-2.0):
+
+mcopt
+Copyright 2026 Noah Dunnagan
+
+mcopt, a Minecraft mod, was created by Noah Dunnagan. If you use or redistribute this code, keep this NOTICE with it
+and credit mcopt (https://github.com/noahdunnagan/mcopt).
+
+mcopt is licensed under the Apache License, Version 2.0 (LICENSE). The native shading (mcopt-shade, by Gael Quintanilla
+and contributors) is Apache-2.0 too, with the MIT-licensed portions named below.
+
+- Bloom composite (shade_post.metal): follows SE Natural Bloom & Dirty Lens, Copyright (c) 2019 sonicether, MIT License
+  (https://github.com/sonicether/SE-Natural-Bloom-Dirty-Lens); 13-tap downsample / tent upsample pyramid follows
+  Jimenez 2014; tone curve follows Lottes 2016; integer hash is Chris Wellons' lowbias32 (public domain).
+- TAAU / upscale 5-tap Catmull-Rom fetch (taa.metal, shade_post.metal): adapted from Matt Pettineo (MJP), "Bicubic
+  texture filtering with the Catmull-Rom spline in 9 / 5 taps"
+  (https://gist.github.com/TheRealMJP/c83b8c0f46b63f3a88a5986f4fa982b1), MIT License.
+- Volumetric clouds, volumetric light (air mode), and golden-hour mist (clouds.metal, vl.metal, ShadeLook): portions
+  adapted from Photon Shaders (https://github.com/sixthsurge/photon), commit 26c2906e, Copyright (c) 2025 Benjamin Stott
+  ("sixthsurge"), MIT License (full text: LICENSES/MIT-Photon.txt).
