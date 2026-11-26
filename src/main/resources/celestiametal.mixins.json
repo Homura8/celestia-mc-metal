@@ -11,7 +11,9 @@
     "GuiMixin",
     "HudMixin",
     "KeyboardHandlerMixin",
-    "GameRendererMixin"
+    "GameRendererMixin",
+    "ShadeLevelRendererMixin",
+    "ShadeFaceShadeMixin"
   ],
   "injectors": {
     "defaultRequire": 1

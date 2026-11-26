@@ -1,0 +1,89 @@
+// Adapted from Metal Shaders (GaelQuinta, Apache-2.0): metal/src/main/resources/mcopt/shade/shade_entity.metal
+//
+// Copyright 2026 mcopt-shade contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
+// License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0. Unless required by applicable
+// law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES
+// OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and
+// limitations under the License.
+#ifndef MCOPT_SHADE_ENTITY
+#define MCOPT_SHADE_ENTITY
+
+#define SHADE_ENT_ENTITY 0
+#define SHADE_ENT_BLOCK 1
+#define SHADE_ENT_PARTICLE 2
+#define SHADE_ENT_HAND 3
+
+static inline float4 shadeEntityOut(float3 preExposed, float alpha, constant ShadeLook &L) {
+#ifdef MCOPT_HAND
+	return float4(shadeLinearToSrgbExact(saturate(shadeDisplay(preExposed, L))), alpha);
+#else
+	return float4(preExposed, alpha);
+#endif
+}
+
+static float4 shadeEntityShade(float4 vanilla, float4 albedoSrgb, float4 overlay, float3 p, float3 nv, float2 light, bool front, float4 frag,
+                               int kind, float4 fog, texture2d<half> lut, sampler lutS, depth2d_array<float> shadowMap, sampler cmp,
+                               constant ShadeFrame &f, constant ShadeLook &L, constant ShadeGpu &g, constant ShadeResources &R) {
+	float3 dpx = dfdx(p), dpy = dfdy(p);
+#ifdef MCOPT_HAND
+	if (f.flags.x != SHADE_DIM_OVERWORLD || shadeDev(f, SHADE_DEV_FLAT_LIGHT)) return vanilla;
+#else
+	if (f.flags.x != SHADE_DIM_OVERWORLD || shadeDev(f, SHADE_DEV_FLAT_LIGHT)) return float4(shadeVanillaOut(vanilla.rgb, L), vanilla.a);
+#endif
+	float3 n;
+	bool thin = kind == SHADE_ENT_PARTICLE;
+	if ((kind == SHADE_ENT_ENTITY || kind == SHADE_ENT_HAND) && dot(nv, nv) > 0.01) {
+		n = normalize(nv);
+		if (!front) n = -n;
+	} else {
+		float3 nf = cross(dpx, dpy);
+		n = nf * rsqrt(max(dot(nf, nf), 1e-30));
+		if (dot(n, p) > 0.0) n = -n;
+	}
+	half3 c = half3(saturate(mix(overlay.rgb, albedoSrgb.rgb, overlay.a)));
+	half3 albedo = shadeToLinear(c);
+	int debug = f.flags.w;
+	if (debug == 3) albedo = half3(0.45h);
+	half block = half(saturate(light.x)), sky = half(saturate(light.y));
+	float ex = shadeExposure(f, g);
+	if (kind == SHADE_ENT_PARTICLE && light.x > 0.99 && light.y > 0.99) {
+		float3 rad = float3(albedo) * float3(f.ambientBlock.xyz) * 2.6 + float3(albedo) * 0.6;
+		return shadeEntityOut(shadeFinish2(rad, 0.0, f, L, ex), vanilla.a, L);
+	}
+	half3 hn = half3(n);
+#ifndef MCOPT_HAND
+	float3 ps = p + f.lightDirWorld.xyz * 0.1;
+#else
+	float3 ps = p;
+#endif
+	half shadow = sky <= 0.3h ? half(1.0) : shadeShadow(shadowMap, cmp, f, ps, hn, thin);
+#ifndef MCOPT_HAND
+	if (sky > 0.3h) shadow *= half(shadeCloudShadow(p, L, R.cloudShadow));
+#endif
+	float3 radiance = shadeLit2(albedo, hn, sky, block, shadow, thin, false, f, L);
+	if (L.flash.w > 0.0) {
+		half gk = shadeSkyCurve(sky);
+#ifdef MCOPT_HAND
+		float ndl = 0.65;
+#else
+		float ndl = saturate(dot(n, L.flash.xyz)) * 0.65 + 0.35;
+#endif
+		radiance += float3(albedo) * float3(0.78, 0.86, 1.0) * (L.flash.w * ndl * float(gk * gk));
+	}
+	int dynKind = kind == SHADE_ENT_PARTICLE ? SHADE_DYN_PARTICLE : kind == SHADE_ENT_HAND ? SHADE_DYN_HAND : SHADE_DYN_ENTITY;
+	radiance += shadeDynamicLights(shadeDynIn(p, n, float3(albedo), frag.xy, sky, block, dynKind), f, L, &R);
+#ifdef MCOPT_HAND
+	float vanillaFog = 0.0;
+#else
+	float vanillaFog = shadeVanillaFog(p, fog.xy, fog.zw);
+	radiance = shadeFogAir2(radiance, p, vanillaFog, 0.0, lut, lutS, f, L, &R);
+#endif
+	float3 rgb = shadeFinish2(radiance, vanillaFog, f, L, ex);
+	if (debug == 2) rgb = shadeVanillaOut(n * 0.5 + 0.5, L);
+	if (debug == 1) rgb = shadeVanillaOut(float3(0.25 + 0.75 * float(shadow)), L);
+	return shadeEntityOut(rgb, vanilla.a, L);
+}
+
+#endif

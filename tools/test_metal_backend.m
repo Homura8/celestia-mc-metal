@@ -804,6 +804,195 @@ static void verify_backend_ops(int32_t preferMetal4) {
         cm_library_destroy(libM);
     }
 
+    // 2l. CelestiaShade P1 globals, Sky LUT, 6-level bloom, auto-exposure, and Lottes shade_final
+    {
+        NSString *repoAssets = [NSString stringWithUTF8String:getenv("CELESTIA_TEST_ASSETS") ?: "src/main/resources/assets/celestiametal"];
+        NSString *portedDir = [repoAssets stringByAppendingPathComponent:@"shaders/ported"];
+        NSString *slots = read_file_str([portedDir stringByAppendingPathComponent:@"shade_slots.metal"]);
+        NSString *lookSrc = read_file_str([portedDir stringByAppendingPathComponent:@"shade_look.metal"]);
+        NSString *commonSrc = read_file_str([portedDir stringByAppendingPathComponent:@"shade_common.metal"]);
+        NSString *m2Src = read_file_str([portedDir stringByAppendingPathComponent:@"shade_m2.metal"]);
+        NSString *vuniSrc = read_file_str([portedDir stringByAppendingPathComponent:@"vanilla_uniforms.metal"]);
+        NSString *prelude = [NSString stringWithFormat:@"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n%@\n%@\n%@\n%@\n%@\n",
+                             slots, lookSrc, commonSrc, m2Src, vuniSrc];
+
+        // Compile-verify every ported P1 .metal file on both Metal 4 and Metal 3
+        NSString *dummyDefines = @"#define CELESTIA_BUF_Fog 0\n#define CELESTIA_BUF_DynamicTransforms 1\n#define CELESTIA_BUF_Projection 2\n#define CELESTIA_BUF_CloudInfo 0\n#define CELESTIA_TEX_Sampler0 0\n#define CELESTIA_SAMP_Sampler0 0\n";
+        NSArray<NSString *> *portedShaders = @[
+            @"sky_lut.metal", @"sky.vs.metal", @"sky.fs.metal",
+            @"celestial.vs.metal", @"celestial.fs.metal", @"stars.vs.metal",
+            @"sunrise_sunset.vs.metal", @"clouds.fs.metal", @"shade_post.metal",
+            @"shade_terrain.metal", @"shade_entity.metal"
+        ];
+        char serr[4096] = {0};
+        for (NSString *fn in portedShaders) {
+            NSString *body = read_file_str([portedDir stringByAppendingPathComponent:fn]);
+            NSString *src = [NSString stringWithFormat:@"%@\n%@\n%@", dummyDefines, prelude, body];
+            int64_t l = cm_compile_msl_library(ctx, src.UTF8String, fn.UTF8String, 1, serr, sizeof(serr));
+            if (!l) {
+                fprintf(stderr, "FAIL 2l compiling ported shader %s:\n%s\n", fn.UTF8String, serr);
+                exit(1);
+            }
+            cm_library_destroy(l);
+        }
+
+        NSString *lutFull = [NSString stringWithFormat:@"%@\n%@", prelude, read_file_str([portedDir stringByAppendingPathComponent:@"sky_lut.metal"])];
+        NSString *postFull = [NSString stringWithFormat:@"%@\n%@", prelude, read_file_str([portedDir stringByAppendingPathComponent:@"shade_post.metal"])];
+        int64_t lLut = cm_compile_msl_library(ctx, lutFull.UTF8String, "Test2lSkyLut", 1, serr, sizeof(serr));
+        int64_t lPost = cm_compile_msl_library(ctx, postFull.UTF8String, "Test2lPost", 1, serr, sizeof(serr));
+        assert(lLut && lPost);
+
+        int64_t fnLutVs = cm_compile_function(lLut, "shade_lut_vs", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnLutFs = cm_compile_function(lLut, "shade_lut_fs", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnFsVs = cm_compile_function(lPost, "shade_fs_vs", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnMw = cm_compile_function(lPost, "shade_milkyway_bake", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnBd0 = cm_compile_function(lPost, "shade_bloom_down0", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnBd = cm_compile_function(lPost, "shade_bloom_down", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnBu = cm_compile_function(lPost, "shade_bloom_up", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnFin = cm_compile_function(lPost, "shade_final", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnHist = cm_compile_function(lPost, "shade_histogram", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnExp = cm_compile_function(lPost, "shade_exposure", 0, 0, 0, serr, sizeof(serr));
+        assert(fnLutVs && fnLutFs && fnFsVs && fnMw && fnBd0 && fnBd && fnBu && fnFin && fnHist && fnExp);
+
+        CMColorAttachmentDesc f16Desc = { CM_FMT_RGBA16_FLOAT, 0, 1, 0, 0, 1, 0, 0, 15 };
+        CMColorAttachmentDesc bloomDesc = { CM_FMT_RG11B10_FLOAT, 0, 1, 0, 0, 1, 0, 0, 15 };
+        CMColorAttachmentDesc u8Desc = { CM_FMT_RGBA8_UNORM, 0, 1, 0, 0, 1, 0, 0, 15 };
+        int64_t pLut = cm_render_pipeline_create(ctx, fnLutVs, fnLutFs, NULL, 0, NULL, 0, &f16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2l_lut", serr, sizeof(serr));
+        int64_t pMw = cm_render_pipeline_create(ctx, fnFsVs, fnMw, NULL, 0, NULL, 0, &f16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2l_mw", serr, sizeof(serr));
+        int64_t pBd0 = cm_render_pipeline_create(ctx, fnFsVs, fnBd0, NULL, 0, NULL, 0, &bloomDesc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2l_bd0", serr, sizeof(serr));
+        int64_t pBd = cm_render_pipeline_create(ctx, fnFsVs, fnBd, NULL, 0, NULL, 0, &bloomDesc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2l_bd", serr, sizeof(serr));
+        int64_t pBu = cm_render_pipeline_create(ctx, fnFsVs, fnBu, NULL, 0, NULL, 0, &bloomDesc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2l_bu", serr, sizeof(serr));
+        int64_t pFin = cm_render_pipeline_create(ctx, fnFsVs, fnFin, NULL, 0, NULL, 0, &u8Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2l_fin", serr, sizeof(serr));
+        int64_t cHist = cm_compute_pipeline_create(ctx, fnHist, "2l_hist", serr, sizeof(serr));
+        int64_t cExp = cm_compute_pipeline_create(ctx, fnExp, "2l_exp", serr, sizeof(serr));
+        assert(pLut && pMw && pBd0 && pBd && pBu && pFin && cHist && cExp);
+
+        uint8_t frameBytes[1024] = {0}, lookBytes[1136] = {0}, gpuBytes[512] = {0};
+        float *ff = (float *)frameBytes;
+        ff[0]=1; ff[5]=1; ff[10]=1; ff[15]=1; // view
+        ff[16]=1; ff[21]=1; ff[26]=1; ff[31]=1; // proj
+        ff[32]=1; ff[37]=1; ff[42]=1; ff[47]=1; // viewProj
+        ff[48]=1; ff[53]=1; ff[58]=1; ff[63]=1; // invViewProj
+        ff[120]=0.2f; ff[121]=0.8f; ff[122]=0.4f; ff[123]=0.8f; // sunDirWorld
+        ff[132]=0.2f; ff[133]=0.8f; ff[134]=0.4f; ff[135]=1.0f; // lightDirWorld
+        ff[136]=4.0f; ff[137]=3.8f; ff[138]=3.5f; ff[139]=3.8f; // sunColor
+        ff[212]=128.0f; ff[213]=128.0f; ff[214]=1.0f/128.0f; ff[215]=1.0f/128.0f; // screen
+        ff[218]=1.0f; // time.z exposure
+        ff[228]=20.0f; ff[229]=0.2f; ff[230]=0.75f; ff[231]=3.4f; // atmosphere
+
+        float *lf = (float *)lookBytes;
+        lf[80]=0.0f; lf[81]=1.0f; lf[82]=0.1f; lf[83]=1.0f; // grade0 (byte 320)
+        lf[84]=1.0f; lf[85]=1.0f; lf[86]=1.0f; lf[87]=0.55f; // grade1 (byte 336)
+        lf[91]=0.0025f; // grade2.w (byte 352)
+        lf[92]=1.0f; lf[93]=1.0f; lf[94]=1.0f; lf[95]=0.2f; // grade3 (byte 368)
+        lf[96]=1.4f; lf[97]=0.92f; lf[98]=0.8f; lf[99]=0.05f; // tonemap (byte 384)
+        lf[100]=1.0f; lf[101]=1.0f; lf[102]=1.0f; lf[103]=0.8f; // output (byte 400)
+        lf[104]=0.08f; lf[105]=0.6f; lf[106]=0.06f; lf[107]=1.0f; // bloom (byte 416)
+        lf[112]=1.0f; lf[113]=10.0f; lf[114]=67.0f; lf[115]=0.9f; // fogM (byte 448)
+        lf[116]=79.0f; lf[117]=0.78f; lf[118]=0.0f; lf[119]=0.0f; // fogMisc (byte 464)
+        lf[160]=1.0f; lf[161]=1.0f; lf[162]=1.0f; lf[163]=1.0f; // skyGoldH
+        lf[164]=1.0f; lf[165]=1.0f; lf[166]=1.0f; lf[167]=0.0f; // skyGoldZ
+        lf[184]=1.75f; lf[185]=1.75f; lf[186]=0.6f; lf[187]=2.2f; // exposureCfg
+        lf[196]=0.016f; lf[197]=1.0f; // dt
+        int32_t *li = (int32_t *)lookBytes;
+        li[200]=1; li[201]=1|2|4|16|32|64; li[202]=0; li[203]=0; // tier
+        for (int m = 0; m < 4; m++) {
+            int base = (816 + m * 48) / 4;
+            lf[base+0]=1; lf[base+5]=1; lf[base+10]=1;
+        }
+        lf[252]=0.5f; lf[253]=0.55f; lf[254]=0.30f; lf[255]=1.0f; // exposureRef (target=0.5, jump=1)
+        lf[280]=1.0f; lf[281]=1.0f; lf[282]=1.0f; lf[283]=0.1f; // look2b
+
+        float *gf = (float *)gpuBytes;
+        gf[44]=1.0f; gf[45]=1.0f; gf[46]=1.0f; gf[47]=0.0f; // initial exposure = 1.0
+
+        int64_t fBuf = cm_buffer_create(ctx, 1024, frameBytes, "2l_frame");
+        int64_t lBuf = cm_buffer_create(ctx, 1136, lookBytes, "2l_look");
+        int64_t gBuf = cm_buffer_create(ctx, 512, gpuBytes, "2l_gpu");
+        int64_t rBuf = cm_buffer_create(ctx, 256, NULL, "2l_res");
+        int64_t dumShd = cm_texture_create(ctx, CM_FMT_D32_FLOAT, 1, 1, 2, 1, 0, 1, 1, 0, "2l_shd");
+        int64_t lutTex = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 128, 80, 1, 1, 0, 1, 1, 0, "2l_lut");
+        int64_t mwTex = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 64, 32, 1, 1, 0, 1, 1, 0, "2l_mw");
+        int64_t hdrTex = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 128, 128, 1, 1, 0, 1, 1, 0, "2l_hdr");
+        int64_t depTex = cm_texture_create(ctx, CM_FMT_D32_FLOAT, 128, 128, 1, 1, 0, 1, 1, 0, "2l_dep");
+        int64_t finTex = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, 128, 128, 1, 1, 0, 1, 1, 0, "2l_fin");
+        int64_t bDown[6], bAcc[5];
+        for (int i = 0; i < 6; i++) {
+            int bw = MAX(1, 64 >> i), bh = MAX(1, 64 >> i);
+            bDown[i] = cm_texture_create(ctx, CM_FMT_RG11B10_FLOAT, bw, bh, 1, 1, 0, 1, 1, 0, "2l_bd");
+            bAcc[i < 5 ? i : 4] = (i >= 1 && i < 5)
+                ? cm_texture_create(ctx, CM_FMT_RG11B10_FLOAT, bw, bh, 1, 1, 0, 1, 1, 0, "2l_ba") : 0;
+        }
+        int64_t cmpS = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 1, CM_CMP_GREATER_EQUAL);
+        int64_t linS = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 0, 0);
+        int64_t finRead = cm_buffer_create(ctx, 128 * 128 * 4, NULL, "2l_finRead");
+
+        cm_cmd_begin(ctx);
+        cm_shade_set_globals(ctx, fBuf, 0, lBuf, 0, gBuf, 0, rBuf, 0, dumShd, lutTex, cmpS, linS);
+        cm_shade_set_enabled(ctx, 1);
+        cm_shade_set_resource(ctx, 0, mwTex);
+        cm_blit_clear_depth(ctx, dumShd, 1.0);
+        cm_blit_clear_color_depth(ctx, hdrTex, 0.24f, 0.14f, 0.08f, 1.0f, depTex, 0.5);
+        cm_shade_fullscreen_pass(ctx, pMw, mwTex, NULL, 0, NULL, 0, NULL, 0);
+        cm_shade_fullscreen_pass(ctx, pLut, lutTex, NULL, 0, NULL, 0, NULL, 0);
+        float dp[4] = {1.0f, 1.0f, 0.0f, 0.0f};
+        cm_shade_fullscreen_pass(ctx, pBd0, bDown[0], &hdrTex, 1, NULL, 0, dp, sizeof(dp));
+        for (int i = 1; i < 6; i++) {
+            cm_shade_fullscreen_pass(ctx, pBd, bDown[i], &bDown[i - 1], 1, NULL, 0, NULL, 0);
+        }
+        for (int i = 4; i >= 1; i--) {
+            int64_t pair[2] = { bDown[i], (i == 4) ? bDown[5] : bAcc[i + 1] };
+            float up[4] = { (float)(i + 1), (i == 4) ? 6.0f : 1.0f, 0.0f, 0.0f };
+            cm_shade_fullscreen_pass(ctx, pBu, bAcc[i], pair, 2, NULL, 0, up, sizeof(up));
+        }
+        float fp[24] = {0};
+        fp[0]=0.05f; fp[1]=1.0f; fp[4]=1.0f; fp[5]=1.0f; fp[6]=1.6f; fp[7]=0.4f;
+        fp[12]=128.0f; fp[13]=128.0f; fp[17]=1.0f; fp[18]=1.0f; fp[19]=1.0f;
+        int64_t finTexs[4] = { hdrTex, bAcc[1], depTex, bDown[0] };
+        cm_shade_fullscreen_pass(ctx, pFin, finTex, finTexs, 4, NULL, 0, fp, sizeof(fp));
+        cm_shade_exposure_run(ctx, cHist, cExp, bDown[2], gBuf, 0, lBuf, 0, 1, 1);
+        cm_shade_set_enabled(ctx, 0);
+        cm_blit_copy_texture_to_buffer(ctx, finTex, 0, 0, 0, 0, 128, 128, finRead, 0, 128 * 4);
+        uint64_t sv2l = cm_cmd_submit(ctx, 2);
+        assert(cm_wait_submit(ctx, sv2l, 5000000000ULL) == 1);
+
+        const uint8_t *px = (const uint8_t *)cm_buffer_contents(finRead);
+        assert(px != NULL);
+        const float *gpuOut = (const float *)cm_buffer_contents(gBuf);
+        char err2l[512] = {0};
+        cm_device_drain_errors(ctx, err2l, sizeof(err2l));
+        // Tonemapped mid-tone clear (0.24, 0.14, 0.08) must produce ordered, finite non-clipped RGB output
+        assert(px[0] > px[1] && px[1] > px[2] && px[2] > 10);
+        if (!(px[0] > 40 && px[0] < 255) || !(px[1] > 20 && px[1] < 255) || px[3] != 255 || !isfinite(gpuOut[44])) {
+            fprintf(stderr, "FAIL 2l [%s]: px=(%u,%u,%u,%u) exp=(%.4f, %.4f) gpuErr=%s\n",
+                    preferMetal4 ? "Metal 4" : "Metal 3",
+                    px[0], px[1], px[2], px[3], gpuOut[44], gpuOut[45], err2l);
+            exit(1);
+        }
+        assert(isfinite(gpuOut[44]) && gpuOut[44] > 0.05f && gpuOut[44] < 10.0f);
+        printf("[Backend %s] Test 2l P1 HDR+LUT+Bloom+Exposure+Final OK (rgb=%u,%u,%u, exp=%.3f)\n",
+               preferMetal4 ? "Metal 4" : "Metal 3", px[0], px[1], px[2], gpuOut[44]);
+
+        cm_shade_set_globals(ctx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        cm_shade_set_resource(ctx, 0, 0);
+        cm_buffer_destroy(ctx, finRead);
+        cm_sampler_destroy(ctx, cmpS); cm_sampler_destroy(ctx, linS);
+        for (int i = 0; i < 6; i++) {
+            cm_texture_destroy(ctx, bDown[i]);
+            if (i >= 1 && i < 5 && bAcc[i]) cm_texture_destroy(ctx, bAcc[i]);
+        }
+        cm_texture_destroy(ctx, finTex); cm_texture_destroy(ctx, depTex); cm_texture_destroy(ctx, hdrTex);
+        cm_texture_destroy(ctx, mwTex); cm_texture_destroy(ctx, lutTex); cm_texture_destroy(ctx, dumShd);
+        cm_buffer_destroy(ctx, rBuf); cm_buffer_destroy(ctx, gBuf); cm_buffer_destroy(ctx, lBuf); cm_buffer_destroy(ctx, fBuf);
+        cm_compute_pipeline_destroy(ctx, cExp); cm_compute_pipeline_destroy(ctx, cHist);
+        cm_pipeline_destroy(ctx, pFin); cm_pipeline_destroy(ctx, pBu); cm_pipeline_destroy(ctx, pBd);
+        cm_pipeline_destroy(ctx, pBd0); cm_pipeline_destroy(ctx, pMw); cm_pipeline_destroy(ctx, pLut);
+        cm_function_destroy(fnExp); cm_function_destroy(fnHist); cm_function_destroy(fnFin);
+        cm_function_destroy(fnBu); cm_function_destroy(fnBd); cm_function_destroy(fnBd0);
+        cm_function_destroy(fnMw); cm_function_destroy(fnFsVs); cm_function_destroy(fnLutFs); cm_function_destroy(fnLutVs);
+        cm_library_destroy(lPost); cm_library_destroy(lLut);
+    }
+
     // 3. MetalFX Spatial & Temporal scaler creation + execution
     int64_t mfxOut = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 128, 128, 1, 1, 0, 1, 1, 1, "MFXOut");
     int64_t mfxIn = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 64, 64, 1, 1, 0, 1, 1, 0, "MFXIn");
@@ -1346,6 +1535,141 @@ static void benchmark_upscale(int32_t preferMetal4) {
     cm_device_destroy(ctx);
 }
 
+static void benchmark_p1_hdr_post(NSString *assetsDir, int32_t preferMetal4) {
+    const int W = 3024, H = 1752, WARM = 4, ITERS = 20;
+    int64_t ctx = cm_device_create(preferMetal4, 0, "");
+    assert(ctx != 0);
+    const char *api = cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3";
+    NSString *portedDir = [assetsDir stringByAppendingPathComponent:@"shaders/ported"];
+    NSString *slots = read_file_str([portedDir stringByAppendingPathComponent:@"shade_slots.metal"]);
+    NSString *lookSrc = read_file_str([portedDir stringByAppendingPathComponent:@"shade_look.metal"]);
+    NSString *commonSrc = read_file_str([portedDir stringByAppendingPathComponent:@"shade_common.metal"]);
+    NSString *m2Src = read_file_str([portedDir stringByAppendingPathComponent:@"shade_m2.metal"]);
+    NSString *vuniSrc = read_file_str([portedDir stringByAppendingPathComponent:@"vanilla_uniforms.metal"]);
+    NSString *prelude = [NSString stringWithFormat:@"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n%@\n%@\n%@\n%@\n%@\n",
+                         slots, lookSrc, commonSrc, m2Src, vuniSrc];
+
+    char err[2048] = {0};
+    NSString *lutSrc = [NSString stringWithFormat:@"%@\n%@", prelude, read_file_str([portedDir stringByAppendingPathComponent:@"sky_lut.metal"])];
+    NSString *postSrc = [NSString stringWithFormat:@"%@\n%@", prelude, read_file_str([portedDir stringByAppendingPathComponent:@"shade_post.metal"])];
+    int64_t lLut = cm_compile_msl_library(ctx, lutSrc.UTF8String, "BenchLut", 1, err, sizeof(err));
+    int64_t lPost = cm_compile_msl_library(ctx, postSrc.UTF8String, "BenchPost", 1, err, sizeof(err));
+    assert(lLut && lPost);
+
+    int64_t fnLutVs = cm_compile_function(lLut, "shade_lut_vs", 0, 0, 0, err, sizeof(err));
+    int64_t fnLutFs = cm_compile_function(lLut, "shade_lut_fs", 0, 0, 0, err, sizeof(err));
+    int64_t fnFsVs = cm_compile_function(lPost, "shade_fs_vs", 0, 0, 0, err, sizeof(err));
+    int64_t fnBd0 = cm_compile_function(lPost, "shade_bloom_down0", 0, 0, 0, err, sizeof(err));
+    int64_t fnBd = cm_compile_function(lPost, "shade_bloom_down", 0, 0, 0, err, sizeof(err));
+    int64_t fnBu = cm_compile_function(lPost, "shade_bloom_up", 0, 0, 0, err, sizeof(err));
+    int64_t fnFin = cm_compile_function(lPost, "shade_final", 0, 0, 0, err, sizeof(err));
+    int64_t fnHist = cm_compile_function(lPost, "shade_histogram", 0, 0, 0, err, sizeof(err));
+    int64_t fnExp = cm_compile_function(lPost, "shade_exposure", 0, 0, 0, err, sizeof(err));
+
+    CMColorAttachmentDesc f16Desc = { CM_FMT_RGBA16_FLOAT, 0, 1, 0, 0, 1, 0, 0, 15 };
+    CMColorAttachmentDesc bloomDesc = { CM_FMT_RG11B10_FLOAT, 0, 1, 0, 0, 1, 0, 0, 15 };
+    CMColorAttachmentDesc u8Desc = { CM_FMT_RGBA8_UNORM, 0, 1, 0, 0, 1, 0, 0, 15 };
+    int64_t pLut = cm_render_pipeline_create(ctx, fnLutVs, fnLutFs, NULL, 0, NULL, 0, &f16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "bp_lut", err, sizeof(err));
+    int64_t pBd0 = cm_render_pipeline_create(ctx, fnFsVs, fnBd0, NULL, 0, NULL, 0, &bloomDesc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "bp_bd0", err, sizeof(err));
+    int64_t pBd = cm_render_pipeline_create(ctx, fnFsVs, fnBd, NULL, 0, NULL, 0, &bloomDesc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "bp_bd", err, sizeof(err));
+    int64_t pBu = cm_render_pipeline_create(ctx, fnFsVs, fnBu, NULL, 0, NULL, 0, &bloomDesc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "bp_bu", err, sizeof(err));
+    int64_t pFin = cm_render_pipeline_create(ctx, fnFsVs, fnFin, NULL, 0, NULL, 0, &u8Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "bp_fin", err, sizeof(err));
+    int64_t cHist = cm_compute_pipeline_create(ctx, fnHist, "bp_hist", err, sizeof(err));
+    int64_t cExp = cm_compute_pipeline_create(ctx, fnExp, "bp_exp", err, sizeof(err));
+    assert(pLut && pBd0 && pBd && pBu && pFin && cHist && cExp);
+
+    uint8_t frameBytes[1024] = {0}, lookBytes[1136] = {0}, gpuBytes[512] = {0};
+    float *ff = (float *)frameBytes, *lf = (float *)lookBytes, *gf = (float *)gpuBytes;
+    ff[0]=1; ff[5]=1; ff[10]=1; ff[15]=1; ff[16]=1; ff[21]=1; ff[26]=1; ff[31]=1;
+    ff[32]=1; ff[37]=1; ff[42]=1; ff[47]=1; ff[48]=1; ff[53]=1; ff[58]=1; ff[63]=1;
+    ff[120]=0.2f; ff[121]=0.8f; ff[122]=0.4f; ff[123]=0.8f;
+    ff[132]=0.2f; ff[133]=0.8f; ff[134]=0.4f; ff[135]=1.0f;
+    ff[136]=4.0f; ff[137]=3.8f; ff[138]=3.5f; ff[139]=3.8f;
+    ff[212]=(float)W; ff[213]=(float)H; ff[214]=1.0f/(float)W; ff[215]=1.0f/(float)H;
+    ff[218]=1.0f; ff[228]=20.0f; ff[229]=0.2f; ff[230]=0.75f; ff[231]=3.4f;
+    lf[81]=1.0f; lf[82]=0.1f; lf[83]=1.0f; lf[84]=1.0f; lf[85]=1.0f; lf[86]=1.0f; lf[87]=0.55f; lf[91]=0.0025f;
+    lf[92]=1.0f; lf[93]=1.0f; lf[94]=1.0f; lf[95]=0.2f; lf[96]=1.4f; lf[97]=0.92f; lf[98]=0.8f; lf[99]=0.05f;
+    lf[100]=1.0f; lf[101]=1.0f; lf[102]=1.0f; lf[103]=0.8f; lf[104]=0.08f; lf[105]=0.6f; lf[106]=0.06f; lf[107]=1.0f;
+    lf[112]=1.0f; lf[113]=10.0f; lf[114]=67.0f; lf[115]=0.9f; lf[116]=79.0f; lf[117]=0.78f;
+    lf[160]=1.0f; lf[161]=1.0f; lf[162]=1.0f; lf[163]=1.0f; lf[164]=1.0f; lf[165]=1.0f; lf[166]=1.0f;
+    lf[184]=1.75f; lf[185]=1.75f; lf[186]=0.6f; lf[187]=2.2f; lf[196]=0.016f; lf[197]=1.0f;
+    int32_t *li = (int32_t *)lookBytes; li[200]=1; li[201]=1|2|4|16|32|64;
+    for (int m = 0; m < 4; m++) { int base = (816 + m * 48) / 4; lf[base+0]=1; lf[base+5]=1; lf[base+10]=1; }
+    lf[252]=0.5f; lf[253]=0.55f; lf[254]=0.30f; lf[280]=1.0f; lf[281]=1.0f; lf[282]=1.0f; lf[283]=0.1f;
+    gf[44]=1.0f; gf[45]=1.0f; gf[46]=1.0f;
+
+    int64_t fBuf = cm_buffer_create(ctx, 1024, frameBytes, "bp_frame");
+    int64_t lBuf = cm_buffer_create(ctx, 1136, lookBytes, "bp_look");
+    int64_t gBuf = cm_buffer_create(ctx, 512, gpuBytes, "bp_gpu");
+    int64_t rBuf = cm_buffer_create(ctx, 256, NULL, "bp_res");
+    int64_t dumShd = cm_texture_create(ctx, CM_FMT_D32_FLOAT, 1, 1, 2, 1, 0, 1, 1, 0, "bp_shd");
+    int64_t lutTex = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 128, 80, 1, 1, 0, 1, 1, 0, "bp_lut");
+    int64_t hdrTex = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "bp_hdr");
+    int64_t depTex = cm_texture_create(ctx, CM_FMT_D32_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "bp_dep");
+    int64_t finTex = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, W, H, 1, 1, 0, 1, 1, 0, "bp_fin");
+    int64_t bDown[6], bAcc[5];
+    for (int i = 0; i < 6; i++) {
+        int bw = MAX(1, (W / 2) >> i), bh = MAX(1, (H / 2) >> i);
+        bDown[i] = cm_texture_create(ctx, CM_FMT_RG11B10_FLOAT, bw, bh, 1, 1, 0, 1, 1, 0, "bp_bd");
+        bAcc[i < 5 ? i : 4] = (i >= 1 && i < 5)
+            ? cm_texture_create(ctx, CM_FMT_RG11B10_FLOAT, bw, bh, 1, 1, 0, 1, 1, 0, "bp_ba") : 0;
+    }
+    int64_t cmpS = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 1, CM_CMP_GREATER_EQUAL);
+    int64_t linS = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 0, 0);
+
+    cm_cmd_begin(ctx);
+    cm_blit_clear_depth(ctx, dumShd, 1.0);
+    cm_blit_clear_color_depth(ctx, hdrTex, 0.24f, 0.18f, 0.12f, 1.0f, depTex, 0.35);
+    cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL);
+    cm_shade_set_globals(ctx, fBuf, 0, lBuf, 0, gBuf, 0, rBuf, 0, dumShd, lutTex, cmpS, linS);
+
+    double gpuMsSum = 0.0;
+    for (int f = 0; f < WARM + ITERS; f++) {
+        cm_cmd_begin(ctx);
+        cm_shade_set_enabled(ctx, 1);
+        cm_shade_fullscreen_pass(ctx, pLut, lutTex, NULL, 0, NULL, 0, NULL, 0);
+        float dp[4] = {1.0f, 1.0f, 0.0f, 0.0f};
+        cm_shade_fullscreen_pass(ctx, pBd0, bDown[0], &hdrTex, 1, NULL, 0, dp, sizeof(dp));
+        for (int i = 1; i < 6; i++) cm_shade_fullscreen_pass(ctx, pBd, bDown[i], &bDown[i - 1], 1, NULL, 0, NULL, 0);
+        for (int i = 4; i >= 1; i--) {
+            int64_t pair[2] = { bDown[i], (i == 4) ? bDown[5] : bAcc[i + 1] };
+            float up[4] = { (float)(i + 1), (i == 4) ? 6.0f : 1.0f, 0.0f, 0.0f };
+            cm_shade_fullscreen_pass(ctx, pBu, bAcc[i], pair, 2, NULL, 0, up, sizeof(up));
+        }
+        float fp[24] = {0};
+        fp[0]=0.05f; fp[1]=1.0f; fp[4]=1.0f; fp[5]=1.0f; fp[6]=1.6f; fp[7]=0.4f;
+        fp[12]=(float)W; fp[13]=(float)H; fp[17]=1.0f; fp[18]=1.0f; fp[19]=1.0f;
+        int64_t finTexs[4] = { hdrTex, bAcc[1], depTex, bDown[0] };
+        cm_shade_fullscreen_pass(ctx, pFin, finTex, finTexs, 4, NULL, 0, fp, sizeof(fp));
+        int gx = MAX(1, ((W >> 3) / 2 + 7) / 8), gy = MAX(1, ((H >> 3) / 2 + 7) / 8);
+        cm_shade_exposure_run(ctx, cHist, cExp, bDown[2], gBuf, 0, lBuf, 0, gx, gy);
+        cm_shade_set_enabled(ctx, 0);
+        cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL);
+        if (f >= WARM) gpuMsSum += (double)cm_device_last_gpu_ns(ctx) / 1e6;
+    }
+    double avgMs = gpuMsSum / ITERS;
+    printf("[Benchmark M1 Pro %s @ %dx%d] P1 HDR Post (LUT+6-lvl Bloom+Exp+Final) synthetic avg: %.3f ms GPU (%.1f FPS ceiling)\n",
+           api, W, H, avgMs, 1000.0 / avgMs);
+
+    cm_shade_set_globals(ctx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    cm_sampler_destroy(ctx, cmpS); cm_sampler_destroy(ctx, linS);
+    for (int i = 0; i < 6; i++) {
+        cm_texture_destroy(ctx, bDown[i]);
+        if (i >= 1 && i < 5 && bAcc[i]) cm_texture_destroy(ctx, bAcc[i]);
+    }
+    cm_texture_destroy(ctx, finTex); cm_texture_destroy(ctx, depTex); cm_texture_destroy(ctx, hdrTex);
+    cm_texture_destroy(ctx, lutTex); cm_texture_destroy(ctx, dumShd);
+    cm_buffer_destroy(ctx, rBuf); cm_buffer_destroy(ctx, gBuf); cm_buffer_destroy(ctx, lBuf); cm_buffer_destroy(ctx, fBuf);
+    cm_compute_pipeline_destroy(ctx, cExp); cm_compute_pipeline_destroy(ctx, cHist);
+    cm_pipeline_destroy(ctx, pFin); cm_pipeline_destroy(ctx, pBu); cm_pipeline_destroy(ctx, pBd);
+    cm_pipeline_destroy(ctx, pBd0); cm_pipeline_destroy(ctx, pLut);
+    cm_function_destroy(fnExp); cm_function_destroy(fnHist); cm_function_destroy(fnFin);
+    cm_function_destroy(fnBu); cm_function_destroy(fnBd); cm_function_destroy(fnBd0);
+    cm_function_destroy(fnFsVs); cm_function_destroy(fnLutFs); cm_function_destroy(fnLutVs);
+    cm_library_destroy(lPost); cm_library_destroy(lLut);
+    cm_device_destroy(ctx);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <assetsDir>\n", argv[0]);
@@ -1369,6 +1693,8 @@ int main(int argc, char **argv) {
     benchmark_draw_overhead(0);
     benchmark_upscale(1);
     benchmark_upscale(0);
+    benchmark_p1_hdr_post([NSString stringWithUTF8String:argv[1]], 1);
+    benchmark_p1_hdr_post([NSString stringWithUTF8String:argv[1]], 0);
     printf("ALL CELESTIA METAL NATIVE GPU TESTS PASSED.\n");
     return 0;
 }

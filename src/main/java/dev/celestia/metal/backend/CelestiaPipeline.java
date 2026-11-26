@@ -1,7 +1,6 @@
 package dev.celestia.metal.backend;
 
 import com.mojang.logging.LogUtils;
-import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.pipeline.BindGroupLayout;
 import com.mojang.renderpearl.api.pipeline.BlendEquation;
 import com.mojang.renderpearl.api.pipeline.BlendFactor;
@@ -13,9 +12,11 @@ import com.mojang.renderpearl.api.pipeline.PolygonMode;
 import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
 import com.mojang.renderpearl.api.pipeline.ShaderType;
 import com.mojang.renderpearl.backend.api.BackendRenderPipeline;
+import dev.celestia.metal.shade.ShadeShaderPatcher;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,29 +24,46 @@ import org.slf4j.Logger;
 
 /**
  * Compiled RenderPearl pipeline backed by Metal render pipeline states.
- * Metal bakes the depth attachment format into {@code MTLRenderPipelineState}, so variants are cached
- * lazily by depth format (none, D32_FLOAT, D32_FLOAT_S8_UINT, D16_UNORM).
+ * Caches PSOs lazily by (colorFormatOverride, depthFormat, shader variant) so HDR world passes
+ * and hand passes reuse base SPIRV-Cross translations cleanly with safe fallback.
  */
 public final class CelestiaPipeline implements BackendRenderPipeline {
     private static final Logger LOGGER = LogUtils.getLogger();
     public static final int NO_DEPTH = -1;
+    public static final int NO_COLOR_OVERRIDE = -1;
+
+    private record PsoKey(int colorFormat, int depthFormat, ShadeShaderPatcher.Variant variant) {}
+    private record CompiledStages(long vsLib, long fsLib, long vsFn, long fsFn, boolean ownsHandles) {}
 
     private final CelestiaMetalDevice device;
     private final BackendRenderPipeline.CreateInfo info;
     private final List<MetalShaderTranslator.SlotBinding> bindings;
+    private final String baseVsMsl;
+    private final String baseVsEntry;
+    private final String baseFsMsl;
+    private final String baseFsEntry;
+    private final boolean fastMath;
     private final long vsFunction;
     private final long fsFunction;
     private final long vsLibrary;
     private final long fsLibrary;
-    private final Map<Integer, Long> psoByDepthFormat = new ConcurrentHashMap<>();
+    private final Map<ShadeShaderPatcher.Variant, CompiledStages> variantStages = new EnumMap<>(ShadeShaderPatcher.Variant.class);
+    private final Map<PsoKey, Long> psoCache = new ConcurrentHashMap<>();
     private volatile boolean closed;
 
     private CelestiaPipeline(CelestiaMetalDevice device, BackendRenderPipeline.CreateInfo info,
                              List<MetalShaderTranslator.SlotBinding> bindings,
+                             String baseVsMsl, String baseVsEntry,
+                             String baseFsMsl, String baseFsEntry, boolean fastMath,
                              long vsLib, long fsLib, long vsFn, long fsFn) {
         this.device = device;
         this.info = info;
         this.bindings = bindings;
+        this.baseVsMsl = baseVsMsl;
+        this.baseVsEntry = baseVsEntry;
+        this.baseFsMsl = baseFsMsl;
+        this.baseFsEntry = baseFsEntry;
+        this.fastMath = fastMath;
         this.vsLibrary = vsLib;
         this.fsLibrary = fsLib;
         this.vsFunction = vsFn;
@@ -102,10 +120,11 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
             }
         }
 
-        CelestiaPipeline pipeline = new CelestiaPipeline(device, info, bindings, vsLib, fsLib, vsFn, fsFn);
-        // Match RenderPearl's depth pre-warming contract: always compile the standard D32_FLOAT variant,
-        // and only pre-warm the NO_DEPTH variant when the pipeline declares no DepthStencilState (so shaders
-        // that write gl_FragDepth / [[depth(any)]] never compile against depthAttachmentPixelFormat = Invalid).
+        CelestiaPipeline pipeline = new CelestiaPipeline(device, info, bindings,
+            vsMsl.source(), vsMsl.entryPoint(),
+            fsMsl != null ? fsMsl.source() : null,
+            fsMsl != null ? fsMsl.entryPoint() : null,
+            fastMath, vsLib, fsLib, vsFn, fsFn);
         pipeline.getOrCreatePso(MetalConst.FMT_D32_FLOAT);
         if (info.depthStencilState() == null && !info.colorTargetStates().isEmpty()) {
             pipeline.getOrCreatePso(NO_DEPTH);
@@ -130,11 +149,105 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
     }
 
     public long getOrCreatePso(int nativeDepthFormat) {
-        if (closed) return 0L;
-        return psoByDepthFormat.computeIfAbsent(nativeDepthFormat, this::buildPso);
+        return getOrCreatePso(NO_COLOR_OVERRIDE, nativeDepthFormat, ShadeShaderPatcher.Variant.BASE);
     }
 
-    private long buildPso(int nativeDepthFormat) {
+    public long getOrCreatePso(int colorFormatOverride, int nativeDepthFormat, ShadeShaderPatcher.Variant variant) {
+        if (closed) return 0L;
+        ShadeShaderPatcher.Variant v = variant != null ? variant : ShadeShaderPatcher.Variant.BASE;
+        PsoKey key = new PsoKey(colorFormatOverride, nativeDepthFormat, v);
+        return psoCache.computeIfAbsent(key, this::buildPso);
+    }
+
+    private CompiledStages resolveStages(ShadeShaderPatcher.Variant variant) {
+        if (variant == ShadeShaderPatcher.Variant.BASE) {
+            return new CompiledStages(vsLibrary, fsLibrary, vsFunction, fsFunction, false);
+        }
+        synchronized (variantStages) {
+            CompiledStages existing = variantStages.get(variant);
+            if (existing != null) return existing;
+
+            ShadeShaderPatcher.PatchedStages patched = ShadeShaderPatcher.patch(
+                info.name(), baseVsMsl, baseVsEntry, baseFsMsl, baseFsEntry,
+                info.uniforms(), bindings, variant);
+            if (!patched.patched()) {
+                CompiledStages fallback = new CompiledStages(vsLibrary, fsLibrary, vsFunction, fsFunction, false);
+                variantStages.put(variant, fallback);
+                return fallback;
+            }
+
+            CompiledStages compiled = tryCompileStages(patched.vsSource(), patched.vsEntry(),
+                patched.fsSource(), patched.fsEntry(), variant);
+            if (compiled == null && variant == ShadeShaderPatcher.Variant.HDR_WORLD && baseFsMsl != null) {
+                // Fallback from rich terrain/entity/sky patch to generic HDR fragment conversion
+                String genericFs = ShadeShaderPatcher.patchHdrFragment(baseFsMsl);
+                if (genericFs != null && !genericFs.equals(baseFsMsl)) {
+                    compiled = tryCompileStages(baseVsMsl, baseVsEntry, genericFs, baseFsEntry, variant);
+                }
+            }
+            if (compiled == null) {
+                LOGGER.warn("Falling back to unpatched Metal shader stages for {} ({})", info.name(), variant);
+                compiled = new CompiledStages(vsLibrary, fsLibrary, vsFunction, fsFunction, false);
+            }
+            variantStages.put(variant, compiled);
+            return compiled;
+        }
+    }
+
+    private CompiledStages tryCompileStages(String vsSrc, String vsEntry, String fsSrc, String fsEntry,
+                                            ShadeShaderPatcher.Variant variant) {
+        StringBuilder err = new StringBuilder();
+        long vLib = vsLibrary;
+        long vFn = vsFunction;
+        boolean ownsVs = false;
+        if (!vsSrc.equals(baseVsMsl)) {
+            vLib = MetalNative.compileMslLibrary(device.handle(), vsSrc, info.name() + "." + variant + ".vs", fastMath, err);
+            if (vLib == 0L) {
+                LOGGER.warn("Patched vertex MSL compile failed for {} ({}): {}", info.name(), variant, err);
+                return null;
+            }
+            vFn = MetalNative.compileFunction(vLib, vsEntry, false, 0, 0, err);
+            if (vFn == 0L) {
+                MetalNative.libraryDestroy(vLib);
+                LOGGER.warn("Patched vertex entry '{}' missing for {} ({}): {}", vsEntry, info.name(), variant, err);
+                return null;
+            }
+            ownsVs = true;
+        }
+
+        long fLib = fsLibrary;
+        long fFn = fsFunction;
+        boolean ownsFs = false;
+        if (fsSrc != null && !fsSrc.equals(baseFsMsl)) {
+            fLib = MetalNative.compileMslLibrary(device.handle(), fsSrc, info.name() + "." + variant + ".fs", fastMath, err);
+            if (fLib == 0L) {
+                if (ownsVs) {
+                    MetalNative.functionDestroy(vFn);
+                    MetalNative.libraryDestroy(vLib);
+                }
+                LOGGER.warn("Patched fragment MSL compile failed for {} ({}): {}", info.name(), variant, err);
+                return null;
+            }
+            fFn = MetalNative.compileFunction(fLib, fsEntry, false, 0, 0, err);
+            if (fFn == 0L) {
+                MetalNative.libraryDestroy(fLib);
+                if (ownsVs) {
+                    MetalNative.functionDestroy(vFn);
+                    MetalNative.libraryDestroy(vLib);
+                }
+                LOGGER.warn("Patched fragment entry '{}' missing for {} ({}): {}", fsEntry, info.name(), variant, err);
+                return null;
+            }
+            ownsFs = true;
+        }
+        return new CompiledStages(ownsVs ? vLib : 0L, ownsFs ? fLib : 0L, vFn, fFn, ownsVs || ownsFs);
+    }
+
+    private long buildPso(PsoKey key) {
+        CompiledStages stages = resolveStages(key.variant());
+        int nativeDepthFormat = key.depthFormat();
+        int colorOverride = key.colorFormat();
+
         try (Arena arena = Arena.ofConfined()) {
             List<BackendRenderPipeline.CreateInfo.VertexBuffer> vbs = info.vertexBuffers();
             MemorySegment vbSeg = MemorySegment.NULL;
@@ -170,7 +283,10 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
                 for (int i = 0; i < cts.size(); i++) {
                     ColorTargetState ct = cts.get(i);
                     long base = i * 36L;
-                    colorSeg.set(ValueLayout.JAVA_INT, base, MetalConst.toNativeFormat(ct.format()));
+                    int fmt = (i == 0 && cts.size() == 1 && colorOverride != NO_COLOR_OVERRIDE)
+                        ? colorOverride
+                        : MetalConst.toNativeFormat(ct.format());
+                    colorSeg.set(ValueLayout.JAVA_INT, base, fmt);
                     if (ct.blendFunction().isPresent()) {
                         BlendFunction bf = ct.blendFunction().get();
                         BlendEquation col = bf.color();
@@ -205,7 +321,7 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
 
             StringBuilder err = new StringBuilder();
             long pso = MetalNative.renderPipelineCreate(
-                device.handle(), vsFunction, fsFunction,
+                device.handle(), stages.vsFn(), stages.fsFn(),
                 vbSeg, vbs.size(),
                 attrSeg, attrs.size(),
                 colorSeg, cts.size(),
@@ -217,7 +333,8 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
                 biasSlope, biasConst,
                 info.name(), err);
             if (pso == 0L) {
-                throw new IllegalStateException("Failed to create Metal PSO for " + info.name() + " (depth=" + nativeDepthFormat + "): " + err);
+                throw new IllegalStateException("Failed to create Metal PSO for " + info.name()
+                    + " (color=" + colorOverride + ", depth=" + nativeDepthFormat + ", variant=" + key.variant() + "): " + err);
             }
             return pso;
         }
@@ -232,10 +349,25 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
     public void close() {
         if (closed) return;
         closed = true;
-        for (Long pso : psoByDepthFormat.values()) {
+        for (Long pso : psoCache.values()) {
             if (pso != null && pso != 0L) MetalNative.pipelineDestroy(device.handle(), pso);
         }
-        psoByDepthFormat.clear();
+        psoCache.clear();
+        synchronized (variantStages) {
+            for (CompiledStages st : variantStages.values()) {
+                if (st.ownsHandles()) {
+                    if (st.vsLib() != 0L) {
+                        if (st.vsFn() != 0L) MetalNative.functionDestroy(st.vsFn());
+                        MetalNative.libraryDestroy(st.vsLib());
+                    }
+                    if (st.fsLib() != 0L) {
+                        if (st.fsFn() != 0L) MetalNative.functionDestroy(st.fsFn());
+                        MetalNative.libraryDestroy(st.fsLib());
+                    }
+                }
+            }
+            variantStages.clear();
+        }
         if (vsFunction != 0L) MetalNative.functionDestroy(vsFunction);
         if (fsFunction != 0L) MetalNative.functionDestroy(fsFunction);
         if (vsLibrary != 0L) MetalNative.libraryDestroy(vsLibrary);

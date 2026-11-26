@@ -1,14 +1,17 @@
 package dev.celestia.metal.mixin;
 
+import com.llamalad7.mixinextras.sugar.Local;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.renderpearl.api.commands.CommandEncoder;
 import com.mojang.renderpearl.api.textures.GpuTexture;
 import dev.celestia.metal.backend.CelestiaMetalDevice;
 import dev.celestia.metal.perf.PerformanceEngine;
 import dev.celestia.metal.render.WorldRenderScale;
+import dev.celestia.metal.shade.CelestiaShade;
 import dev.celestia.metal.shader.pack.ShaderPipelineManager;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
+import org.joml.Matrix4f;
 import org.joml.Vector4fc;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
@@ -41,6 +44,7 @@ public final class GameRendererMixin {
         celestiametal$frameStartNs = System.nanoTime();
         CelestiaMetalDevice dev = CelestiaMetalDevice.current;
         if (dev != null) {
+            dev.shade().onFrameEnd();
             ShaderPipelineManager.get().uploadFrameUniforms(dev);
         }
     }
@@ -78,9 +82,52 @@ public final class GameRendererMixin {
         WorldRenderScale.onWindowResize(width, height);
     }
 
+    @Inject(method = "renderLevel", at = @At(value = "INVOKE",
+        target = "Lcom/mojang/blaze3d/systems/RenderSystem;setProjectionMatrix(Lcom/mojang/renderpearl/api/buffers/GpuBufferSlice;Lcom/mojang/blaze3d/ProjectionType;)V"))
+    private void celestiametal$shadeProjection(CallbackInfo ci, @Local Matrix4f projectionMatrix) {
+        CelestiaShade.recordProjection(projectionMatrix);
+    }
+
+    @Inject(method = "renderLevel", at = @At(value = "INVOKE",
+        target = "Lnet/minecraft/client/renderer/GameRenderer;render3dHud(Lnet/minecraft/client/renderer/state/level/CameraRenderState;Lnet/minecraft/client/renderer/state/level/PlayerRenderState;Lnet/minecraft/client/renderer/state/OptionsRenderState;Z)V"))
+    private void celestiametal$shadeBeforeHand(CallbackInfo ci) {
+        CelestiaMetalDevice dev = CelestiaMetalDevice.current;
+        if (dev != null) dev.shade().beforeHand(this.mainRenderTarget);
+    }
+
+    @Inject(method = "renderLevel", at = @At(value = "INVOKE",
+        target = "Lnet/minecraft/client/renderer/GameRenderer;render3dHud(Lnet/minecraft/client/renderer/state/level/CameraRenderState;Lnet/minecraft/client/renderer/state/level/PlayerRenderState;Lnet/minecraft/client/renderer/state/OptionsRenderState;Z)V",
+        shift = At.Shift.AFTER))
+    private void celestiametal$shadeAfterHand(CallbackInfo ci) {
+        CelestiaMetalDevice dev = CelestiaMetalDevice.current;
+        if (dev != null) dev.shade().afterHand();
+    }
+
+    @Inject(method = "renderLevel", at = @At("RETURN"))
+    private void celestiametal$shadeRenderLevelEnd(CallbackInfo ci) {
+        CelestiaMetalDevice dev = CelestiaMetalDevice.current;
+        if (dev != null) {
+            dev.shade().finishWorld(this.mainRenderTarget);
+            dev.shade().afterHand();
+        }
+    }
+
+    @Inject(method = "render", at = @At(value = "INVOKE",
+        target = "Lnet/minecraft/client/renderer/fog/FogRenderer;endFrame()V"))
+    private void celestiametal$shadeFallbackFinish(CallbackInfo ci) {
+        CelestiaMetalDevice dev = CelestiaMetalDevice.current;
+        if (dev != null) {
+            dev.shade().finishWorld(this.mainRenderTarget);
+        }
+    }
+
     @Inject(method = "render", at = @At("RETURN"))
     private void celestiametal$onFrameEnd(CallbackInfo ci) {
         celestiametal$restoreTargets();
+        CelestiaMetalDevice dev = CelestiaMetalDevice.current;
+        if (dev != null) {
+            dev.shade().onFrameEnd();
+        }
         if (celestiametal$frameStartNs != 0L) {
             double ms = (System.nanoTime() - celestiametal$frameStartNs) / 1_000_000.0;
             PerformanceEngine.get().onFrameEnd(ms);

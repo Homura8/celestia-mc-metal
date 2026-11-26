@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.0-alpha.15
+
+### Added
+- **Native MSL Shader Suite Port — Phase P1 (`dev.celestia.metal.shade.*`)**:
+  - Ported the core HDR sky/atmosphere/bloom/auto-exposure/tonemapping pipeline from [Minecraft Metal Shaders](https://github.com/GaelQuinta/minecraft-metal-shaders) (`mcopt-shade`, Apache-2.0) onto Celestia's RenderPearl Metal 4 / Metal 3 backend (`src/main/resources/assets/celestiametal/shaders/ported/` and `src/main/native/cm_shade.m`).
+  - **Both vanilla terrain and Sodium 0.9.x terrain work identically** without adding a Sodium dependency or loading Sodium classes (`ShadeShaderPatcher` inspects translated MSL signatures directly and supports both `UV2 / 240.0` vanilla lightmaps and `(a_LightAndData.xy - 8.0) / 240.0` Sodium lightmaps).
+  - **HDR World Frame + Post Chain (`CelestiaShade`)**: Redirects world passes inside `WorldRenderScale` to an `RGBA16Float` HDR target (`ShadeFrame` 1024 B + `ShadeLook` 1136 B in 4-slot rings, `ShadeGpu`, `ShadeResources`), renders a 128×80 `RGBA16Float` Sky LUT (`sky_lut.metal`), replaces overworld sky/celestial/stars/sunrise/clouds stages, lights entities/items/blocks/particles/hand (`shade_entity.metal`), runs 6-level `RG11B10Float` bloom (`shade_bloom_down0` / `down` / `up`), GPU histogram + temporal exposure adaptation (`shade_histogram` + `shade_exposure`), and Lottes filmic tonemapping (`shade_final`) back into `mainRenderTarget` before GUI overlays and Xaero's Minimap draw.
+  - Added F3 `Celestia Shade:` diagnostic line (`DebugScreenEntriesMixin`), flattened vanilla directional face shading during active P1 shading (`ShadeFaceShadeMixin`), and `CM_ABI_VERSION 4` (`cm_shade_*` C ABI).
+  - Added `ShadeP1Test` (JUnit 5 + FFM) and native Test 2l + 3024×1752 synthetic P1 HDR post benchmark in `tools/test_metal_backend.m` across Metal 4 and Metal 3.
+
+### Verified Performance (Apple M1 Pro, 3024×1752 native, Metal 4)
+- **In-game (Sodium 0.9.4-beta.2 + Xaero's Minimap, 0 warnings/fallbacks)**:
+  - Day (`elev 25 deg`): **144 FPS** (`8.37 ms` GPU)
+  - Sunset (`elev 3 deg`): **101 FPS** (`10.27 ms` GPU)
+  - Night (`elev -24 deg`): **115 FPS** (`9.92 ms` GPU)
+  - Shaders toggled off (`K`): **356 FPS** (`4.06 ms` GPU)
+- **Synthetic P1 HDR Post-Only Benchmark (`tools/test_metal_backend.m` @ 3024×1752)**: **1.754 ms** GPU (Metal 4) / **1.709 ms** GPU (Metal 3).
+
 ## 0.1.0-alpha.14
 
 ### Added

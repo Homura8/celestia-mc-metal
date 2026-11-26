@@ -98,6 +98,12 @@ public final class MetalNative {
 
     private static MethodHandle mhComputeDispatch;
 
+    private static MethodHandle mhShadeSetEnabled;
+    private static MethodHandle mhShadeSetGlobals;
+    private static MethodHandle mhShadeSetResource;
+    private static MethodHandle mhShadeFullscreenPass;
+    private static MethodHandle mhShadeExposureRun;
+
     private MetalNative() {}
 
     /**
@@ -264,6 +270,12 @@ public final class MetalNative {
         mhUpscalerEncode = downcall("cm_upscaler_encode", FunctionDescriptor.ofVoid(L, L, L, L, L, L, F, F, I));
 
         mhComputeDispatch = downcall("cm_compute_dispatch", FunctionDescriptor.ofVoid(L, L, P, P, I, P, I, P, I, I, I, I, I, I, I));
+
+        mhShadeSetEnabled = downcall("cm_shade_set_enabled", FunctionDescriptor.ofVoid(L, I));
+        mhShadeSetGlobals = downcall("cm_shade_set_globals", FunctionDescriptor.ofVoid(L, L, L, L, L, L, L, L, L, L, L, L, L));
+        mhShadeSetResource = downcall("cm_shade_set_resource", FunctionDescriptor.ofVoid(L, I, L));
+        mhShadeFullscreenPass = downcall("cm_shade_fullscreen_pass", FunctionDescriptor.ofVoid(L, L, L, P, I, P, I, P, I));
+        mhShadeExposureRun = downcall("cm_shade_exposure_run", FunctionDescriptor.ofVoid(L, L, L, L, L, L, L, L, I, I));
     }
 
     public static ProbeInfo probeDevice() {
@@ -718,6 +730,50 @@ public final class MetalNative {
                 segOrNull(texs), texCount,
                 segOrNull(samps), sampCount,
                 gx, gy, gz, tx, ty, tz);
+        } catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    public static void shadeSetEnabled(long ctx, boolean enabled) {
+        try { mhShadeSetEnabled.invokeExact(ctx, enabled ? 1 : 0); }
+        catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    public static void shadeSetGlobals(long ctx,
+                                       long frameBuf, long frameOffset,
+                                       long lookBuf, long lookOffset,
+                                       long gpuBuf, long gpuOffset,
+                                       long resBuf, long resOffset,
+                                       long shadowTex, long skyLutTex,
+                                       long shadowSamp, long linearSamp) {
+        try {
+            mhShadeSetGlobals.invokeExact(ctx, frameBuf, frameOffset, lookBuf, lookOffset,
+                gpuBuf, gpuOffset, resBuf, resOffset, shadowTex, skyLutTex, shadowSamp, linearSamp);
+        } catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    public static void shadeSetResource(long ctx, int slot, long texPtr) {
+        try { mhShadeSetResource.invokeExact(ctx, slot, texPtr); }
+        catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    public static void shadeFullscreenPass(long ctx, long pso, long colorTex,
+                                           MemorySegment texPtrs, int texCount,
+                                           MemorySegment sampPtrs, int sampCount,
+                                           MemorySegment pushData, int pushBytes) {
+        try {
+            mhShadeFullscreenPass.invokeExact(ctx, pso, colorTex,
+                segOrNull(texPtrs), texCount,
+                segOrNull(sampPtrs), sampCount,
+                segOrNull(pushData), pushBytes);
+        } catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    public static void shadeExposureRun(long ctx, long histComputePso, long expComputePso,
+                                        long srcTex, long gpuBuf, long gpuOffset,
+                                        long lookBuf, long lookOffset, int gx, int gy) {
+        try {
+            mhShadeExposureRun.invokeExact(ctx, histComputePso, expComputePso, srcTex,
+                gpuBuf, gpuOffset, lookBuf, lookOffset, gx, gy);
         } catch (Throwable t) { throw new RuntimeException(t); }
     }
 }

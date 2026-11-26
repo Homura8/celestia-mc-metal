@@ -122,6 +122,48 @@ public final class MetalShaderTranslator {
         return lower.contains("terrain") || lower.contains("chunk") || lower.contains("sodium");
     }
 
+    /**
+     * Emits typed Metal slot macros ({@code CELESTIA_BUF_<name>}, {@code CELESTIA_TEX_<name>},
+     * {@code CELESTIA_SAMP_<name>}) matching the RenderPearl uniform bindings assigned by {@link #buildBindings}.
+     */
+    public static String slotDefines(List<BindGroupLayout.UniformDescription> uniforms,
+                                     List<SlotBinding> bindings) {
+        if (uniforms == null || bindings == null || uniforms.isEmpty() || bindings.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        int count = Math.min(uniforms.size(), bindings.size());
+        for (int i = 0; i < count; i++) {
+            String rawName = uniforms.get(i).name();
+            if (rawName == null || rawName.isEmpty()) continue;
+            String ident = sanitizeIdent(rawName);
+            SlotBinding b = bindings.get(i);
+            if (b.bufferSlot() >= 0) {
+                sb.append("#define CELESTIA_BUF_").append(ident).append(' ').append(b.bufferSlot()).append('\n');
+            }
+            if (b.textureSlot() >= 0) {
+                sb.append("#define CELESTIA_TEX_").append(ident).append(' ').append(b.textureSlot()).append('\n');
+            }
+            if (b.samplerSlot() >= 0) {
+                sb.append("#define CELESTIA_SAMP_").append(ident).append(' ').append(b.samplerSlot()).append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String sanitizeIdent(String raw) {
+        StringBuilder sb = new StringBuilder(raw.length());
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+                sb.append(c);
+            } else {
+                sb.append('_');
+            }
+        }
+        return sb.toString();
+    }
+
     private static void check(int code, String step) {
         if (code != Spvc.SPVC_SUCCESS) {
             throw new IllegalStateException("SPIRV-Cross failed at " + step + " (code " + code + ")");

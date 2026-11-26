@@ -1,0 +1,678 @@
+// Adapted from Metal Shaders (GaelQuinta, Apache-2.0): metal/src/main/java/mcopt/metal/shade/ShadeBindings.java, ShadeFrameUpdater.java & ShadePost.java
+//
+// Copyright 2026 mcopt-shade contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
+// License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0. Unless required by applicable
+// law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES
+// OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and
+// limitations under the License.
+package dev.celestia.metal.shade;
+
+import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.logging.LogUtils;
+import com.mojang.renderpearl.api.pipeline.CompareOp;
+import com.mojang.renderpearl.api.textures.GpuTexture;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
+import dev.celestia.metal.backend.CelestiaMetalDevice;
+import dev.celestia.metal.backend.CelestiaPipeline;
+import dev.celestia.metal.backend.CelestiaTexture;
+import dev.celestia.metal.backend.CelestiaTextureView;
+import dev.celestia.metal.backend.MetalConst;
+import dev.celestia.metal.backend.MetalNative;
+import dev.celestia.metal.shader.pack.ShaderPipelineManager;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.renderer.fog.FogData;
+import net.minecraft.client.renderer.state.GameRenderState;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
+import net.minecraft.client.renderer.state.level.LevelRenderState;
+import net.minecraft.client.renderer.state.level.SkyRenderState;
+import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.dimension.DimensionType;
+import net.minecraft.world.level.material.FogType;
+import org.joml.Matrix4f;
+import org.joml.Matrix4fc;
+import org.joml.Vector3fc;
+import org.joml.Vector4f;
+import org.slf4j.Logger;
+
+/**
+ * Coordinates P1 native shader-suite state on {@link CelestiaMetalDevice}: 4-slot ring buffers for
+ * {@link ShadeFrame} and {@link ShadeLook}, persistent {@code ShadeGpu} exposure state, sky-view LUT,
+ * Milky Way bake, {@code RGBA16Float} HDR world render target redirection, 6-level bloom pyramid,
+ * GPU histogram/exposure reduction, and Lottes filmic display transform.
+ */
+public final class CelestiaShade {
+    private static final Logger LOGGER = LogUtils.getLogger();
+
+    private static final int RING_SLOTS = 4;
+    private static final int LOOK_OFFSET = 1024; // 1024 B ShadeFrame
+    private static final int RING_SLOT_STRIDE = 2304; // >= 1024 + 1136 (multiple of 256)
+    private static final int RES_SLOT_STRIDE = 256; // >= 128 (ShadeResources 16 x uint64)
+    private static final int GPU_BUF_SIZE = 512;
+    private static final int LUT_WIDTH = 128, LUT_HEIGHT = 80;
+    private static final int MILKY_WAY_W = 1024, MILKY_WAY_H = 512;
+    private static final int BLOOM_LEVELS = 6;
+    private static final int BLOOM_FORMAT = MetalConst.FMT_RG11B10_FLOAT;
+
+    private static final float[] MOON_BRIGHTNESS = {1f, 0.75f, 0.5f, 0.25f, 0f, 0.25f, 0.5f, 0.75f};
+
+    private static volatile CelestiaShade activeInstance;
+
+    private final CelestiaMetalDevice device;
+    private final ShadeFrame frame = new ShadeFrame();
+    private final ShadeLook look = new ShadeLook();
+
+    private final Matrix4f pendingProjection = new Matrix4f();
+    private boolean projectionSet;
+    private final Matrix4f previousViewProj = new Matrix4f();
+    private double prevCamX, prevCamY, prevCamZ;
+    private boolean hasPrevious;
+    private long lastNanos;
+    private double waterClock, skyClock;
+    private int lastDimension = -1;
+    private int moonPhaseIndex;
+    private int ringSlot;
+    private int frameCounter;
+
+    // Native handles
+    private long ringBuf;
+    private MemorySegment ringSeg;
+    private long resBuf;
+    private long gpuBuf;
+    private ByteBuffer gpuView;
+    private long dummyShadowTex;
+    private long skyLutTex;
+    private long milkyWayTex;
+    private long shadowCompareSamp;
+    private long linearClampSamp;
+
+    private long lutLib, lutVsFn, lutFsFn, psoSkyLut;
+    private long postLib, fsVsFn, bloomDown0Fn, bloomDownFn, bloomUpFn, finalFn, histFn, expFn, milkyWayFn;
+    private long psoBloomDown0, psoBloomDown, psoBloomUp, psoFinalRgba8, psoFinalBgra8, psoHist, psoExp;
+
+    private long hdrWorldTex;
+    private long hdrWorldView;
+    private int hdrWidth, hdrHeight;
+    private final long[] bloomDownTex = new long[BLOOM_LEVELS];
+    private final long[] bloomAccumTex = new long[BLOOM_LEVELS];
+    private int bloomWidth, bloomHeight;
+    private int activeBloomLevels;
+
+    private GpuTexture worldMainColor;
+    private GpuTexture worldDepth;
+    private boolean worldRedirectActive;
+    private boolean handPassActive;
+    private boolean initialized;
+    private boolean failed;
+
+    private final double[] dirScratch = new double[3];
+    private final MemorySegment pushSeg = Arena.global().allocate(128, 16);
+    private final MemorySegment texArgSeg = Arena.global().allocate(8 * 8L, 8);
+    private final MemorySegment sampArgSeg = Arena.global().allocate(8 * 4L, 8);
+
+    public CelestiaShade(CelestiaMetalDevice device) {
+        this.device = device;
+        activeInstance = this;
+    }
+
+    public static CelestiaShade current() {
+        return activeInstance;
+    }
+
+    public static boolean isEnabled() {
+        if ("false".equalsIgnoreCase(System.getProperty("celestiametal.shade", "true"))) {
+            return false;
+        }
+        return ShaderPipelineManager.get().isShadersEnabled();
+    }
+
+    public boolean isReady() {
+        return initialized && !failed;
+    }
+
+    public boolean isWorldRedirectActive() {
+        return worldRedirectActive && isReady() && hdrWorldTex != 0L;
+    }
+
+    public boolean isHandPassActive() {
+        return handPassActive && isReady();
+    }
+
+    /** Called inside {@code GameRendererMixin} during {@code renderLevel} before world draws start. */
+    public static void recordProjection(Matrix4fc proj) {
+        CelestiaShade s = activeInstance;
+        if (s == null || !isEnabled()) return;
+        s.pendingProjection.set(proj);
+        s.projectionSet = true;
+    }
+
+    /** Called by {@code ShadeFaceShadeMixin} to neutralize vanilla's directional face shading when active. */
+    public static boolean shouldFlattenVanillaFaceShade() {
+        CelestiaShade s = activeInstance;
+        return s != null && s.isReady() && isEnabled();
+    }
+
+    private synchronized boolean ensureInitialized() {
+        if (initialized) return true;
+        if (failed) return false;
+        long ctx = device.handle();
+        if (ctx == 0L) return false;
+        try {
+            long startNs = System.nanoTime();
+            ringBuf = MetalNative.bufferCreate(ctx, (long) RING_SLOTS * RING_SLOT_STRIDE, null, "CelestiaShade.Ring");
+            resBuf = MetalNative.bufferCreate(ctx, (long) RING_SLOTS * RES_SLOT_STRIDE, null, "CelestiaShade.Resources");
+            gpuBuf = MetalNative.bufferCreate(ctx, GPU_BUF_SIZE, null, "CelestiaShade.Gpu");
+            if (ringBuf == 0L || resBuf == 0L || gpuBuf == 0L) {
+                throw new IllegalStateException("Failed to allocate CelestiaShade buffers");
+            }
+            ringSeg = MemorySegment.ofAddress(MetalNative.bufferContents(ringBuf))
+                .reinterpret((long) RING_SLOTS * RING_SLOT_STRIDE);
+            gpuView = MemorySegment.ofAddress(MetalNative.bufferContents(gpuBuf))
+                .reinterpret(GPU_BUF_SIZE).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+            gpuView.putFloat(176, 1f).putFloat(180, 1f).putFloat(184, 1f).putFloat(188, 0f);
+            for (int i = 0; i < RING_SLOTS; i++) {
+                ByteBuffer slotBb = ringSeg.asSlice((long) i * RING_SLOT_STRIDE, RING_SLOT_STRIDE)
+                    .asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+                frame.pack(slotBb);
+                look.pack(slotBb.slice(LOOK_OFFSET, ShadeLook.SIZE).order(ByteOrder.LITTLE_ENDIAN), frame);
+            }
+
+            dummyShadowTex = MetalNative.textureCreate(ctx, MetalConst.FMT_D32_FLOAT, 1, 1, 2, 1,
+                false, true, true, false, "CelestiaShade.DummyShadow");
+            skyLutTex = MetalNative.textureCreate(ctx, MetalConst.FMT_RGBA16_FLOAT, LUT_WIDTH, LUT_HEIGHT, 1, 1,
+                false, true, true, false, "CelestiaShade.SkyLut");
+            milkyWayTex = MetalNative.textureCreate(ctx, MetalConst.FMT_RGBA16_FLOAT, MILKY_WAY_W, MILKY_WAY_H, 1, 1,
+                false, true, true, false, "CelestiaShade.MilkyWay");
+            shadowCompareSamp = MetalNative.samplerCreate(ctx, 1, 1, 1, 1, 0, 1,
+                true, MetalConst.toNativeCompare(CompareOp.GREATER_THAN_OR_EQUAL));
+            linearClampSamp = MetalNative.samplerCreate(ctx, 1, 1, 1, 1, 0, 1, false, 0);
+            if (dummyShadowTex == 0L || skyLutTex == 0L || milkyWayTex == 0L
+                || shadowCompareSamp == 0L || linearClampSamp == 0L) {
+                throw new IllegalStateException("Failed to create CelestiaShade base textures/samplers");
+            }
+
+            StringBuilder err = new StringBuilder();
+            lutLib = MetalNative.compileMslLibrary(ctx, ShadeShaderPatcher.skyLutSource(), "CelestiaShade.SkyLut", true, err);
+            if (lutLib == 0L) throw new IllegalStateException("Sky LUT MSL compile failed: " + err);
+            lutVsFn = MetalNative.compileFunction(lutLib, "shade_lut_vs", false, 0, 0, err);
+            lutFsFn = MetalNative.compileFunction(lutLib, "shade_lut_fs", false, 0, 0, err);
+            psoSkyLut = createFullscreenPso(ctx, lutVsFn, lutFsFn, MetalConst.FMT_RGBA16_FLOAT, "CelestiaShade.SkyLut", err);
+
+            postLib = MetalNative.compileMslLibrary(ctx, ShadeShaderPatcher.postSource(), "CelestiaShade.Post", true, err);
+            if (postLib == 0L) throw new IllegalStateException("Post MSL compile failed: " + err);
+            fsVsFn = MetalNative.compileFunction(postLib, "shade_fs_vs", false, 0, 0, err);
+            bloomDown0Fn = MetalNative.compileFunction(postLib, "shade_bloom_down0", false, 0, 0, err);
+            bloomDownFn = MetalNative.compileFunction(postLib, "shade_bloom_down", false, 0, 0, err);
+            bloomUpFn = MetalNative.compileFunction(postLib, "shade_bloom_up", false, 0, 0, err);
+            finalFn = MetalNative.compileFunction(postLib, "shade_final", false, 0, 0, err);
+            histFn = MetalNative.compileFunction(postLib, "shade_histogram", false, 0, 0, err);
+            expFn = MetalNative.compileFunction(postLib, "shade_exposure", false, 0, 0, err);
+            milkyWayFn = MetalNative.compileFunction(postLib, "shade_milkyway_bake", false, 0, 0, err);
+
+            psoBloomDown0 = createFullscreenPso(ctx, fsVsFn, bloomDown0Fn, BLOOM_FORMAT, "CelestiaShade.BloomDown0", err);
+            psoBloomDown = createFullscreenPso(ctx, fsVsFn, bloomDownFn, BLOOM_FORMAT, "CelestiaShade.BloomDown", err);
+            psoBloomUp = createFullscreenPso(ctx, fsVsFn, bloomUpFn, BLOOM_FORMAT, "CelestiaShade.BloomUp", err);
+            psoFinalRgba8 = createFullscreenPso(ctx, fsVsFn, finalFn, MetalConst.FMT_RGBA8_UNORM, "CelestiaShade.FinalRGBA8", err);
+            psoFinalBgra8 = createFullscreenPso(ctx, fsVsFn, finalFn, MetalConst.FMT_BGRA8_UNORM, "CelestiaShade.FinalBGRA8", err);
+            psoHist = MetalNative.computePipelineCreate(ctx, histFn, "CelestiaShade.Histogram", err);
+            psoExp = MetalNative.computePipelineCreate(ctx, expFn, "CelestiaShade.Exposure", err);
+            long psoMw = createFullscreenPso(ctx, fsVsFn, milkyWayFn, MetalConst.FMT_RGBA16_FLOAT, "CelestiaShade.MilkyWayBake", err);
+            if (psoHist == 0L || psoExp == 0L || psoMw == 0L) {
+                throw new IllegalStateException("Compute/MilkyWay pipeline creation failed: " + err);
+            }
+
+            publishGlobals(0);
+            MetalNative.blitClearDepth(ctx, dummyShadowTex, 1.0);
+            MetalNative.shadeFullscreenPass(ctx, psoMw, milkyWayTex, MemorySegment.NULL, 0, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
+            MetalNative.pipelineDestroy(ctx, psoMw);
+            MetalNative.shadeSetResource(ctx, 0, milkyWayTex);
+
+            initialized = true;
+            double ms = (System.nanoTime() - startNs) / 1_000_000.0;
+            LOGGER.info("CelestiaShade P1 initialized in {} ms (Sky LUT + HDR post + auto-exposure)", String.format(java.util.Locale.ROOT, "%.1f", ms));
+            return true;
+        } catch (Throwable t) {
+            failed = true;
+            LOGGER.error("CelestiaShade initialization failed; staying on standard rendering", t);
+            close();
+            return false;
+        }
+    }
+
+    private static long createFullscreenPso(long ctx, long vsFn, long fsFn, int colorFmt, String label, StringBuilder err) {
+        if (vsFn == 0L || fsFn == 0L) throw new IllegalStateException("Null function for " + label + ": " + err);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment col = arena.allocate(36, 4);
+            col.set(ValueLayout.JAVA_INT, 0, colorFmt);
+            col.set(ValueLayout.JAVA_INT, 4, 0);
+            col.set(ValueLayout.JAVA_INT, 32, 15);
+            long pso = MetalNative.renderPipelineCreate(ctx, vsFn, fsFn,
+                MemorySegment.NULL, 0, MemorySegment.NULL, 0,
+                col, 1, CelestiaPipeline.NO_DEPTH, MetalConst.TOPO_TRIANGLES,
+                0, false, false, 0, false, 0f, 0f, label, err);
+            if (pso == 0L) throw new IllegalStateException("Failed creating PSO " + label + ": " + err);
+            return pso;
+        }
+    }
+
+    private void publishGlobals(int slot) {
+        long frameOff = (long) slot * RING_SLOT_STRIDE;
+        long lookOff = frameOff + LOOK_OFFSET;
+        long resOff = (long) slot * RES_SLOT_STRIDE;
+        MetalNative.shadeSetGlobals(device.handle(),
+            ringBuf, frameOff,
+            ringBuf, lookOff,
+            gpuBuf, 0L,
+            resBuf, resOff,
+            dummyShadowTex, skyLutTex,
+            shadowCompareSamp, linearClampSamp);
+        MetalNative.shadeSetResource(device.handle(), 0, milkyWayTex);
+    }
+
+    /** Called at {@code LevelRenderer.render} HEAD to update uniforms, bake Sky LUT, and open HDR redirect. */
+    public void beginWorld(CameraRenderState camera) {
+        if (!isEnabled()) {
+            worldRedirectActive = false;
+            handPassActive = false;
+            MetalNative.shadeSetEnabled(device.handle(), false);
+            return;
+        }
+        if (!ensureInitialized()) return;
+
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null || mc.gameRenderer == null) return;
+        RenderTarget main = mc.gameRenderer.mainRenderTarget();
+        if (main == null || main.getColorTexture() == null) return;
+
+        GpuTexture color = main.getColorTexture();
+        int w = Math.max(1, color.getWidth(0));
+        int h = Math.max(1, color.getHeight(0));
+        ensureHdrTarget(w, h);
+        ensureBloomTargets(w, h);
+
+        ClientLevel level = mc.level;
+        GameRenderState game = mc.gameRenderer.gameRenderState();
+        LevelRenderState state = game.levelRenderState;
+        SkyRenderState sky = state.skyRenderState;
+        float partial = state.worldPartialTicks;
+
+        frame.view.set(camera.viewRotationMatrix);
+        frame.proj.set(projectionSet ? pendingProjection : camera.projectionMatrix);
+        projectionSet = false;
+        frame.proj.mul(frame.view, frame.viewProj);
+        frame.viewProj.invert(frame.invViewProj);
+
+        double x = camera.pos.x, y = camera.pos.y, z = camera.pos.z;
+        if (hasPrevious && Math.abs(x - prevCamX) + Math.abs(y - prevCamY) + Math.abs(z - prevCamZ) < 64.0) {
+            previousViewProj.translate((float) (x - prevCamX), (float) (y - prevCamY), (float) (z - prevCamZ), frame.prevViewProj);
+        } else {
+            frame.prevViewProj.set(frame.viewProj);
+        }
+        previousViewProj.set(frame.viewProj);
+        prevCamX = x; prevCamY = y; prevCamZ = z;
+        hasPrevious = true;
+        frame.cameraX = x; frame.cameraY = y; frame.cameraZ = z;
+        frame.width = w; frame.height = h;
+        frame.jitterX = frame.jitterY = frame.prevJitterX = frame.prevJitterY = 0f;
+        frame.mipScale = 1f;
+        frame.renderScale = 1f;
+
+        frame.dimension = sky.skybox == DimensionType.Skybox.OVERWORLD ? ShadeFrame.DIM_OVERWORLD
+            : sky.skybox == DimensionType.Skybox.END ? ShadeFrame.DIM_END : ShadeFrame.DIM_NETHER;
+        if (frame.dimension == ShadeFrame.DIM_OVERWORLD) {
+            double sunAngle = sky.sunAngle;
+            ShadeSky.celestial(sunAngle, dirScratch);
+            frame.sunDir.set((float) dirScratch[0], (float) dirScratch[1], (float) dirScratch[2]);
+            ShadeSky.celestial(sky.moonAngle, dirScratch);
+            frame.moonDir.set((float) dirScratch[0], (float) dirScratch[1], (float) dirScratch[2]);
+            int phase = sky.moonPhase != null ? sky.moonPhase.index() : 0;
+            frame.moonPhase = MOON_BRIGHTNESS[Math.floorMod(phase, 8)];
+            moonPhaseIndex = phase;
+            frame.starBrightness = sky.starBrightness;
+            frame.dayTime = (float) (sunAngle / (2.0 * Math.PI) - Math.floor(sunAngle / (2.0 * Math.PI)));
+            Vector3fc skyColor = sky.skyColor;
+            if (skyColor != null) {
+                frame.skyColor[0] = skyColor.x();
+                frame.skyColor[1] = skyColor.y();
+                frame.skyColor[2] = skyColor.z();
+            }
+        } else {
+            frame.sunDir.set(0f, 1f, 0f);
+            frame.moonDir.set(0f, -1f, 0f);
+            frame.starBrightness = 0f;
+        }
+
+        frame.rain = level != null ? level.getRainLevel(partial) : 0f;
+        frame.thunder = level != null ? level.getThunderLevel(partial) : 0f;
+        frame.gameTimeSeconds = ((state.gameTime % 72000L) + partial) / 20f;
+        frame.partialTick = partial;
+
+        FogData fog = camera.fogData;
+        FogType fogType = camera.fogType;
+        frame.fogType = fogType == FogType.WATER ? ShadeFrame.FOG_WATER
+            : fogType == FogType.LAVA ? ShadeFrame.FOG_LAVA
+            : fogType == FogType.POWDER_SNOW ? ShadeFrame.FOG_POWDER_SNOW : ShadeFrame.FOG_AIR;
+        frame.underwater = fogType == FogType.WATER;
+        Vector4f fogColor = fog.color;
+        frame.fogColor[0] = fogColor.x;
+        frame.fogColor[1] = fogColor.y;
+        frame.fogColor[2] = fogColor.z;
+        frame.fogColor[3] = (frame.fogType != ShadeFrame.FOG_AIR || frame.dimension != ShadeFrame.DIM_OVERWORLD)
+            ? 1f : Math.min(Math.max((64f - fog.environmentalEnd) / 32f, 0f), 1f);
+        frame.fogEnvStart = fog.environmentalStart;
+        frame.fogEnvEnd = fog.environmentalEnd;
+        frame.fogRenderStart = fog.renderDistanceStart;
+        frame.fogRenderEnd = fog.renderDistanceEnd;
+        frame.fogSkyEnd = fog.skyEnd;
+        frame.fogCloudEnd = fog.cloudEnd;
+
+        frame.eyeSkyLight = level != null ? level.getBrightness(LightLayer.SKY, camera.blockPos) : 15;
+        var lightmap = game.lightmapRenderState;
+        frame.nightVision = lightmap.nightVisionEffectIntensity;
+        frame.minAmbient = 0.0025f + 0.02f * lightmap.brightness + 0.25f * frame.nightVision;
+        frame.shadowsEnabled = false;
+        frame.cascades = 0;
+
+        frame.frameIndex = ++frameCounter;
+        long now = System.nanoTime();
+        float dt = lastNanos == 0L ? 0f : (now - lastNanos) / 1e9f;
+        lastNanos = now;
+        boolean snap = lastDimension != frame.dimension || dt > 1f;
+        double clampedDt = Math.min(Math.max(dt, 0f), 0.25);
+        waterClock = (waterClock + clampedDt) % 4096.0;
+        skyClock = (skyClock + clampedDt) % 65536.0;
+        frame.waterTime = (float) waterClock;
+        frame.skyTime = (float) skyClock;
+        lastDimension = frame.dimension;
+
+        syncLookPreset();
+        frame.updateAtmosphere((float) clampedDt, snap);
+        if (snap) look.snapExposure();
+        look.update(frame, moonPhaseIndex, (float) clampedDt);
+
+        ringSlot = (ringSlot + 1) % RING_SLOTS;
+        ByteBuffer slotBb = ringSeg.asSlice((long) ringSlot * RING_SLOT_STRIDE, RING_SLOT_STRIDE)
+            .asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+        frame.pack(slotBb);
+        look.pack(slotBb.slice(LOOK_OFFSET, ShadeLook.SIZE).order(ByteOrder.LITTLE_ENDIAN), frame);
+
+        publishGlobals(ringSlot);
+        MetalNative.shadeSetEnabled(device.handle(), true);
+
+        // Bake per-frame sky-view LUT before sky and terrain passes draw.
+        MetalNative.shadeFullscreenPass(device.handle(), psoSkyLut, skyLutTex,
+            MemorySegment.NULL, 0, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
+
+        worldMainColor = color;
+        worldDepth = main.getDepthTexture();
+        worldRedirectActive = true;
+        handPassActive = false;
+    }
+
+    /** Called before {@code render3dHud} (or {@code FogRenderer.endFrame}): bloom + auto-exposure + tonemap to mainColor. */
+    public void finishWorld(RenderTarget main) {
+        if (!worldRedirectActive) return;
+        worldRedirectActive = false;
+        if (!isReady() || worldMainColor == null) {
+            MetalNative.shadeSetEnabled(device.handle(), false);
+            return;
+        }
+        long ctx = device.handle();
+        GpuTexture outTex = main != null && main.getColorTexture() != null ? main.getColorTexture() : worldMainColor;
+        if (!(outTex instanceof CelestiaTexture ct)) {
+            MetalNative.shadeSetEnabled(ctx, false);
+            return;
+        }
+        GpuTexture depthGpu = worldDepth != null ? worldDepth : (main != null ? main.getDepthTexture() : null);
+        long depthPtr = (depthGpu instanceof CelestiaTexture dt) ? dt.handle() : dummyShadowTex;
+
+        int n = activeBloomLevels;
+        float w0 = 0f, bloomNorm = 0f;
+        float bloomShift = n > 0 ? Math.max(0f, (float) (Math.log(1964.0 / Math.max(bloomHeight, 1)) / Math.log(2.0))) : 0f;
+        int levelsUsed = n > 4 ? Math.max(4, Math.min(n, n - Math.round(bloomShift))) : n;
+
+        if (levelsUsed > 0) {
+            ByteBuffer dp = pushSeg.asSlice(0, 16).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+            dp.putFloat(0, 1f).putFloat(4, 1f).putFloat(8, 0f).putFloat(12, 0f);
+            texArgSeg.set(ValueLayout.JAVA_LONG, 0, hdrWorldTex);
+            MetalNative.shadeFullscreenPass(ctx, psoBloomDown0, bloomDownTex[0],
+                texArgSeg, 1, MemorySegment.NULL, 0, pushSeg, 16);
+
+            for (int i = 1; i < levelsUsed; i++) {
+                texArgSeg.set(ValueLayout.JAVA_LONG, 0, bloomDownTex[i - 1]);
+                MetalNative.shadeFullscreenPass(ctx, psoBloomDown, bloomDownTex[i],
+                    texArgSeg, 1, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
+            }
+
+            float spectrum = look.lookPreset() == 1 ? 0.9f : look.lookPreset() == 2 ? 0.3f : 0.6f;
+            float sum = 0f;
+            if (levelsUsed >= 3) {
+                float wLast = (float) Math.pow(levelsUsed + bloomShift, spectrum);
+                sum += wLast;
+                for (int i = levelsUsed - 2; i >= 1; i--) {
+                    float wi = (float) Math.pow(i + 1 + bloomShift, spectrum);
+                    sum += wi;
+                    ByteBuffer upP = pushSeg.asSlice(0, 16).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+                    upP.putFloat(0, wi).putFloat(4, i == levelsUsed - 2 ? wLast : 1f).putFloat(8, 0f).putFloat(12, 0f);
+                    texArgSeg.set(ValueLayout.JAVA_LONG, 0, bloomDownTex[i]);
+                    texArgSeg.set(ValueLayout.JAVA_LONG, 8, i == levelsUsed - 2 ? bloomDownTex[levelsUsed - 1] : bloomAccumTex[i + 1]);
+                    MetalNative.shadeFullscreenPass(ctx, psoBloomUp, bloomAccumTex[i],
+                        texArgSeg, 2, MemorySegment.NULL, 0, pushSeg, 16);
+                }
+            } else {
+                for (int i = levelsUsed - 1; i >= 1; i--) {
+                    float wi = (float) Math.pow(i + 1 + bloomShift, spectrum);
+                    sum += wi;
+                    ByteBuffer upP = pushSeg.asSlice(0, 16).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+                    upP.putFloat(0, wi).putFloat(4, i == levelsUsed - 1 ? 0f : 1f).putFloat(8, 0f).putFloat(12, 0f);
+                    texArgSeg.set(ValueLayout.JAVA_LONG, 0, bloomDownTex[i]);
+                    texArgSeg.set(ValueLayout.JAVA_LONG, 8, i == levelsUsed - 1 ? bloomDownTex[i] : bloomAccumTex[i + 1]);
+                    MetalNative.shadeFullscreenPass(ctx, psoBloomUp, bloomAccumTex[i],
+                        texArgSeg, 2, MemorySegment.NULL, 0, pushSeg, 16);
+                }
+            }
+            w0 = (float) Math.pow(1 + bloomShift, spectrum);
+            sum += w0;
+            bloomNorm = 1f / Math.max(sum, 1e-4f);
+        }
+
+        // ShadeFinalParams: 6 x float4 = 96 B
+        ByteBuffer fp = pushSeg.asSlice(0, 96).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+        fp.putFloat(0, bloomNorm).putFloat(4, levelsUsed > 1 ? 1f : 0f).putFloat(8, frameCounter & 0xffff).putFloat(12, frame.debug);
+        fp.putFloat(16, w0).putFloat(20, 1f).putFloat(24, 1.6f).putFloat(28, 0.4f);
+        fp.putFloat(32, 0f).putFloat(36, 0f).putFloat(40, 1f).putFloat(44, 1f);
+        fp.putFloat(48, hdrWidth).putFloat(52, hdrHeight).putFloat(56, 0f).putFloat(60, 0f);
+        fp.putFloat(64, 0f).putFloat(68, 1f).putFloat(72, 1f).putFloat(76, 1f);
+        fp.putFloat(80, 0f).putFloat(84, 0f).putFloat(88, 0f).putFloat(92, 0f);
+
+        texArgSeg.set(ValueLayout.JAVA_LONG, 0, hdrWorldTex);
+        texArgSeg.set(ValueLayout.JAVA_LONG, 8, levelsUsed > 1 ? bloomAccumTex[1] : hdrWorldTex);
+        texArgSeg.set(ValueLayout.JAVA_LONG, 16, depthPtr);
+        texArgSeg.set(ValueLayout.JAVA_LONG, 24, levelsUsed > 0 ? bloomDownTex[0] : hdrWorldTex);
+
+        int outFmt = MetalConst.toNativeFormat(outTex.getFormat());
+        long psoFinal = (outFmt == MetalConst.FMT_BGRA8_UNORM) ? psoFinalBgra8 : psoFinalRgba8;
+        MetalNative.shadeFullscreenPass(ctx, psoFinal, ct.handle(),
+            texArgSeg, 4, MemorySegment.NULL, 0, pushSeg, 96);
+
+        // Update auto-exposure histogram & exposure scalar for next frame
+        if (levelsUsed > 2) {
+            int hw = Math.max(1, hdrWidth >> 3);
+            int hh = Math.max(1, hdrHeight >> 3);
+            int gx = Math.max(1, (hw / 2 + 7) / 8);
+            int gy = Math.max(1, (hh / 2 + 7) / 8);
+            long lookOff = (long) ringSlot * RING_SLOT_STRIDE + LOOK_OFFSET;
+            MetalNative.shadeExposureRun(ctx, psoHist, psoExp, bloomDownTex[2],
+                gpuBuf, 0L, ringBuf, lookOff, gx, gy);
+        }
+
+        // Disable shader globals for post/GUI passes unless hand pass re-enables them
+        MetalNative.shadeSetEnabled(ctx, false);
+    }
+
+    public void beforeHand(RenderTarget main) {
+        finishWorld(main);
+        if (isReady() && isEnabled()) {
+            handPassActive = true;
+            MetalNative.shadeSetEnabled(device.handle(), true);
+        }
+    }
+
+    public void afterHand() {
+        handPassActive = false;
+        if (device.handle() != 0L) {
+            MetalNative.shadeSetEnabled(device.handle(), false);
+        }
+    }
+
+    public void onFrameEnd() {
+        worldRedirectActive = false;
+        handPassActive = false;
+        worldMainColor = null;
+        worldDepth = null;
+        if (device.handle() != 0L) {
+            MetalNative.shadeSetEnabled(device.handle(), false);
+        }
+    }
+
+    /** Returns {@code true} when a render pass's color attachment targets the redirected world main color. */
+    public boolean shouldRedirect(GpuTexture colorTex) {
+        return isWorldRedirectActive() && worldMainColor != null && colorTex == worldMainColor;
+    }
+
+    public long redirectColorViewHandle(GpuTextureView originalView) {
+        if (originalView != null && shouldRedirect(originalView.texture())) {
+            return hdrWorldView;
+        }
+        return (originalView instanceof CelestiaTextureView ctv) ? ctv.handle() : 0L;
+    }
+
+    public long redirectColorTextureHandle(GpuTexture tex) {
+        if (shouldRedirect(tex)) {
+            return hdrWorldTex;
+        }
+        return (tex instanceof CelestiaTexture ct) ? ct.handle() : 0L;
+    }
+
+    public float[] transformClearColorToHdr(float r, float g, float b, float a) {
+        float[] hdrRgb = look.ldrToHdr(r, g, b);
+        return new float[] {hdrRgb[0], hdrRgb[1], hdrRgb[2], a};
+    }
+
+    public String statusSummary() {
+        if (!isEnabled()) return "Off";
+        if (failed) return "Fallback (init failed)";
+        if (!initialized) return "Pending";
+        float ex = gpuView != null ? gpuView.getFloat(176) : 1.0f;
+        return String.format(java.util.Locale.ROOT, "P1 HDR (%dx%d) | ev x%.2f | elev %.0f deg",
+            hdrWidth, hdrHeight, ex, look.elevation);
+    }
+
+    private void syncLookPreset() {
+        var mgr = ShaderPipelineManager.get();
+        String preset = mgr.optionState(mgr.activePack()).activePreset();
+        if ("Performance".equalsIgnoreCase(preset)) {
+            look.setLookPreset(2); // Natural
+        } else if ("Quality".equalsIgnoreCase(preset) || "Ultra".equalsIgnoreCase(preset)) {
+            look.setLookPreset(1); // Storybook
+        } else {
+            look.setLookPreset(0); // Epic
+        }
+    }
+
+    private void ensureHdrTarget(int w, int h) {
+        if (hdrWorldTex != 0L && hdrWidth == w && hdrHeight == h) return;
+        long ctx = device.handle();
+        if (hdrWorldView != 0L) { MetalNative.textureViewDestroy(ctx, hdrWorldView); hdrWorldView = 0L; }
+        if (hdrWorldTex != 0L) { MetalNative.textureDestroy(ctx, hdrWorldTex); hdrWorldTex = 0L; }
+        hdrWorldTex = MetalNative.textureCreate(ctx, MetalConst.FMT_RGBA16_FLOAT, w, h, 1, 1,
+            false, true, true, false, "CelestiaShade.HdrWorld");
+        hdrWorldView = MetalNative.textureViewCreate(ctx, hdrWorldTex, 0, 1);
+        hdrWidth = w;
+        hdrHeight = h;
+    }
+
+    private void ensureBloomTargets(int w, int h) {
+        if (bloomWidth == w && bloomHeight == h && activeBloomLevels > 0) return;
+        long ctx = device.handle();
+        for (int i = 0; i < BLOOM_LEVELS; i++) {
+            if (bloomDownTex[i] != 0L) { MetalNative.textureDestroy(ctx, bloomDownTex[i]); bloomDownTex[i] = 0L; }
+            if (bloomAccumTex[i] != 0L) { MetalNative.textureDestroy(ctx, bloomAccumTex[i]); bloomAccumTex[i] = 0L; }
+        }
+        int bw = Math.max(1, w >> 1), bh = Math.max(1, h >> 1);
+        int count = 0;
+        for (int i = 0; i < BLOOM_LEVELS; i++) {
+            bloomDownTex[i] = MetalNative.textureCreate(ctx, BLOOM_FORMAT, bw, bh, 1, 1,
+                false, true, true, false, "CelestiaShade.BloomDown" + i);
+            if (i >= 1 && i < BLOOM_LEVELS - 1) {
+                bloomAccumTex[i] = MetalNative.textureCreate(ctx, BLOOM_FORMAT, bw, bh, 1, 1,
+                    false, true, true, false, "CelestiaShade.BloomAccum" + i);
+            }
+            count++;
+            if (bw <= 2 || bh <= 2) break;
+            bw = Math.max(1, bw >> 1);
+            bh = Math.max(1, bh >> 1);
+        }
+        activeBloomLevels = count;
+        bloomWidth = w;
+        bloomHeight = h;
+    }
+
+    public synchronized void close() {
+        if (activeInstance == this) activeInstance = null;
+        worldRedirectActive = false;
+        handPassActive = false;
+        long ctx = device.handle();
+        if (ctx != 0L) {
+            MetalNative.shadeSetEnabled(ctx, false);
+            MetalNative.shadeSetGlobals(ctx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            MetalNative.shadeSetResource(ctx, 0, 0L);
+            if (hdrWorldView != 0L) { MetalNative.textureViewDestroy(ctx, hdrWorldView); hdrWorldView = 0L; }
+            if (hdrWorldTex != 0L) { MetalNative.textureDestroy(ctx, hdrWorldTex); hdrWorldTex = 0L; }
+            for (int i = 0; i < BLOOM_LEVELS; i++) {
+                if (bloomDownTex[i] != 0L) { MetalNative.textureDestroy(ctx, bloomDownTex[i]); bloomDownTex[i] = 0L; }
+                if (bloomAccumTex[i] != 0L) { MetalNative.textureDestroy(ctx, bloomAccumTex[i]); bloomAccumTex[i] = 0L; }
+            }
+            if (psoSkyLut != 0L) MetalNative.pipelineDestroy(ctx, psoSkyLut);
+            if (psoBloomDown0 != 0L) MetalNative.pipelineDestroy(ctx, psoBloomDown0);
+            if (psoBloomDown != 0L) MetalNative.pipelineDestroy(ctx, psoBloomDown);
+            if (psoBloomUp != 0L) MetalNative.pipelineDestroy(ctx, psoBloomUp);
+            if (psoFinalRgba8 != 0L) MetalNative.pipelineDestroy(ctx, psoFinalRgba8);
+            if (psoFinalBgra8 != 0L) MetalNative.pipelineDestroy(ctx, psoFinalBgra8);
+            if (psoHist != 0L) MetalNative.computePipelineDestroy(ctx, psoHist);
+            if (psoExp != 0L) MetalNative.computePipelineDestroy(ctx, psoExp);
+            if (dummyShadowTex != 0L) MetalNative.textureDestroy(ctx, dummyShadowTex);
+            if (skyLutTex != 0L) MetalNative.textureDestroy(ctx, skyLutTex);
+            if (milkyWayTex != 0L) MetalNative.textureDestroy(ctx, milkyWayTex);
+            if (shadowCompareSamp != 0L) MetalNative.samplerDestroy(ctx, shadowCompareSamp);
+            if (linearClampSamp != 0L) MetalNative.samplerDestroy(ctx, linearClampSamp);
+            if (ringBuf != 0L) MetalNative.bufferDestroy(ctx, ringBuf);
+            if (resBuf != 0L) MetalNative.bufferDestroy(ctx, resBuf);
+            if (gpuBuf != 0L) MetalNative.bufferDestroy(ctx, gpuBuf);
+        }
+        if (lutVsFn != 0L) MetalNative.functionDestroy(lutVsFn);
+        if (lutFsFn != 0L) MetalNative.functionDestroy(lutFsFn);
+        if (lutLib != 0L) MetalNative.libraryDestroy(lutLib);
+        if (fsVsFn != 0L) MetalNative.functionDestroy(fsVsFn);
+        if (bloomDown0Fn != 0L) MetalNative.functionDestroy(bloomDown0Fn);
+        if (bloomDownFn != 0L) MetalNative.functionDestroy(bloomDownFn);
+        if (bloomUpFn != 0L) MetalNative.functionDestroy(bloomUpFn);
+        if (finalFn != 0L) MetalNative.functionDestroy(finalFn);
+        if (histFn != 0L) MetalNative.functionDestroy(histFn);
+        if (expFn != 0L) MetalNative.functionDestroy(expFn);
+        if (milkyWayFn != 0L) MetalNative.functionDestroy(milkyWayFn);
+        if (postLib != 0L) MetalNative.libraryDestroy(postLib);
+        psoSkyLut = psoBloomDown0 = psoBloomDown = psoBloomUp = psoFinalRgba8 = psoFinalBgra8 = psoHist = psoExp = 0L;
+        dummyShadowTex = skyLutTex = milkyWayTex = shadowCompareSamp = linearClampSamp = 0L;
+        ringBuf = resBuf = gpuBuf = 0L;
+        lutVsFn = lutFsFn = lutLib = fsVsFn = bloomDown0Fn = bloomDownFn = bloomUpFn = finalFn = histFn = expFn = milkyWayFn = postLib = 0L;
+        initialized = false;
+    }
+}

@@ -322,6 +322,17 @@ void cm_device_destroy(int64_t ctxPtr) {
                 [(id<MTL4CommandQueue>)ctx.m4Queue removeResidencySet:(id<MTLResidencySet>)ctx.residencySet];
             }
         }
+        ctx.shadeGlobalsEnabled = NO;
+        ctx.shadeFrameBuf = nil;
+        ctx.shadeLookBuf = nil;
+        ctx.shadeGpuBuf = nil;
+        ctx.shadeResBuf = nil;
+        ctx.shadeSkyLutTex = nil;
+        ctx.shadeShadowTex = nil;
+        ctx.shadeDummyTex = nil;
+        ctx.shadeLinearSampler = nil;
+        ctx.shadeShadowSampler = nil;
+        for (int i = 0; i < CM_SHADE_MAX_RES_TEX; i++) ctx->_shadeResTextures[i] = nil;
         ctx.residencySet = nil;
         ctx.fanIndexBuffer = nil;
         ctx.fanIndexCapacity = 0;

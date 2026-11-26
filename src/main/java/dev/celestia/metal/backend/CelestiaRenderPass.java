@@ -11,6 +11,7 @@ import com.mojang.renderpearl.api.pipeline.UniformType;
 import com.mojang.renderpearl.backend.api.BackendRenderPipeline;
 import com.mojang.renderpearl.backend.api.RenderPassBackend;
 import com.mojang.renderpearl.util.TextureViewAndSampler;
+import dev.celestia.metal.shade.ShadeShaderPatcher;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
@@ -28,7 +29,9 @@ public final class CelestiaRenderPass implements RenderPassBackend {
 
     private final CelestiaMetalDevice device;
     private final CelestiaCommandEncoder encoder;
+    private final int colorFormatOverride;
     private final int depthFormat;
+    private final ShadeShaderPatcher.Variant shadeVariant;
     private final int[] vtxStrides = new int[8];
     private final Map<TexelKey, Long> texelBufferViews = new HashMap<>();
     private Object[] pendingUniforms = new Object[16];
@@ -40,10 +43,13 @@ public final class CelestiaRenderPass implements RenderPassBackend {
     private long indexBaseOffset;
     private boolean closed;
 
-    CelestiaRenderPass(CelestiaMetalDevice device, CelestiaCommandEncoder encoder, GpuFormat depthFormat) {
+    CelestiaRenderPass(CelestiaMetalDevice device, CelestiaCommandEncoder encoder,
+                       int colorFormatOverride, GpuFormat depthFormat, ShadeShaderPatcher.Variant shadeVariant) {
         this.device = device;
         this.encoder = encoder;
+        this.colorFormatOverride = colorFormatOverride;
         this.depthFormat = depthFormat != null ? MetalConst.toNativeFormat(depthFormat) : CelestiaPipeline.NO_DEPTH;
+        this.shadeVariant = shadeVariant != null ? shadeVariant : ShadeShaderPatcher.Variant.BASE;
     }
 
     void closePass() {
@@ -82,7 +88,7 @@ public final class CelestiaRenderPass implements RenderPassBackend {
                 vtxStrides[vb.bufferSlot()] = vb.stride();
             }
         }
-        long pso = this.pipeline.getOrCreatePso(depthFormat);
+        long pso = this.pipeline.getOrCreatePso(colorFormatOverride, depthFormat, shadeVariant);
         MetalNative.passSetPipeline(device.handle(), pso);
         Arrays.fill(pendingUniforms, null);
         Arrays.fill(boundUniforms, null);
