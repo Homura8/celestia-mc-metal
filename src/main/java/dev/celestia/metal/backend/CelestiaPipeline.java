@@ -103,12 +103,12 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
         }
 
         CelestiaPipeline pipeline = new CelestiaPipeline(device, info, bindings, vsLib, fsLib, vsFn, fsFn);
-        // Pre-warm common depth configurations up front off the render thread
-        if (!info.colorTargetStates().isEmpty()) {
+        // Match RenderPearl's depth pre-warming contract: always compile the standard D32_FLOAT variant,
+        // and only pre-warm the NO_DEPTH variant when the pipeline declares no DepthStencilState (so shaders
+        // that write gl_FragDepth / [[depth(any)]] never compile against depthAttachmentPixelFormat = Invalid).
+        pipeline.getOrCreatePso(MetalConst.FMT_D32_FLOAT);
+        if (info.depthStencilState() == null && !info.colorTargetStates().isEmpty()) {
             pipeline.getOrCreatePso(NO_DEPTH);
-        }
-        if (info.depthStencilState() != null || info.colorTargetStates().isEmpty()) {
-            pipeline.getOrCreatePso(MetalConst.FMT_D32_FLOAT);
         }
         return () -> pipeline;
     }

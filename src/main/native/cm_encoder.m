@@ -204,6 +204,21 @@ void cm_blit_clear_color(int64_t ctxPtr, int64_t texPtr, float r, float g, float
     }
 }
 
+static void configure_depth_stencil_attachments(MTLRenderPassDepthAttachmentDescriptor *depthAtt,
+                                                MTLRenderPassStencilAttachmentDescriptor *stencilAtt,
+                                                id<MTLTexture> dtex, BOOL hasClear, double clearDepth) {
+    depthAtt.texture = dtex;
+    depthAtt.loadAction = hasClear ? MTLLoadActionClear : MTLLoadActionLoad;
+    depthAtt.storeAction = MTLStoreActionStore;
+    if (hasClear) depthAtt.clearDepth = clearDepth;
+    if (dtex.pixelFormat == MTLPixelFormatDepth32Float_Stencil8) {
+        stencilAtt.texture = dtex;
+        stencilAtt.loadAction = hasClear ? MTLLoadActionClear : MTLLoadActionLoad;
+        stencilAtt.storeAction = MTLStoreActionStore;
+        if (hasClear) stencilAtt.clearStencil = 0;
+    }
+}
+
 void cm_blit_clear_depth(int64_t ctxPtr, int64_t texPtr, double depth) {
     if (!ctxPtr || !texPtr) return;
     @autoreleasepool {
@@ -216,19 +231,13 @@ void cm_blit_clear_depth(int64_t ctxPtr, int64_t texPtr, double depth) {
         if (ctx.metal4Active) {
             if (@available(macOS 26.0, *)) {
                 MTL4RenderPassDescriptor *rpd = [MTL4RenderPassDescriptor new];
-                rpd.depthAttachment.texture = tex;
-                rpd.depthAttachment.loadAction = MTLLoadActionClear;
-                rpd.depthAttachment.storeAction = MTLStoreActionStore;
-                rpd.depthAttachment.clearDepth = depth;
+                configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment, tex, YES, depth);
                 id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
                 [enc endEncoding];
             }
         } else {
             MTLRenderPassDescriptor *rpd = [MTLRenderPassDescriptor renderPassDescriptor];
-            rpd.depthAttachment.texture = tex;
-            rpd.depthAttachment.loadAction = MTLLoadActionClear;
-            rpd.depthAttachment.storeAction = MTLStoreActionStore;
-            rpd.depthAttachment.clearDepth = depth;
+            configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment, tex, YES, depth);
             id<MTLRenderCommandEncoder> enc = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf renderCommandEncoderWithDescriptor:rpd];
             [enc endEncoding];
         }
@@ -253,10 +262,7 @@ void cm_blit_clear_color_depth(int64_t ctxPtr, int64_t colorTexPtr, float r, flo
                 rpd.colorAttachments[0].loadAction = MTLLoadActionClear;
                 rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
                 rpd.colorAttachments[0].clearColor = MTLClearColorMake(r, g, b, a);
-                rpd.depthAttachment.texture = dtex;
-                rpd.depthAttachment.loadAction = MTLLoadActionClear;
-                rpd.depthAttachment.storeAction = MTLStoreActionStore;
-                rpd.depthAttachment.clearDepth = depth;
+                configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment, dtex, YES, depth);
                 id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
                 [enc endEncoding];
             }
@@ -266,10 +272,7 @@ void cm_blit_clear_color_depth(int64_t ctxPtr, int64_t colorTexPtr, float r, flo
             rpd.colorAttachments[0].loadAction = MTLLoadActionClear;
             rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
             rpd.colorAttachments[0].clearColor = MTLClearColorMake(r, g, b, a);
-            rpd.depthAttachment.texture = dtex;
-            rpd.depthAttachment.loadAction = MTLLoadActionClear;
-            rpd.depthAttachment.storeAction = MTLStoreActionStore;
-            rpd.depthAttachment.clearDepth = depth;
+            configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment, dtex, YES, depth);
             id<MTLRenderCommandEncoder> enc = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf renderCommandEncoderWithDescriptor:rpd];
             [enc endEncoding];
         }
@@ -468,10 +471,8 @@ int32_t cm_pass_begin(int64_t ctxPtr,
                         texW = (int32_t)dtex.width;
                         texH = (int32_t)dtex.height;
                     }
-                    rpd.depthAttachment.texture = dtex;
-                    rpd.depthAttachment.loadAction = depthHasClear ? MTLLoadActionClear : MTLLoadActionLoad;
-                    rpd.depthAttachment.storeAction = MTLStoreActionStore;
-                    if (depthHasClear) rpd.depthAttachment.clearDepth = depthClear;
+                    configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment,
+                                                        dtex, depthHasClear != 0, depthClear);
                 }
                 id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
                 if (!enc) return 0;
@@ -506,10 +507,8 @@ int32_t cm_pass_begin(int64_t ctxPtr,
                     texW = (int32_t)dtex.width;
                     texH = (int32_t)dtex.height;
                 }
-                rpd.depthAttachment.texture = dtex;
-                rpd.depthAttachment.loadAction = depthHasClear ? MTLLoadActionClear : MTLLoadActionLoad;
-                rpd.depthAttachment.storeAction = MTLStoreActionStore;
-                if (depthHasClear) rpd.depthAttachment.clearDepth = depthClear;
+                configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment,
+                                                    dtex, depthHasClear != 0, depthClear);
             }
             id<MTLRenderCommandEncoder> enc = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf renderCommandEncoderWithDescriptor:rpd];
             if (!enc) return 0;

@@ -169,6 +169,53 @@ static void verify_backend_ops(int32_t preferMetal4) {
     cm_buffer_destroy(ctx, tbBuf);
     cm_buffer_destroy(ctx, vbo);
 
+    // 2c. Depth-writing fragment shader with D32_FLOAT and combined Depth32Float_Stencil8
+    int64_t dsTex = cm_texture_create(ctx, CM_FMT_D32_FLOAT_S8_UINT, 64, 64, 1, 1, 0, 1, 1, 0, "TestDepthStencil");
+    int64_t dsView = cm_texture_view_create(ctx, dsTex, 0, 1);
+    assert(dsTex && dsView);
+    const char *depthWriteMsl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VOut { float4 pos [[position]]; };\n"
+        "struct FOut { half4 col [[color(0)]]; float depth [[depth(any)]]; };\n"
+        "vertex VOut vs_dw(uint vid [[vertex_id]]) {\n"
+        "  VOut o; float2 p = float2((vid==1)?3.0f:-1.0f, (vid==2)?3.0f:-1.0f); o.pos = float4(p, 0.5f, 1.0f); return o;\n"
+        "}\n"
+        "fragment FOut fs_dw() {\n"
+        "  FOut o; o.col = half4(0.25h, 0.75h, 0.50h, 1.0h); o.depth = 0.25f; return o;\n"
+        "}\n";
+    int64_t libDw = cm_compile_msl_library(ctx, depthWriteMsl, "depth_write", 0, err, sizeof(err));
+    assert(libDw != 0);
+    int64_t vsDw = cm_compile_function(libDw, "vs_dw", 0, 0, 0, err, sizeof(err));
+    int64_t fsDw = cm_compile_function(libDw, "fs_dw", 0, 0, 0, err, sizeof(err));
+    int64_t psoDwD32 = cm_render_pipeline_create(ctx, vsDw, fsDw, NULL, 0, NULL, 0, &colDesc, 1,
+                                                 CM_FMT_D32_FLOAT, CM_TOPO_TRIANGLES, 0, 0, 1,
+                                                 CM_CMP_ALWAYS, 1, 0.0f, 0.0f, "DepthWriteD32", err, sizeof(err));
+    int64_t psoDwDS = cm_render_pipeline_create(ctx, vsDw, fsDw, NULL, 0, NULL, 0, &colDesc, 1,
+                                                CM_FMT_D32_FLOAT_S8_UINT, CM_TOPO_TRIANGLES, 0, 0, 1,
+                                                CM_CMP_ALWAYS, 1, 0.0f, 0.0f, "DepthWriteDS", err, sizeof(err));
+    assert(psoDwD32 != 0 && psoDwDS != 0);
+
+    cm_cmd_begin(ctx);
+    assert(cm_pass_begin(ctx, &cview, &clearFlag, clearCol, 1, dview, 1, 0.0, 0, 0, 64, 64, "DwD32Pass") == 1);
+    cm_pass_set_pipeline(ctx, psoDwD32);
+    cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+    cm_pass_end(ctx);
+    assert(cm_pass_begin(ctx, &cview, &clearFlag, clearCol, 1, dsView, 1, 0.0, 0, 0, 64, 64, "DwDSPass") == 1);
+    cm_pass_set_pipeline(ctx, psoDwDS);
+    cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+    cm_pass_end(ctx);
+    uint64_t s2c = cm_cmd_submit(ctx, 2);
+    assert(cm_wait_submit(ctx, s2c, 5000000000ULL) == 1);
+
+    cm_pipeline_destroy(ctx, psoDwDS);
+    cm_pipeline_destroy(ctx, psoDwD32);
+    cm_function_destroy(fsDw);
+    cm_function_destroy(vsDw);
+    cm_library_destroy(libDw);
+    cm_texture_view_destroy(ctx, dsView);
+    cm_texture_destroy(ctx, dsTex);
+
     // 3. MetalFX Spatial & Temporal scaler creation + execution
     int64_t mfxOut = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 128, 128, 1, 1, 0, 1, 1, 1, "MFXOut");
     int64_t mfxIn = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 64, 64, 1, 1, 0, 1, 1, 0, "MFXIn");
