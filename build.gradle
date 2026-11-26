@@ -1,0 +1,199 @@
+plugins {
+	id 'java'
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+	archivesName = project.archives_base_name
+}
+
+repositories {
+	exclusiveContent {
+		forRepository {
+			maven {
+				name = 'Modrinth'
+				url = 'https://api.modrinth.com/maven'
+			}
+		}
+		filter {
+			includeGroup 'maven.modrinth'
+		}
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	compileOnly "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	compileOnly "maven.modrinth:sodium:${project.sodium_version}"
+
+	testImplementation "org.junit.jupiter:junit-jupiter:5.12.2"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+def nativeDir = file("src/main/native")
+def nativeOut = layout.buildDirectory.file("native/libcelestiametal.dylib")
+
+tasks.register('buildNative', Exec) {
+	def sources = fileTree(nativeDir) { include '*.m' }
+	def headers = fileTree(nativeDir) { include '*.h' }
+	inputs.files sources, headers
+	outputs.file nativeOut
+	doFirst {
+		nativeOut.get().asFile.parentFile.mkdirs()
+	}
+	doFirst {
+		def srcList = sources.files.sort { it.name }.collect { it.absolutePath }
+		commandLine([
+			'clang', '-dynamiclib', '-fobjc-arc', '-O2', '-arch', 'arm64',
+			'-install_name', '@rpath/libcelestiametal.dylib',
+			'-mmacosx-version-min=15.0', '-Wall', '-Werror',
+			'-framework', 'Metal',
+			'-framework', 'MetalFX',
+			'-framework', 'QuartzCore',
+			'-framework', 'Foundation',
+			'-framework', 'AppKit',
+			'-framework', 'CoreGraphics',
+			'-framework', 'CoreVideo',
+			'-framework', 'IOSurface',
+			'-o', nativeOut.get().asFile.absolutePath
+		] + srcList)
+	}
+}
+
+def nativeTestOut = layout.buildDirectory.file("native-tests/celestia_metal_tests")
+
+tasks.register('buildNativeTests', Exec) {
+	dependsOn 'buildNative'
+	def testSrc = file("tools/test_metal_backend.m")
+	def headers = fileTree(nativeDir) { include '*.h' }
+	def shaders = fileTree("src/main/resources/assets/celestiametal") { include '**/*.metal', '**/*.json' }
+	inputs.files testSrc, headers, nativeOut, shaders
+	outputs.file nativeTestOut
+	doFirst {
+		nativeTestOut.get().asFile.parentFile.mkdirs()
+	}
+	commandLine([
+		'clang', '-fobjc-arc', '-O2', '-arch', 'arm64',
+		'-mmacosx-version-min=15.0', '-Wall', '-Werror',
+		'-I', nativeDir.absolutePath,
+		'-framework', 'Metal',
+		'-framework', 'MetalFX',
+		'-framework', 'QuartzCore',
+		'-framework', 'Foundation',
+		'-framework', 'AppKit',
+		'-framework', 'CoreGraphics',
+		'-Wl,-rpath,' + nativeOut.get().asFile.parentFile.absolutePath,
+		nativeOut.get().asFile.absolutePath,
+		testSrc.absolutePath,
+		'-o', nativeTestOut.get().asFile.absolutePath
+	])
+}
+
+tasks.register('runNativeTests', Exec) {
+	dependsOn 'buildNativeTests'
+	workingDir projectDir
+	commandLine nativeTestOut.get().asFile.absolutePath,
+		file("src/main/resources/assets/celestiametal").absolutePath
+}
+
+processResources {
+	dependsOn 'buildNative'
+	from(nativeOut) { into 'natives/macos-arm64' }
+	def ver = project.version
+	inputs.property 'version', ver
+	filesMatching('fabric.mod.json') {
+		expand 'version': ver
+	}
+	from(rootProject.file('LICENSE')) { into 'META-INF' }
+	from(rootProject.file('NOTICE')) { into 'META-INF' }
+	from(rootProject.file('CREDITS.md')) { into 'META-INF' }
+}
+
+tasks.register('checkPrivacy') {
+	dependsOn 'processResources'
+	def root = projectDir
+	def resourcesDir = layout.buildDirectory.dir('resources/main')
+	def userName = System.getProperty('user.name')
+	def patterns = [
+		~('/Us' + 'ers/[^\\s]'),
+		~('/ho' + 'me/[^\\s]'),
+		~('C:' + '\\\\Us' + 'ers\\\\'),
+	]
+	if (System.getenv('CI') == null && userName && userName.length() >= 3) {
+		patterns << ~('(?i)(?<![\\p{Alnum}_])' + java.util.regex.Pattern.quote(userName) + '(?![\\p{Alnum}_])')
+	}
+	doLast {
+		def leaks = []
+		def scan = { String label, String text ->
+			text.eachLine { line, n ->
+				if (patterns.any { it.matcher(line).find() }) leaks << "${label}:${n + 1}"
+			}
+		}
+		def skip = ['build', '.gradle', 'run', '.git'] as Set
+		root.eachFileRecurse { f ->
+			def rel = root.toPath().relativize(f.toPath()).toString()
+			if (f.isFile() && !skip.contains(rel.split('/')[0])) {
+				def bytes = f.bytes
+				if (!(0..<Math.min(bytes.length, 8000)).any { bytes[it] == 0 }) {
+					scan(rel, new String(bytes, 'UTF-8'))
+				}
+			}
+		}
+		def res = resourcesDir.get().asFile
+		if (res.isDirectory()) {
+			res.eachFileRecurse { f ->
+				if (f.isFile() && !f.name.endsWith('.dylib')) {
+					scan('jar:' + res.toPath().relativize(f.toPath()), new String(f.bytes, 'ISO-8859-1'))
+				}
+			}
+		}
+		if (leaks) {
+			throw new GradleException('Personal path or user name found (privacy check):\n  ' + leaks.join('\n  '))
+		}
+	}
+}
+
+test {
+	useJUnitPlatform()
+	jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
+
+tasks.named('check') {
+	dependsOn 'checkPrivacy'
+}
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(25)
+	}
+	withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+}
+
+jar {
+	manifest {
+		attributes(
+			'Main-Class': 'dev.celestia.metal.InstallHelp',
+			'Implementation-Version': project.version
+		)
+	}
+	from(rootProject.file('LICENSE'))
+	from(rootProject.file('NOTICE'))
+	from(rootProject.file('CREDITS.md'))
+}
+
+loom {
+	accessWidenerPath = file('src/main/resources/celestiametal.accesswidener')
+	runs {
+		client {
+			vmArg '--enable-native-access=ALL-UNNAMED'
+		}
+	}
+}

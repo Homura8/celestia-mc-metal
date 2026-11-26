@@ -1,0 +1,19 @@
+Celestia Metal
+Copyright 2026 Celestia Metal Contributors
+
+This product includes software and engineering advancements inspired by or
+adapted from open-source projects in the Minecraft Apple Silicon Metal ecosystem.
+See CREDITS.md for full attribution and license details.
+
+Referenced / Credited Upstream Projects:
+- Pure Metal (imCinq/pure-metal) — Apache License 2.0
+- mcopt (noahdunnagan/mcopt) — Apache License 2.0
+- Cadence (BattledGamerCF/Cadence) — Apache License 2.0
+- Minecraft Metal Shaders (GaelQuinta/minecraft-metal-shaders) — Apache License 2.0
+- Mine2Metal (HoshizoraAkira/Mine2Metal) — MIT License
+- SiliconShaders (rellefnediew/SiliconShaders) — Apache License 2.0
+- Ciderlight (riccqi/ciderlight) — Apache License 2.0
+- Minecraft Metal Renderer / Shader Loader (Kausik-Velaga/minecraft-metal-renderer) — MIT License
+- Metallum (kokodio/metallum) — MIT License
+- Reese's Sodium Options (FlashyReese/reeses-sodium-options) — MIT License
+- CelestiaGlow (Homura8/celestiaglow) — Design tokens & frosted observatory palette

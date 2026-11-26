@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "celestia-metal",
+  "version": "${version}",
+  "name": "Celestia Metal",
+  "description": "Apple Silicon-first native Metal 4 / Metal 3 rendering engine and MSL shader ecosystem for Minecraft: Java Edition.",
+  "authors": ["Homura8", "Celestia Metal Contributors"],
+  "contact": {
+    "homepage": "https://github.com/Homura8/celestia-mcmetal",
+    "sources": "https://github.com/Homura8/celestia-mcmetal",
+    "issues": "https://github.com/Homura8/celestia-mcmetal/issues"
+  },
+  "license": "Apache-2.0",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.celestia.metal.CelestiaMetalMod"]
+  },
+  "accessWidener": "celestiametal.accesswidener",
+  "mixins": ["celestiametal.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "~26.3",
+    "java": ">=25"
+  },
+  "suggests": {
+    "sodium": "*"
+  }
+}
