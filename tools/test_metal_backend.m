@@ -255,6 +255,16 @@ static void verify_backend_ops(int32_t preferMetal4) {
     uint64_t s2eIdle = cm_cmd_submit(ctx, 2);
     assert(cm_cmd_has_active(ctx) == 0);
     assert(cm_wait_submit(ctx, s2eIdle, 5000000000ULL) == 1);
+    // Zero-timeout fence polls must never block (Minecraft polls many fences per frame) and report correctly.
+    {
+        uint64_t future = cm_device_next_submit(ctx) + 5;
+        CFTimeInterval p0 = CACurrentMediaTime();
+        for (int i = 0; i < 1000; i++) assert(cm_wait_submit(ctx, future, 0) == 0);
+        double pollUs = (CACurrentMediaTime() - p0) * 1e6 / 1000.0;
+        assert(cm_wait_submit(ctx, s2eIdle, 0) == 1);
+        if (pollUs > 20.0) { fprintf(stderr, "FAIL: zero-timeout fence poll costs %.2f us\n", pollUs); exit(1); }
+        printf("[Backend %s] zero-timeout fence poll %.3f us\n", preferMetal4 ? "Metal 4" : "Metal 3", pollUs);
+    }
 
     const char *fanMsl =
         "#include <metal_stdlib>\n"
@@ -573,6 +583,70 @@ static void verify_backend_ops(int32_t preferMetal4) {
             printf("[Backend %s] Test 2h staging reuse buffer->texture ordering OK\n", preferMetal4 ? "Metal 4" : "Metal 3");
         }
 
+        // 2j. Push-constant dedup: identical consecutive pushes reuse the bound bytes, changed ones take effect, and a
+        //     new encoder never inherits a stale "already bound" assumption.
+        {
+            const char *pcMsl =
+                "#include <metal_stdlib>\n"
+                "using namespace metal;\n"
+                "struct P { float4 color; float4 rect; };\n"
+                "struct VOut { float4 pos [[position]]; };\n"
+                "vertex VOut vs_pc(uint vid [[vertex_id]], constant P &p [[buffer(15)]]) {\n"
+                "  float2 c = float2((vid & 1) ? p.rect.z : p.rect.x, (vid >> 1) ? p.rect.w : p.rect.y);\n"
+                "  VOut o; o.pos = float4(c, 0.5f, 1.0f); return o;\n"
+                "}\n"
+                "fragment half4 fs_pc(constant P &p [[buffer(15)]]) { return half4(p.color); }\n";
+            int64_t libPc = cm_compile_msl_library(ctx, pcMsl, "push_dedup", 0, err, sizeof(err));
+            assert(libPc != 0);
+            int64_t vsPc = cm_compile_function(libPc, "vs_pc", 0, 0, 0, err, sizeof(err));
+            int64_t fsPc = cm_compile_function(libPc, "fs_pc", 0, 0, 0, err, sizeof(err));
+            int64_t psoPc = cm_render_pipeline_create(ctx, vsPc, fsPc, NULL, 0, NULL, 0, &colDesc, 1, -1,
+                                                      CM_TOPO_TRIANGLE_STRIP, 0, 0, 0, CM_CMP_ALWAYS, 0, 0.0f, 0.0f,
+                                                      "PushDedupPSO", err, sizeof(err));
+            assert(psoPc != 0);
+            // Draw only the rect, so each third keeps whatever the previous draws left there
+            float red[8]    = { 1, 0, 0, 1,  -1.0f, -1, -0.34f, 1 };
+            float redMid[8] = { 1, 0, 0, 1,  -0.34f, -1, 0.34f, 1 };
+            float green[8]  = { 0, 1, 0, 1,   0.34f, -1, 1.0f, 1 };
+            cm_cmd_begin(ctx);
+            assert(cm_pass_begin(ctx, &cview, &clearFlag, clearCol, 1, 0, 0, 0.0, 0, 0, 64, 64, "PushDedupA") == 1);
+            cm_pass_set_pipeline(ctx, psoPc);
+            cm_pass_push_constants(ctx, 15, red, sizeof(red));
+            cm_pass_draw(ctx, CM_TOPO_TRIANGLE_STRIP, 4, 1, 0, 0);
+            cm_pass_push_constants(ctx, 15, red, sizeof(red));      // identical: deduplicated
+            cm_pass_draw(ctx, CM_TOPO_TRIANGLE_STRIP, 4, 1, 0, 0);
+            cm_pass_push_constants(ctx, 15, redMid, sizeof(redMid)); // different rect
+            cm_pass_draw(ctx, CM_TOPO_TRIANGLE_STRIP, 4, 1, 0, 0);
+            cm_pass_push_constants(ctx, 15, green, sizeof(green));
+            cm_pass_draw(ctx, CM_TOPO_TRIANGLE_STRIP, 4, 1, 0, 0);
+            cm_pass_end(ctx);
+            // New encoder: the same bytes as the last push of the previous encoder must still be bound again
+            float greenFull[8] = { 0, 1, 0, 1,  -1.0f, -1, -0.34f, 0.0f };
+            assert(cm_pass_begin(ctx, &cview, &loadFlag, clearCol, 1, 0, 0, 0.0, 0, 0, 64, 64, "PushDedupB") == 1);
+            cm_pass_set_pipeline(ctx, psoPc);
+            cm_pass_push_constants(ctx, 15, greenFull, sizeof(greenFull));
+            cm_pass_draw(ctx, CM_TOPO_TRIANGLE_STRIP, 4, 1, 0, 0);
+            cm_pass_end(ctx);
+            cm_blit_copy_texture_to_buffer(ctx, ctex, 0, 0, 0, 0, 64, 64, readBuf, 0, 64 * 4);
+            uint64_t s2j = cm_cmd_submit(ctx, 2);
+            assert(cm_wait_submit(ctx, s2j, 5000000000ULL) == 1);
+            // Rows are flipped relative to NDC y; sample row 16 (one half) and row 48 (other half).
+            const uint8_t *left0 = &px[((size_t)16 * 64u + 8u) * 4u], *left1 = &px[((size_t)48 * 64u + 8u) * 4u];
+            const uint8_t *mid = &px[((size_t)32 * 64u + 32u) * 4u], *right = &px[((size_t)32 * 64u + 56u) * 4u];
+            int leftGreen = (left0[1] > 250 && left0[0] < 5) + (left1[1] > 250 && left1[0] < 5);
+            int leftRed = (left0[0] > 250 && left0[1] < 5) + (left1[0] > 250 && left1[1] < 5);
+            if (!(leftGreen == 1 && leftRed == 1 && mid[0] > 250 && mid[1] < 5 && right[1] > 250 && right[0] < 5)) {
+                fprintf(stderr, "FAIL 2j: push-constant dedup L0=%d,%d L1=%d,%d M=%d,%d R=%d,%d\n",
+                        left0[0], left0[1], left1[0], left1[1], mid[0], mid[1], right[0], right[1]);
+                exit(1);
+            }
+            cm_pipeline_destroy(ctx, psoPc);
+            cm_function_destroy(fsPc);
+            cm_function_destroy(vsPc);
+            cm_library_destroy(libPc);
+            printf("[Backend %s] Test 2j push-constant dedup OK\n", preferMetal4 ? "Metal 4" : "Metal 3");
+        }
+
         // 2i. Non-blocking (MAILBOX-style) presentation with VSync off: acquire never blocks, frames keep flowing even
         //     when presented handlers never report "shown" (offscreen layer = worst case), and teardown is safe.
         {
@@ -613,8 +687,41 @@ static void verify_backend_ops(int32_t preferMetal4) {
                 cm_cmd_begin(ctx);
                 cm_surface_blit_and_present(ctx, surf, cview, 2);
             }
+            // Stress: repeated resizes while frames are in flight or waiting. A leaked present slot would show up as 50 ms
+            // slot-wait timeouts once the pool is exhausted. (Offscreen layers rarely park a waiting frame, so this does
+            // not deterministically reproduce the configure-time leak fixed in alpha.13; it guards against regressions.)
+            for (int r = 0; r < 6; r++) {
+                for (int f = 0; f < 2; f++) {
+                    cm_cmd_begin(ctx);
+                    cm_surface_blit_and_present(ctx, surf, cview, 2);
+                }
+                cm_device_wait_idle(ctx);
+                usleep(20000); // frames are finished; with no on-screen feedback the newest one is parked as waiting
+                cm_surface_configure(surf, 200 + r * 16, 100 + r * 8, 0, 0);
+            }
+            cm_device_wait_idle(ctx);
+            usleep(250000); // let the 100 ms no-feedback fallback present any waiting frame
+            int64_t stR0[CM_STAT_COUNT] = {0}, stR1[CM_STAT_COUNT] = {0};
+            cm_device_stats(ctx, stR0, CM_STAT_COUNT);
+            double worstAfterResize = 0.0;
+            for (int f = 0; f < 20; f++) {
+                CFTimeInterval fs = CACurrentMediaTime();
+                cm_cmd_begin(ctx);
+                cm_surface_blit_and_present(ctx, surf, cview, 2);
+                worstAfterResize = MAX(worstAfterResize, (CACurrentMediaTime() - fs) * 1000.0);
+            }
+            cm_device_stats(ctx, stR1, CM_STAT_COUNT);
+            if (worstAfterResize > 45.0) {
+                fprintf(stderr, "FAIL 2i: present slots leaked across resizes (worst frame %.1f ms)\n", worstAfterResize);
+                exit(1);
+            }
             cm_surface_set_nonblocking(surf, 0);
             cm_surface_set_nonblocking(surf, 1);
+            // Tear down while frames are still in flight (must not trap in libdispatch / Metal callbacks)
+            for (int f = 0; f < 3; f++) {
+                cm_cmd_begin(ctx);
+                cm_surface_blit_and_present(ctx, surf, cview, 2);
+            }
             cm_surface_destroy(ctx, surf);
             cm_device_wait_idle(ctx);
             char drained2[512] = {0};
@@ -1069,6 +1176,92 @@ static void benchmark_pass_merging(int32_t preferMetal4) {
     cm_device_destroy(ctx);
 }
 
+// CPU encode cost per draw through the Celestia C ABI with realistic state changes between draws:
+// (a) draws only, (b) Sodium-like per-draw push constants + uniform-buffer offset, (c) (b) + texture switches (Xaero-like).
+static void benchmark_draw_overhead(int32_t preferMetal4) {
+    const int DRAWS = 2000, WARM = 10, FRAMES = 60;
+    int64_t ctx = cm_device_create(preferMetal4, 0, "");
+    assert(ctx != 0);
+    int64_t ctex = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, 3024, 1752, 1, 1, 0, 1, 1, 0, "DrawBenchRT");
+    int64_t cview = cm_texture_view_create(ctx, ctex, 0, 1);
+    int64_t texA = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, 16, 16, 1, 1, 0, 0, 1, 0, "DrawBenchTexA");
+    int64_t texB = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, 16, 16, 1, 1, 0, 0, 1, 0, "DrawBenchTexB");
+    int64_t viewA = cm_texture_view_create(ctx, texA, 0, 1), viewB = cm_texture_view_create(ctx, texB, 0, 1);
+    int64_t samp = cm_sampler_create(ctx, 1, 1, 0, 0, 0, 1, 0, 0);
+    const char *msl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct U { float4 off; };\n"
+        "struct P { float4 tint; float4 pad; };\n"
+        "struct VOut { float4 pos [[position]]; };\n"
+        "vertex VOut vs_d(uint vid [[vertex_id]], constant U &u [[buffer(0)]], constant P &p [[buffer(15)]]) {\n"
+        "  VOut o; float2 q = float2(vid & 1, vid >> 1) * 0.01f - 1.0f + u.off.xy + p.tint.zw * 0.0f; o.pos = float4(q, 0.5f, 1.0f); return o;\n"
+        "}\n"
+        "fragment half4 fs_d(texture2d<half> t [[texture(0)]], sampler s [[sampler(0)]], constant P &p [[buffer(15)]]) {\n"
+        "  return t.sample(s, float2(0.5f)) * half4(p.tint);\n"
+        "}\n";
+    char err[2048] = {0};
+    int64_t lib = cm_compile_msl_library(ctx, msl, "draw_bench", 0, err, sizeof(err));
+    if (!lib) { fprintf(stderr, "draw bench msl: %s\n", err); exit(1); }
+    int64_t vs = cm_compile_function(lib, "vs_d", 0, 0, 0, err, sizeof(err));
+    int64_t fs = cm_compile_function(lib, "fs_d", 0, 0, 0, err, sizeof(err));
+    CMColorAttachmentDesc cd = { CM_FMT_RGBA8_UNORM, 0, 1, 0, 0, 1, 0, 0, 15 };
+    int64_t pso = cm_render_pipeline_create(ctx, vs, fs, NULL, 0, NULL, 0, &cd, 1, -1, CM_TOPO_TRIANGLE_STRIP, 0, 0, 0,
+                                            CM_CMP_ALWAYS, 0, 0.0f, 0.0f, "DrawBenchPSO", err, sizeof(err));
+    int64_t ubo = cm_buffer_create(ctx, 256 * DRAWS, NULL, "DrawBenchUbo");
+    uint16_t idx[4] = { 0, 1, 2, 3 };
+    int64_t ibo = cm_buffer_create(ctx, sizeof(idx), idx, "DrawBenchIbo");
+    assert(ctex && cview && viewA && viewB && samp && pso && ubo && ibo);
+    int32_t loadFlag = 0;
+    float clr[4] = {0, 0, 0, 1};
+    const char *names[3] = { "draws only", "push consts + UBO offset", "+ texture switch / 4 draws" };
+    for (int mode = 0; mode < 3; mode++) {
+        double sum = 0.0;
+        for (int f = 0; f < WARM + FRAMES; f++) {
+            cm_cmd_begin(ctx);
+            cm_pass_begin(ctx, &cview, &loadFlag, clr, 1, 0, 0, 0.0, 0, 0, 3024, 1752, NULL);
+            cm_pass_set_pipeline(ctx, pso);
+            cm_pass_set_index_buffer(ctx, ibo, 0);
+            cm_pass_set_uniform_buffer(ctx, 0, ubo, 0);
+            cm_pass_set_texture_sampler(ctx, 0, viewA, 0, samp);
+            float pc[8] = { 1, 1, 1, 1, 0, 0, 0, 0 };
+            cm_pass_push_constants(ctx, 15, pc, sizeof(pc));
+            CFTimeInterval t0 = CACurrentMediaTime();
+            for (int d = 0; d < DRAWS; d++) {
+                if (mode >= 1) {
+                    pc[0] = (float)(d & 255) / 255.0f;
+                    cm_pass_push_constants(ctx, 15, pc, sizeof(pc));
+                    cm_pass_set_uniform_buffer(ctx, 0, ubo, (int64_t)d * 256);
+                }
+                if (mode >= 2 && (d & 3) == 0) {
+                    cm_pass_set_texture_sampler(ctx, 0, ((d >> 2) & 1) ? viewB : viewA, 0, samp);
+                }
+                cm_pass_draw_indexed(ctx, CM_TOPO_TRIANGLE_STRIP, 0, 4, 1, 0, 0, 0);
+            }
+            CFTimeInterval t1 = CACurrentMediaTime();
+            cm_pass_end(ctx);
+            uint64_t sv = cm_cmd_submit(ctx, 2);
+            cm_wait_submit(ctx, sv, 5000000000ULL);
+            if (f >= WARM) sum += (t1 - t0) * 1000.0;
+        }
+        double ms = sum / FRAMES;
+        printf("[Benchmark %s draw overhead] %-28s %.3f ms / %d draws = %.3f us/draw\n",
+               preferMetal4 ? "Metal 4" : "Metal 3", names[mode], ms, DRAWS, ms * 1000.0 / DRAWS);
+    }
+    char drained[512] = {0};
+    if (cm_device_drain_errors(ctx, drained, sizeof(drained)) > 0) {
+        fprintf(stderr, "FAIL: GPU errors in draw-overhead benchmark: %s\n", drained);
+        exit(1);
+    }
+    cm_buffer_destroy(ctx, ibo); cm_buffer_destroy(ctx, ubo);
+    cm_pipeline_destroy(ctx, pso); cm_function_destroy(fs); cm_function_destroy(vs); cm_library_destroy(lib);
+    cm_sampler_destroy(ctx, samp);
+    cm_texture_view_destroy(ctx, viewB); cm_texture_view_destroy(ctx, viewA);
+    cm_texture_destroy(ctx, texB); cm_texture_destroy(ctx, texA);
+    cm_texture_view_destroy(ctx, cview); cm_texture_destroy(ctx, ctex);
+    cm_device_destroy(ctx);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <assetsDir>\n", argv[0]);
@@ -1088,6 +1281,8 @@ int main(int argc, char **argv) {
     benchmark_native_pipelines([NSString stringWithUTF8String:argv[1]], 0);
     benchmark_pass_merging(1);
     benchmark_pass_merging(0);
+    benchmark_draw_overhead(1);
+    benchmark_draw_overhead(0);
     printf("ALL CELESTIA METAL NATIVE GPU TESTS PASSED.\n");
     return 0;
 }

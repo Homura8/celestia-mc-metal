@@ -67,7 +67,9 @@ ls "$(xcrun --show-sdk-path)/System/Library/Frameworks/Metal.framework/Headers/"
    - Unlike Metal 3, `MTL4CommandBuffer` has **no automatic inter-encoder hazard tracking**. Whenever adding a Metal 4 render pass, clear encoder, compute dispatch, or dependent blit copy, emit an explicit producer/intra-encoder barrier (`barrierAfterStages:beforeQueueStages:visibilityOptions:MTL4VisibilityOptionDevice` or `barrierAfterEncoderStages:beforeEncoderStages:`).
    - Every blit that reads or writes a resource another blit in the same encoder may touch (all copies, including `cm_blit_copy_buffer_to_texture`) must call `emit_m4_blit_intra_barrier_if_needed` first; see Test 2h.
    - Register every Metal 4 `MTLBuffer` / `MTLTexture` / texture view with `cm_track_allocation(ctx, obj)`, never destroy resources while in flight (use `cm_retire_object`), and keep `MTL4ArgumentTableDescriptor.maxBufferBindCount <= 31`.
-   - Guard all Metal 4 API usage with `@available(macOS 26.0, *)` so Metal 3 (macOS 15+) and `-Wall -Werror` stay clean.
+   - Guard all Metal 4 API usage with `@available(macOS 26.0, *)` so Metal 3 (macOS 15+) and `-Wall -Werror` stay clean. **Exception:** the hot pass/draw/bind functions in `cm_encoder.m` (from `cm_pass_set_pipeline` on) branch on `ctx.metal4Active` only, which is set exclusively on macOS 26+; keep new Metal 4 calls there behind that flag.
+   - Metal 4 uses **one** argument table (`m4VertexArgTable == m4FragmentArgTable`) bound to vertex and fragment stages: write each binding once. Binding caches (`_boundTextures`, `_boundUboAddrV`, `_boundVtxAddr`, `_lastPush*`) are only valid within one render encoder and are reset in `reset_pass_cache`.
+   - `CMContext` is `objc_direct_members`: add plain properties only (no KVC/selectors on it).
 
 4. **RenderPearl Backend Contracts**:
    - **Always verify parameter names/order via `javap -v` (`MethodParameters`)** instead of guessing — RenderPearl overloads have non-obvious parameter orderings (for example, `copyBufferToTexture` uses `(dstX, dstY, width, height, mip, slice)` and `multiDraw` uses `(commands, instanceCount, firstInstance, drawCount)`).

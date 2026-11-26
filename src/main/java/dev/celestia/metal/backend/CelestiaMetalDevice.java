@@ -295,6 +295,11 @@ public final class CelestiaMetalDevice implements GpuDeviceBackend {
         commandEncoder.awaitSerial(buffer.pendingGpuWriteSerial());
     }
 
+    /** Milliseconds per second blocked on {in-flight frame cap, fences, present slots}. */
+    public double[] waitRates() {
+        return commandEncoder.waitRates();
+    }
+
     /** {frames submitted, shown on screen, dropped} per second (non-blocking present path reports shown/dropped). */
     public long[] presentRates() {
         return commandEncoder.presentRates();

@@ -43,6 +43,7 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
     private long windowStartNs = System.nanoTime();
     private final long[] windowStart = new long[MetalConst.STAT_COUNT];
     private volatile long[] presentRates = new long[3];
+    private volatile double[] waitRates = new double[3];
     private CelestiaRenderPass currentRenderPass;
     private boolean closed;
 
@@ -120,9 +121,19 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
                 Math.round((prevStats[MetalConst.STAT_PRESENTS_SHOWN] - windowStart[MetalConst.STAT_PRESENTS_SHOWN]) / secs),
                 Math.round((prevStats[MetalConst.STAT_FRAMES_DROPPED] - windowStart[MetalConst.STAT_FRAMES_DROPPED]) / secs),
             };
+            waitRates = new double[] {
+                (prevStats[MetalConst.STAT_WAIT_THROTTLE_US] - windowStart[MetalConst.STAT_WAIT_THROTTLE_US]) / 1000.0 / secs,
+                (prevStats[MetalConst.STAT_WAIT_FENCE_US] - windowStart[MetalConst.STAT_WAIT_FENCE_US]) / 1000.0 / secs,
+                (prevStats[MetalConst.STAT_WAIT_SLOT_US] - windowStart[MetalConst.STAT_WAIT_SLOT_US]) / 1000.0 / secs,
+            };
             System.arraycopy(prevStats, 0, windowStart, 0, MetalConst.STAT_COUNT);
             windowStartNs = now;
         }
+    }
+
+    /** Milliseconds per second the CPU spent blocked on {in-flight frame cap, fences, present slots}. */
+    public double[] waitRates() {
+        return waitRates;
     }
 
     /** {frames submitted, frames shown on screen, frames dropped} per second over the last full second. */

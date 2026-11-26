@@ -32,6 +32,8 @@ public final class CelestiaRenderPass implements RenderPassBackend {
     private final int[] vtxStrides = new int[8];
     private final Map<TexelKey, Long> texelBufferViews = new HashMap<>();
     private Object[] pendingUniforms = new Object[16];
+    // Values already sent to native since the last setPipeline; unchanged uniforms are not re-sent over FFM.
+    private Object[] boundUniforms = new Object[16];
     private boolean uniformsDirty;
     private CelestiaPipeline pipeline;
     private IndexType indexType = IndexType.INT;
@@ -83,6 +85,7 @@ public final class CelestiaRenderPass implements RenderPassBackend {
         long pso = this.pipeline.getOrCreatePso(depthFormat);
         MetalNative.passSetPipeline(device.handle(), pso);
         Arrays.fill(pendingUniforms, null);
+        Arrays.fill(boundUniforms, null);
         this.uniformsDirty = true;
     }
 
@@ -90,10 +93,14 @@ public final class CelestiaRenderPass implements RenderPassBackend {
     public void setUniform(int index, Object value) {
         if (closed || index < 0) return;
         if (index >= pendingUniforms.length) {
-            pendingUniforms = Arrays.copyOf(pendingUniforms, Math.max(pendingUniforms.length * 2, index + 1));
+            int n = Math.max(pendingUniforms.length * 2, index + 1);
+            pendingUniforms = Arrays.copyOf(pendingUniforms, n);
+            boundUniforms = Arrays.copyOf(boundUniforms, n);
         }
         pendingUniforms[index] = value;
-        uniformsDirty = true;
+        if (!uniformsDirty && !java.util.Objects.equals(value, boundUniforms[index])) {
+            uniformsDirty = true;
+        }
     }
 
     private void flushUniforms() {
@@ -104,7 +111,8 @@ public final class CelestiaRenderPass implements RenderPassBackend {
         int count = Math.min(bindings.size(), pendingUniforms.length);
         for (int index = 0; index < count; index++) {
             Object value = pendingUniforms[index];
-            if (value == null) continue;
+            if (value == null || value.equals(boundUniforms[index])) continue;
+            boundUniforms[index] = value;
             BindGroupLayout.UniformDescription desc = uniforms.get(index);
             UniformType type = desc.type();
             MetalShaderTranslator.SlotBinding sb = bindings.get(index);

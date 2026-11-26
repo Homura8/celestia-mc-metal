@@ -207,6 +207,9 @@ int64_t cm_device_create(int32_t preferMetal4, int32_t debugLabels, const char *
         atomic_init(&ctx->_errorCount, 0);
         atomic_init(&ctx->_presentsShown, 0);
         atomic_init(&ctx->_framesDropped, 0);
+        atomic_init(&ctx->_waitThrottleUs, 0);
+        atomic_init(&ctx->_waitFenceUs, 0);
+        atomic_init(&ctx->_waitSlotUs, 0);
         ctx.inflightSem = dispatch_semaphore_create(CM_INFLIGHT_SLOTS);
         ctx.passMergeEnabled = YES;
         ctx.deferClearsEnabled = YES;
@@ -267,11 +270,11 @@ int64_t cm_device_create(int32_t preferMetal4, int32_t debugLabels, const char *
                     atDesc.maxSamplerStateBindCount = 16;
                     atDesc.initializeBindings = YES;
                     atDesc.supportAttributeStrides = NO;
-                    atDesc.label = @"CelestiaMetal.VertexArgs";
+                    // One table bound to both render stages: every binding is written once and the driver snapshots a
+                    // single table per draw (the vertex and fragment tables always held identical bindings anyway).
+                    atDesc.label = @"CelestiaMetal.RenderArgs";
                     id<MTL4ArgumentTable> vArgs = [dev newArgumentTableWithDescriptor:atDesc error:&err];
-                    atDesc.label = @"CelestiaMetal.FragmentArgs";
-                    atDesc.supportAttributeStrides = NO;
-                    id<MTL4ArgumentTable> fArgs = [dev newArgumentTableWithDescriptor:atDesc error:&err];
+                    id<MTL4ArgumentTable> fArgs = vArgs;
 
                     if (allocOk && vArgs && fArgs) {
                         [m4q addResidencySet:rs];
@@ -408,4 +411,7 @@ void cm_device_stats(int64_t ctxPtr, int64_t *out, int32_t count) {
     for (int32_t i = 0; i < n; i++) out[i] = ctx->_stats[i];
     if (n > CM_STAT_PRESENTS_SHOWN) out[CM_STAT_PRESENTS_SHOWN] = atomic_load(&ctx->_presentsShown);
     if (n > CM_STAT_FRAMES_DROPPED) out[CM_STAT_FRAMES_DROPPED] = atomic_load(&ctx->_framesDropped);
+    if (n > CM_STAT_WAIT_THROTTLE_US) out[CM_STAT_WAIT_THROTTLE_US] = atomic_load(&ctx->_waitThrottleUs);
+    if (n > CM_STAT_WAIT_FENCE_US) out[CM_STAT_WAIT_FENCE_US] = atomic_load(&ctx->_waitFenceUs);
+    if (n > CM_STAT_WAIT_SLOT_US) out[CM_STAT_WAIT_SLOT_US] = atomic_load(&ctx->_waitSlotUs);
 }

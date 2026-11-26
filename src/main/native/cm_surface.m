@@ -209,7 +209,10 @@ static void encode_present_pass_into(CMContext *ctx, CMSurface *surf, id<MTLText
 static void cm_surface_submit_nonblocking(CMContext *ctx, CMSurface *surf, id<MTLTexture> srcTex, int32_t maxInFlight) {
     int64_t ctxPtr = (int64_t)(__bridge void *)ctx;
     // A free slot exists unless the present queue is far behind; never wait long (a hidden window shows nothing).
-    if (dispatch_semaphore_wait(surf.slotsFree, dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC)) != 0) {
+    CFTimeInterval slotWait0 = CACurrentMediaTime();
+    long slotTimedOut = dispatch_semaphore_wait(surf.slotsFree, dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC));
+    atomic_fetch_add(&ctx->_waitSlotUs, (int64_t)((CACurrentMediaTime() - slotWait0) * 1e6));
+    if (slotTimedOut != 0) {
         atomic_fetch_add(&ctx->_framesDropped, 1);
         cm_cmd_submit(ctxPtr, maxInFlight);
         return;
@@ -295,7 +298,10 @@ int64_t cm_surface_create(int64_t ctxPtr, int64_t caMetalLayerPtr, int32_t hdrEn
         for (int i = 0; i < CM_PRESENT_SLOTS; i++) atomic_init(&surf->_slotBusy[i], 0);
         dispatch_queue_attr_t attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0);
         surf.presentQueue = dispatch_queue_create("dev.celestia.metal.present", attr);
-        surf.slotsFree = dispatch_semaphore_create(CM_PRESENT_SLOTS);
+        // Created at 0 and signalled up to the pool size: libdispatch traps if a semaphore is disposed below its
+        // initial value, which happens when the surface is torn down while frames still hold slots.
+        surf.slotsFree = dispatch_semaphore_create(0);
+        for (int i = 0; i < CM_PRESENT_SLOTS; i++) dispatch_semaphore_signal(surf.slotsFree);
         surf.presentCmdQueue = [ctx.device newCommandQueue];
         surf.presentCmdQueue.label = @"CelestiaMetal.PresentQueue";
         surf.listener = [[MTLSharedEventListener alloc] initWithDispatchQueue:surf.presentQueue];
@@ -333,7 +339,7 @@ void cm_surface_destroy(int64_t ctxPtr, int64_t surfPtr) {
         atomic_store(&surf->_shutdown, 1);
         // Let queued present work observe the shutdown flag (it releases slots without presenting).
         if (surf.presentQueue) dispatch_sync(surf.presentQueue, ^{
-            surf->_waitingSlot = -1;
+            if (surf->_waitingSlot >= 0) { release_slot(surf, surf->_waitingSlot); surf->_waitingSlot = -1; }
         });
         surf.currentDrawable = nil;
         surf.layer = nil;
@@ -352,7 +358,9 @@ void cm_surface_configure(int64_t surfPtr, int32_t width, int32_t height, int32_
             // The present queue may be inside nextDrawable; serialize layer changes behind it (rare: resize / mode change).
             int32_t w = surf.width, h = surf.height, hdr = hdrEnabled;
             dispatch_sync(surf.presentQueue, ^{
-                surf->_waitingSlot = -1;
+                // A waiting frame was rendered for the old configuration: hand its slot back (never just forget it,
+                // or the slot pool shrinks permanently).
+                if (surf->_waitingSlot >= 0) { release_slot(surf, surf->_waitingSlot); surf->_waitingSlot = -1; }
                 cm_surface_apply_layer_config(surf, w, h, vsync, hdr);
             });
             return;
@@ -498,7 +506,7 @@ void cm_surface_blit_and_present(int64_t ctxPtr, int64_t surfPtr, int64_t srcTex
         int32_t cap = maxInFlight > 0 ? MIN(maxInFlight, CM_INFLIGHT_SLOTS) : 2;
         uint64_t next = atomic_load(&ctx->_nextSubmitSerial);
         if (next > (uint64_t)cap) {
-            cm_wait_submit(ctxPtr, next - (uint64_t)cap, 5000000000ULL);
+            cm_wait_submit_accounted(ctx, next - (uint64_t)cap, 5000000000ULL, &ctx->_waitThrottleUs);
         }
         cm_drain_retired(ctx);
     }
