@@ -204,6 +204,13 @@ class NativeFfmSmokeTest {
             assertTrue(MetalNative.waitSubmit(ctx, serial, 5_000_000_000L));
             assertEquals("", MetalNative.deviceDrainErrors(ctx));
             assertFalse(MetalNative.deviceIsLost(ctx));
+
+            // Verify mapped Metal buffer ByteBuffer views use native little-endian byte order
+            var mappedBb = MemorySegment.ofAddress(MetalNative.bufferContents(ubo)).reinterpret(64)
+                .asByteBuffer().order(java.nio.ByteOrder.nativeOrder());
+            mappedBb.putFloat(0, 1.0f);
+            MemorySegment uboSeg = MemorySegment.ofAddress(MetalNative.bufferContents(ubo)).reinterpret(64);
+            assertEquals(Float.floatToRawIntBits(1.0f), uboSeg.get(ValueLayout.JAVA_INT_UNALIGNED, 0));
         } finally {
             if (upscaler != 0) MetalNative.upscalerDestroy(ctx, upscaler);
             if (cpso != 0) MetalNative.computePipelineDestroy(ctx, cpso);

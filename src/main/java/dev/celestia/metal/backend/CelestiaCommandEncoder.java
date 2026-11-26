@@ -1,5 +1,6 @@
 package dev.celestia.metal.backend;
 
+import com.mojang.logging.LogUtils;
 import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.buffers.GpuBuffer;
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
@@ -22,15 +23,16 @@ import java.util.List;
 import java.util.Optional;
 import java.util.OptionalDouble;
 import org.joml.Vector4fc;
+import org.slf4j.Logger;
 
 public final class CelestiaCommandEncoder implements CommandEncoderBackend {
+    private static final Logger LOGGER = LogUtils.getLogger();
     private record Deferred(long submitSerial, Runnable action) {}
 
     private final CelestiaMetalDevice device;
     private final CelestiaTransientMemory transientMemory;
     private final ArrayDeque<Deferred> deferred = new ArrayDeque<>();
     private CelestiaRenderPass currentRenderPass;
-    private long nextSubmitSerial = 1L;
     private boolean closed;
 
     CelestiaCommandEncoder(CelestiaMetalDevice device) {
@@ -39,14 +41,14 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
     }
 
     public void runWhenSubmitDone(Runnable action) {
+        long targetSerial = MetalNative.deviceNextSubmit(device.handle()) + 1L;
         synchronized (deferred) {
-            deferred.addLast(new Deferred(nextSubmitSerial, action));
+            deferred.addLast(new Deferred(targetSerial, action));
         }
     }
 
     void onPresentedBySurface() {
         transientMemory.endSubmit();
-        nextSubmitSerial++;
         runCompletedCallbacks();
         checkDeviceHealth();
     }
@@ -66,8 +68,11 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
     }
 
     private void checkDeviceHealth() {
+        String err = MetalNative.deviceDrainErrors(device.handle());
+        if (!err.isEmpty()) {
+            LOGGER.error("Metal GPU error: {}", err);
+        }
         if (MetalNative.deviceIsLost(device.handle())) {
-            String err = MetalNative.deviceDrainErrors(device.handle());
             throw new GpuDeviceLossException("Metal GPU device lost: " + err);
         }
     }
@@ -81,7 +86,6 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
         transientMemory.endSubmit();
         int maxInFlight = CelestiaConfig.get().appleSilicon.lowLatencyQueue ? 2 : 3;
         MetalNative.cmdSubmit(device.handle(), maxInFlight);
-        nextSubmitSerial++;
         runCompletedCallbacks();
         checkDeviceHealth();
     }

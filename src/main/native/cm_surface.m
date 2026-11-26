@@ -175,6 +175,11 @@ void cm_surface_blit_and_present(int64_t ctxPtr, int64_t surfPtr, int64_t srcTex
                 rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
                 id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
                 if (enc && pso) {
+                    MTLViewport vp = { 0.0, 0.0, (double)dstTex.width, (double)dstTex.height, 0.0, 1.0 };
+                    MTLScissorRect sr = { 0, 0, dstTex.width, dstTex.height };
+                    [enc setViewport:vp];
+                    [enc setScissorRect:sr];
+                    [enc setCullMode:MTLCullModeNone];
                     [enc setRenderPipelineState:pso];
                     [(id<MTL4ArgumentTable>)ctx.m4FragmentArgTable setTexture:srcTex.gpuResourceID atIndex:0];
                     [(id<MTL4ArgumentTable>)ctx.m4FragmentArgTable setSamplerState:surf.linearSampler.gpuResourceID atIndex:0];
@@ -212,6 +217,11 @@ void cm_surface_blit_and_present(int64_t ctxPtr, int64_t surfPtr, int64_t srcTex
             rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
             id<MTLRenderCommandEncoder> enc = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf renderCommandEncoderWithDescriptor:rpd];
             if (enc && pso) {
+                MTLViewport vp = { 0.0, 0.0, (double)dstTex.width, (double)dstTex.height, 0.0, 1.0 };
+                MTLScissorRect sr = { 0, 0, dstTex.width, dstTex.height };
+                [enc setViewport:vp];
+                [enc setScissorRect:sr];
+                [enc setCullMode:MTLCullModeNone];
                 [enc setRenderPipelineState:pso];
                 [enc setFragmentTexture:srcTex atIndex:0];
                 [enc setFragmentSamplerState:surf.linearSampler atIndex:0];

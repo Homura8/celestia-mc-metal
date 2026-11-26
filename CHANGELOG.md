@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-alpha.6
+
+### Fixed
+- **Black Screen on Launch (`ByteOrder.BIG_ENDIAN` Mapped Buffers)**: Configured `ByteOrder.nativeOrder()` (little-endian on Apple Silicon) on every `MemorySegment.asByteBuffer()` view in `CelestiaBuffer.map`, `CelestiaTransientMemory`, and `ShaderPipelineManager`. Previously, `MemorySegment.asByteBuffer()` defaulted to big-endian, byte-swapping every uniform matrix, color, and UI/world vertex written by Minecraft (`1.0f` collapsed to near-zero) and producing a solid black frame.
+- **Deferred Cleanup Serial Tracking & Surface Present Viewport**: Synced `CelestiaCommandEncoder.runWhenSubmitDone(...)` directly with native submit serials so deferred transient rotations and texel view releases never drift across frames, explicitly set viewport/scissor/cull mode on `cm_surface_blit_and_present`, and logged Metal GPU errors via `deviceDrainErrors` / `stderr`.
+
+### Added
+- Little-endian native byte-order verification in `NativeFfmSmokeTest`.
+
 ## 0.1.0-alpha.5
 
 ### Fixed

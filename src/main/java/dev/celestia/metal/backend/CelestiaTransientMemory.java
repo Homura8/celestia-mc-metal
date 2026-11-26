@@ -5,6 +5,7 @@ import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.buffers.TransientMemory;
 import com.mojang.renderpearl.backend.util.TransientBlockAllocator;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
 import org.lwjgl.system.MemoryUtil;
@@ -110,7 +111,7 @@ public final class CelestiaTransientMemory implements TransientMemory {
             return allocateGpu(16L, alignment, DEFAULT_USAGE, 0L, 0L);
         }
         var alloc = sharedAllocator.allocate(total, Math.max(16L, alignment), 0L, 0L);
-        ByteBuffer dst = alloc.block().buffer().mappedSegment().asSlice(alloc.offset(), total).asByteBuffer();
+        ByteBuffer dst = alloc.block().buffer().mappedSegment().asSlice(alloc.offset(), total).asByteBuffer().order(ByteOrder.nativeOrder());
         for (ByteBuffer src : buffers) {
             dst.put(src.duplicate());
         }
@@ -134,7 +135,7 @@ public final class CelestiaTransientMemory implements TransientMemory {
             int len = src.remaining();
             var alloc = sharedAllocator.allocate(Math.max(16L, len), align, 0L, 0L);
             if (len > 0) {
-                ByteBuffer dst = alloc.block().buffer().mappedSegment().asSlice(alloc.offset(), len).asByteBuffer();
+                ByteBuffer dst = alloc.block().buffer().mappedSegment().asSlice(alloc.offset(), len).asByteBuffer().order(ByteOrder.nativeOrder());
                 dst.put(src.duplicate());
             }
             slices.add(alloc.block().buffer().slice(alloc.offset(), len));

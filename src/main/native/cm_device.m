@@ -25,7 +25,11 @@ void cm_record_error(CMContext *ctx, NSString *msg) {
             [ctx.errors addObject:msg];
         }
     }
-    atomic_fetch_add(&ctx->_errorCount, 1);
+    int32_t prev = atomic_fetch_add(&ctx->_errorCount, 1);
+    if (prev < 32 && msg.UTF8String) {
+        fprintf(stderr, "[CelestiaMetal GPU Error] %s\n", msg.UTF8String);
+        fflush(stderr);
+    }
 }
 
 void cm_track_allocation(CMContext *ctx, id allocation) {

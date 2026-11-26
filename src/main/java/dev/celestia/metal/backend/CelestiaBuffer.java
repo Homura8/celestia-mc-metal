@@ -4,6 +4,7 @@ import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.backend.common.BaseGpuBuffer;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 public final class CelestiaBuffer extends BaseGpuBuffer {
     private final CelestiaMetalDevice device;
@@ -42,7 +43,7 @@ public final class CelestiaBuffer extends BaseGpuBuffer {
         if (offset < 0 || length < 0 || offset + length > size()) {
             throw new IndexOutOfBoundsException("Map range [" + offset + ", " + (offset + length) + ") out of bounds for size " + size());
         }
-        ByteBuffer view = mappedSegment.asSlice(offset, length).asByteBuffer();
+        ByteBuffer view = mappedSegment.asSlice(offset, length).asByteBuffer().order(ByteOrder.nativeOrder());
         return new GpuBufferSlice.MappedView(slice(offset, length), view, () -> {});
     }
 

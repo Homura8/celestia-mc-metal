@@ -260,7 +260,8 @@ public final class ShaderPipelineManager {
         }
         long ptr = MetalNative.bufferContents(uniformBufferHandle);
         if (ptr != 0L) {
-            ByteBuffer bb = MemorySegment.ofAddress(ptr).reinterpret(FrameUniforms.BYTE_SIZE).asByteBuffer();
+            ByteBuffer bb = MemorySegment.ofAddress(ptr).reinterpret(FrameUniforms.BYTE_SIZE).asByteBuffer()
+                .order(java.nio.ByteOrder.nativeOrder());
             frameUniforms.pack(bb);
         }
     }
