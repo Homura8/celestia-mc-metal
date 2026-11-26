@@ -100,6 +100,75 @@ static void verify_backend_ops(int32_t preferMetal4) {
     uint8_t *px = (uint8_t *)(uintptr_t)cm_buffer_contents(readBuf);
     assert(px[0] > 180 && px[1] > 120 && px[2] > 220 && px[3] == 255);
 
+    // 2b. RGB32_FLOAT + RGB8_SNORM vertex attributes & texture_buffer (TEXEL_BUFFER) verification
+    typedef struct __attribute__((packed)) TestVertex {
+        float x, y, z;
+        int8_t r, g, b;
+        uint8_t pad;
+    } TestVertex;
+    TestVertex verts[3] = {
+        { -1.0f, -1.0f, 0.5f, 0, 127, 0, 0 },
+        {  3.0f, -1.0f, 0.5f, 0, 127, 0, 0 },
+        { -1.0f,  3.0f, 0.5f, 0, 127, 0, 0 },
+    };
+    int64_t vbo = cm_buffer_create(ctx, sizeof(verts), verts, "TestRGBFloat3VBO");
+    uint8_t tbBytes[64] = {0};
+    tbBytes[4] = 204; tbBytes[5] = 0; tbBytes[6] = 153; tbBytes[7] = 255;
+    int64_t tbBuf = cm_buffer_create(ctx, sizeof(tbBytes), tbBytes, "TestTexelBuf");
+    int64_t tbView = cm_texture_buffer_create(ctx, tbBuf, 4, 4, CM_FMT_RGBA8_UNORM);
+    assert(vbo != 0 && tbBuf != 0 && tbView != 0);
+
+    const char *vtxTexelMsl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VIn {\n"
+        "  float3 pos [[attribute(0)]];\n"
+        "  float3 col [[attribute(1)]];\n"
+        "};\n"
+        "struct VOut { float4 pos [[position]]; float3 col; };\n"
+        "vertex VOut vs_vtx(VIn in [[stage_in]]) {\n"
+        "  VOut o; o.pos = float4(in.pos, 1.0f); o.col = in.col; return o;\n"
+        "}\n"
+        "fragment half4 fs_vtx(VOut in [[stage_in]], texture_buffer<float, access::read> tb [[texture(0)]]) {\n"
+        "  float4 t = tb.read(0u);\n"
+        "  return half4(half(t.r), half(in.col.g), half(t.b), half(t.a));\n"
+        "}\n";
+    int64_t libVtx = cm_compile_msl_library(ctx, vtxTexelMsl, "vtx_texel", 0, err, sizeof(err));
+    if (!libVtx) fprintf(stderr, "vtxTexelMsl compile error: %s\n", err);
+    assert(libVtx != 0);
+    int64_t vsVtx = cm_compile_function(libVtx, "vs_vtx", 0, 0, 0, err, sizeof(err));
+    int64_t fsVtx = cm_compile_function(libVtx, "fs_vtx", 0, 0, 0, err, sizeof(err));
+    CMVertexBufferDesc vbDesc = { 0, (int32_t)sizeof(TestVertex), 0 };
+    CMAttribBindingDesc attrDescs[2] = {
+        { 0, 0, 0, CM_FMT_RGB32_FLOAT },
+        { 0, 1, 12, CM_FMT_RGB8_SNORM }
+    };
+    int64_t psoVtx = cm_render_pipeline_create(ctx, vsVtx, fsVtx, &vbDesc, 1, attrDescs, 2, &colDesc, 1,
+                                               -1, CM_TOPO_TRIANGLES, 0, 0, 0,
+                                               CM_CMP_ALWAYS, 0, 0.0f, 0.0f, "VtxTexelPSO", err, sizeof(err));
+    if (!psoVtx) fprintf(stderr, "VtxTexelPSO error: %s\n", err);
+    assert(psoVtx != 0);
+
+    cm_cmd_begin(ctx);
+    assert(cm_pass_begin(ctx, &cview, &clearFlag, clearCol, 1, 0, 0, 0.0, 0, 0, 64, 64, "VtxTexelPass") == 1);
+    cm_pass_set_pipeline(ctx, psoVtx);
+    cm_pass_set_vertex_buffer(ctx, 0, vbo, 0, (int32_t)sizeof(TestVertex));
+    cm_pass_set_texture_sampler(ctx, 0, tbView, -1, 0);
+    cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+    cm_pass_end(ctx);
+    cm_blit_copy_texture_to_buffer(ctx, ctex, 0, 0, 0, 0, 64, 64, readBuf, 0, 64 * 4);
+    uint64_t s2b = cm_cmd_submit(ctx, 2);
+    assert(cm_wait_submit(ctx, s2b, 5000000000ULL) == 1);
+    assert(abs((int)px[0] - 204) <= 2 && px[1] >= 253 && abs((int)px[2] - 153) <= 2 && px[3] == 255);
+
+    cm_pipeline_destroy(ctx, psoVtx);
+    cm_function_destroy(fsVtx);
+    cm_function_destroy(vsVtx);
+    cm_library_destroy(libVtx);
+    cm_texture_view_destroy(ctx, tbView);
+    cm_buffer_destroy(ctx, tbBuf);
+    cm_buffer_destroy(ctx, vbo);
+
     // 3. MetalFX Spatial & Temporal scaler creation + execution
     int64_t mfxOut = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 128, 128, 1, 1, 0, 1, 1, 1, "MFXOut");
     int64_t mfxIn = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 64, 64, 1, 1, 0, 1, 1, 0, "MFXIn");

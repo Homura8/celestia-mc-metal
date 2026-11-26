@@ -103,9 +103,13 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
         }
 
         CelestiaPipeline pipeline = new CelestiaPipeline(device, info, bindings, vsLib, fsLib, vsFn, fsFn);
-        // Pre-warm the two most common depth configurations up front off the render thread
-        pipeline.getOrCreatePso(NO_DEPTH);
-        pipeline.getOrCreatePso(MetalConst.FMT_D32_FLOAT);
+        // Pre-warm common depth configurations up front off the render thread
+        if (!info.colorTargetStates().isEmpty()) {
+            pipeline.getOrCreatePso(NO_DEPTH);
+        }
+        if (info.depthStencilState() != null || info.colorTargetStates().isEmpty()) {
+            pipeline.getOrCreatePso(MetalConst.FMT_D32_FLOAT);
+        }
         return () -> pipeline;
     }
 
@@ -193,9 +197,11 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
             }
 
             DepthStencilState ds = info.depthStencilState();
-            boolean depthEnabled = nativeDepthFormat != NO_DEPTH;
-            int depthCmp = MetalConst.toNativeCompare(ds.depthTest());
+            boolean depthEnabled = nativeDepthFormat != NO_DEPTH && ds != null;
+            int depthCmp = ds != null ? MetalConst.toNativeCompare(ds.depthTest()) : 0;
             boolean depthWrite = depthEnabled && ds.writeDepth();
+            float biasSlope = ds != null ? ds.depthBiasScaleFactor() : 0.0f;
+            float biasConst = ds != null ? ds.depthBiasConstant() : 0.0f;
 
             StringBuilder err = new StringBuilder();
             long pso = MetalNative.renderPipelineCreate(
@@ -208,7 +214,7 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
                 info.polygonMode() == PolygonMode.WIREFRAME ? 1 : 0,
                 info.cull(),
                 depthEnabled, depthCmp, depthWrite,
-                ds.depthBiasScaleFactor(), ds.depthBiasConstant(),
+                biasSlope, biasConst,
                 info.name(), err);
             if (pso == 0L) {
                 throw new IllegalStateException("Failed to create Metal PSO for " + info.name() + " (depth=" + nativeDepthFormat + "): " + err);

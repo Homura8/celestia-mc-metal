@@ -55,7 +55,7 @@ public final class MetalShaderTranslator {
                                    boolean pointsTopology) {
         int model = shader.module().type() == ShaderType.VERTEX ? EXEC_VERTEX : EXEC_FRAGMENT;
         ByteBuffer rawSpv = shader.module().spv();
-        IntBuffer spirv = rawSpv.asIntBuffer();
+        IntBuffer spirv = rawSpv.duplicate().order(java.nio.ByteOrder.nativeOrder()).asIntBuffer();
         long context = 0L;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             PointerBuffer ptr = stack.callocPointer(1);

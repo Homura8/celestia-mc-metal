@@ -60,37 +60,49 @@ MTLVertexFormat cm_vertex_format(int32_t fmt) {
         case CM_FMT_R8_SNORM: return MTLVertexFormatCharNormalized;
         case CM_FMT_RG8_UNORM: return MTLVertexFormatUChar2Normalized;
         case CM_FMT_RG8_SNORM: return MTLVertexFormatChar2Normalized;
+        case CM_FMT_RGB8_UNORM: return MTLVertexFormatUChar3Normalized;
+        case CM_FMT_RGB8_SNORM: return MTLVertexFormatChar3Normalized;
         case CM_FMT_RGBA8_UNORM: return MTLVertexFormatUChar4Normalized;
         case CM_FMT_RGBA8_SNORM: return MTLVertexFormatChar4Normalized;
         case CM_FMT_R16_UNORM: return MTLVertexFormatUShortNormalized;
         case CM_FMT_R16_SNORM: return MTLVertexFormatShortNormalized;
         case CM_FMT_RG16_UNORM: return MTLVertexFormatUShort2Normalized;
         case CM_FMT_RG16_SNORM: return MTLVertexFormatShort2Normalized;
+        case CM_FMT_RGB16_UNORM: return MTLVertexFormatUShort3Normalized;
+        case CM_FMT_RGB16_SNORM: return MTLVertexFormatShort3Normalized;
         case CM_FMT_RGBA16_UNORM: return MTLVertexFormatUShort4Normalized;
         case CM_FMT_RGBA16_SNORM: return MTLVertexFormatShort4Normalized;
         case CM_FMT_R8_UINT: return MTLVertexFormatUChar;
         case CM_FMT_R8_SINT: return MTLVertexFormatChar;
         case CM_FMT_RG8_UINT: return MTLVertexFormatUChar2;
         case CM_FMT_RG8_SINT: return MTLVertexFormatChar2;
+        case CM_FMT_RGB8_UINT: return MTLVertexFormatUChar3;
+        case CM_FMT_RGB8_SINT: return MTLVertexFormatChar3;
         case CM_FMT_RGBA8_UINT: return MTLVertexFormatUChar4;
         case CM_FMT_RGBA8_SINT: return MTLVertexFormatChar4;
         case CM_FMT_R16_UINT: return MTLVertexFormatUShort;
         case CM_FMT_R16_SINT: return MTLVertexFormatShort;
         case CM_FMT_RG16_UINT: return MTLVertexFormatUShort2;
         case CM_FMT_RG16_SINT: return MTLVertexFormatShort2;
+        case CM_FMT_RGB16_UINT: return MTLVertexFormatUShort3;
+        case CM_FMT_RGB16_SINT: return MTLVertexFormatShort3;
         case CM_FMT_RGBA16_UINT: return MTLVertexFormatUShort4;
         case CM_FMT_RGBA16_SINT: return MTLVertexFormatShort4;
         case CM_FMT_R32_UINT: return MTLVertexFormatUInt;
         case CM_FMT_R32_SINT: return MTLVertexFormatInt;
         case CM_FMT_RG32_UINT: return MTLVertexFormatUInt2;
         case CM_FMT_RG32_SINT: return MTLVertexFormatInt2;
+        case CM_FMT_RGB32_UINT: return MTLVertexFormatUInt3;
+        case CM_FMT_RGB32_SINT: return MTLVertexFormatInt3;
         case CM_FMT_RGBA32_UINT: return MTLVertexFormatUInt4;
         case CM_FMT_RGBA32_SINT: return MTLVertexFormatInt4;
         case CM_FMT_R16_FLOAT: return MTLVertexFormatHalf;
         case CM_FMT_RG16_FLOAT: return MTLVertexFormatHalf2;
+        case CM_FMT_RGB16_FLOAT: return MTLVertexFormatHalf3;
         case CM_FMT_RGBA16_FLOAT: return MTLVertexFormatHalf4;
         case CM_FMT_R32_FLOAT: return MTLVertexFormatFloat;
         case CM_FMT_RG32_FLOAT: return MTLVertexFormatFloat2;
+        case CM_FMT_RGB32_FLOAT: return MTLVertexFormatFloat3;
         case CM_FMT_RGBA32_FLOAT: return MTLVertexFormatFloat4;
         case CM_FMT_RGB10A2_UNORM: return MTLVertexFormatUInt1010102Normalized;
         default: return MTLVertexFormatInvalid;
@@ -355,6 +367,64 @@ int64_t cm_texture_view_create(int64_t ctxPtr, int64_t texPtr, int32_t baseMip, 
         if (!view) return 0;
         cm_track_allocation(ctx, view);
         return (int64_t)(__bridge_retained void *)view;
+    }
+}
+
+int64_t cm_texture_buffer_create(int64_t ctxPtr, int64_t bufPtr, int64_t offset, int64_t lengthBytes, int32_t format) {
+    if (!ctxPtr || !bufPtr) return 0;
+    @autoreleasepool {
+        CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
+        id<MTLBuffer> buf = (__bridge id<MTLBuffer>)(void *)bufPtr;
+        MTLPixelFormat pf = cm_pixel_format(format);
+        if (pf == MTLPixelFormatInvalid) return 0;
+
+        NSUInteger bpp = cm_bytes_per_pixel(pf);
+        if (bpp == 0) bpp = 4;
+        NSUInteger width = (NSUInteger)MAX(1LL, lengthBytes / (int64_t)bpp);
+        NSUInteger neededBytes = width * bpp;
+        NSUInteger align = MAX(1UL, [ctx.device minimumLinearTextureAlignmentForPixelFormat:pf]);
+        NSUInteger rowBytes = ((neededBytes + align - 1UL) / align) * align;
+        if (rowBytes < bpp) rowBytes = bpp;
+
+        id<MTLBuffer> backingBuf = nil;
+        NSUInteger viewOffset = 0;
+        if (offset >= 0 && ((NSUInteger)offset % align) == 0 && (NSUInteger)offset + rowBytes <= buf.length) {
+            backingBuf = buf;
+            viewOffset = (NSUInteger)offset;
+        } else {
+            NSUInteger allocBytes = MAX(16UL, rowBytes);
+            id<MTLBuffer> staging = [ctx.device newBufferWithLength:allocBytes options:MTLResourceStorageModeShared];
+            if (!staging) return 0;
+            uint8_t *dst = (uint8_t *)staging.contents;
+            memset(dst, 0, allocBytes);
+            if (offset >= 0 && (NSUInteger)offset < buf.length && buf.contents != NULL) {
+                NSUInteger avail = buf.length - (NSUInteger)offset;
+                NSUInteger copyBytes = MIN(neededBytes, avail);
+                if (copyBytes > 0) {
+                    memcpy(dst, (const uint8_t *)buf.contents + (NSUInteger)offset, copyBytes);
+                }
+            }
+            cm_track_allocation(ctx, staging);
+            cm_retire_object(ctx, staging, atomic_load(&ctx->_nextSubmitSerial) + 1);
+            backingBuf = staging;
+            viewOffset = 0;
+        }
+
+        MTLTextureDescriptor *td = [MTLTextureDescriptor new];
+        td.textureType = MTLTextureTypeTextureBuffer;
+        td.pixelFormat = pf;
+        td.width = width;
+        td.height = 1;
+        td.depth = 1;
+        td.mipmapLevelCount = 1;
+        td.arrayLength = 1;
+        td.usage = MTLTextureUsageShaderRead;
+        td.storageMode = (backingBuf.storageMode == MTLStorageModePrivate) ? MTLStorageModePrivate : MTLStorageModeShared;
+
+        id<MTLTexture> tbuf = [backingBuf newTextureWithDescriptor:td offset:viewOffset bytesPerRow:rowBytes];
+        if (!tbuf) return 0;
+        cm_track_allocation(ctx, tbuf);
+        return (int64_t)(__bridge_retained void *)tbuf;
     }
 }
 

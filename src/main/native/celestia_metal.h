@@ -68,6 +68,18 @@ typedef enum CMFormat {
     CM_FMT_BGRA8_UNORM = 43,
     CM_FMT_BGRA8_UNORM_SRGB = 44,
     CM_FMT_RGBA8_UNORM_SRGB = 45,
+    CM_FMT_RGB8_UNORM = 46,
+    CM_FMT_RGB8_SNORM = 47,
+    CM_FMT_RGB16_UNORM = 48,
+    CM_FMT_RGB16_SNORM = 49,
+    CM_FMT_RGB8_UINT = 50,
+    CM_FMT_RGB8_SINT = 51,
+    CM_FMT_RGB16_UINT = 52,
+    CM_FMT_RGB16_SINT = 53,
+    CM_FMT_RGB32_UINT = 54,
+    CM_FMT_RGB32_SINT = 55,
+    CM_FMT_RGB16_FLOAT = 56,
+    CM_FMT_RGB32_FLOAT = 57,
 } CMFormat;
 
 typedef enum CMCompareFunc {
@@ -292,6 +304,7 @@ int64_t cm_texture_create(int64_t ctxPtr, int32_t format, int32_t width, int32_t
                           const char *labelUtf8);
 void cm_texture_destroy(int64_t ctxPtr, int64_t texPtr);
 int64_t cm_texture_view_create(int64_t ctxPtr, int64_t texPtr, int32_t baseMip, int32_t mipCount);
+int64_t cm_texture_buffer_create(int64_t ctxPtr, int64_t bufPtr, int64_t offset, int64_t lengthBytes, int32_t format);
 void cm_texture_view_destroy(int64_t ctxPtr, int64_t viewPtr);
 int64_t cm_sampler_create(int64_t ctxPtr, int32_t addrU, int32_t addrV,
                           int32_t minFilter, int32_t magFilter, int32_t mipFilter,

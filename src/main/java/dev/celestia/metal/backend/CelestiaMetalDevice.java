@@ -243,14 +243,10 @@ public final class CelestiaMetalDevice implements GpuDeviceBackend {
         String lbl = label != null ? label.get() : null;
         int len = data.remaining();
         if (len <= 0) return createBufferInternal(lbl, usage, 16L);
-        long aligned = bucketSize(len);
-        long h;
+        CelestiaBuffer buf = createBufferInternal(lbl, usage, len);
         if (data.isDirect()) {
-            h = MetalNative.bufferCreate(handle, aligned, MemorySegment.ofBuffer(data), lbl);
-            CelestiaBuffer buf = new CelestiaBuffer(this, usage, len, h, aligned <= POOL_MAX_BUFFER_BYTES);
-            return buf;
+            MetalNative.bufferWrite(buf.handle(), 0L, MemorySegment.ofBuffer(data), len);
         } else {
-            CelestiaBuffer buf = createBufferInternal(lbl, usage, len);
             try (Arena arena = Arena.ofConfined()) {
                 byte[] tmp = new byte[len];
                 data.duplicate().get(tmp);
@@ -258,8 +254,8 @@ public final class CelestiaMetalDevice implements GpuDeviceBackend {
                 MemorySegment.copy(tmp, 0, seg, java.lang.foreign.ValueLayout.JAVA_BYTE, 0, len);
                 MetalNative.bufferWrite(buf.handle(), 0L, seg, len);
             }
-            return buf;
         }
+        return buf;
     }
 
     @Override

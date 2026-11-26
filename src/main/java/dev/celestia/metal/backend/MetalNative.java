@@ -79,6 +79,7 @@ public final class MetalNative {
     private static MethodHandle mhTextureCreate;
     private static MethodHandle mhTextureDestroy;
     private static MethodHandle mhTextureViewCreate;
+    private static MethodHandle mhTextureBufferCreate;
     private static MethodHandle mhTextureViewDestroy;
     private static MethodHandle mhSamplerCreate;
     private static MethodHandle mhSamplerDestroy;
@@ -208,6 +209,7 @@ public final class MetalNative {
         mhTextureCreate = downcall("cm_texture_create", FunctionDescriptor.of(L, L, I, I, I, I, I, I, I, I, I, P));
         mhTextureDestroy = downcall("cm_texture_destroy", FunctionDescriptor.ofVoid(L, L));
         mhTextureViewCreate = downcall("cm_texture_view_create", FunctionDescriptor.of(L, L, L, I, I));
+        mhTextureBufferCreate = downcall("cm_texture_buffer_create", FunctionDescriptor.of(L, L, L, L, L, I));
         mhTextureViewDestroy = downcall("cm_texture_view_destroy", FunctionDescriptor.ofVoid(L, L));
         mhSamplerCreate = downcall("cm_sampler_create", FunctionDescriptor.of(L, L, I, I, I, I, I, I, I, I));
         mhSamplerDestroy = downcall("cm_sampler_destroy", FunctionDescriptor.ofVoid(L, L));
@@ -384,6 +386,11 @@ public final class MetalNative {
 
     public static long textureViewCreate(long ctx, long tex, int baseMip, int mipCount) {
         try { return (long) mhTextureViewCreate.invokeExact(ctx, tex, baseMip, mipCount); } catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    public static long textureBufferCreate(long ctx, long buf, long offset, long lengthBytes, int format) {
+        try { return (long) mhTextureBufferCreate.invokeExact(ctx, buf, offset, lengthBytes, format); }
+        catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void textureViewDestroy(long ctx, long view) {

@@ -201,6 +201,9 @@ void cm_surface_blit_and_present(int64_t ctxPtr, int64_t surfPtr, int64_t srcTex
                 [q signalDrawable:drawable];
                 [q signalEvent:ctx.submitEvent value:serial];
                 [drawable present];
+                uint64_t signaled = ctx.submitEvent.signaledValue;
+                uint64_t cur = atomic_load(&ctx->_completedSubmitSerial);
+                while (cur < signaled && !atomic_compare_exchange_weak(&ctx->_completedSubmitSerial, &cur, signaled)) {}
             }
         } else {
             MTLRenderPassDescriptor *rpd = [MTLRenderPassDescriptor renderPassDescriptor];

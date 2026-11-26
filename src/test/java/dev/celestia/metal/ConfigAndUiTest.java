@@ -53,6 +53,24 @@ class ConfigAndUiTest {
         assertEquals(0, MetalConst.toNativeBlendOp(BlendOp.ADD));
         assertEquals(3, MetalConst.toNativeTopology(PrimitiveTopology.TRIANGLES));
         assertThrows(IllegalArgumentException.class, () -> MetalConst.toNativeFormat(GpuFormat.RGB8_UNORM));
+        assertThrows(IllegalArgumentException.class, () -> MetalConst.toNativeFormat(GpuFormat.RGB32_FLOAT));
+
+        // Metal supports all 3-component vertex attribute formats even though 3-component textures are disallowed.
+        GpuFormat[] supportedVertexRgb = {
+            GpuFormat.RGB8_UNORM, GpuFormat.RGB8_SNORM,
+            GpuFormat.RGB16_UNORM, GpuFormat.RGB16_SNORM,
+            GpuFormat.RGB8_UINT, GpuFormat.RGB8_SINT,
+            GpuFormat.RGB16_UINT, GpuFormat.RGB16_SINT,
+            GpuFormat.RGB32_UINT, GpuFormat.RGB32_SINT,
+            GpuFormat.RGB16_FLOAT, GpuFormat.RGB32_FLOAT
+        };
+        for (GpuFormat fmt : supportedVertexRgb) {
+            assertTrue(MetalConst.toNativeVertexFormat(fmt) >= MetalConst.FMT_RGB8_UNORM,
+                "Expected valid native vertex format for " + fmt);
+        }
+        assertEquals(MetalConst.FMT_RGB32_FLOAT, MetalConst.toNativeVertexFormat(GpuFormat.RGB32_FLOAT));
+        assertEquals(MetalConst.FMT_RGBA8_UNORM, MetalConst.toNativeVertexFormat(GpuFormat.RGBA8_UNORM));
+        assertEquals(MetalConst.FMT_R16_FLOAT, MetalConst.toNativeVertexFormat(GpuFormat.R16_FLOAT));
     }
 
     @Test

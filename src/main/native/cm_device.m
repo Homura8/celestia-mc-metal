@@ -258,7 +258,7 @@ int64_t cm_device_create(int32_t preferMetal4, int32_t debugLabels, const char *
                     atDesc.maxTextureBindCount = 32;
                     atDesc.maxSamplerStateBindCount = 16;
                     atDesc.initializeBindings = YES;
-                    atDesc.supportAttributeStrides = YES;
+                    atDesc.supportAttributeStrides = NO;
                     atDesc.label = @"CelestiaMetal.VertexArgs";
                     id<MTL4ArgumentTable> vArgs = [dev newArgumentTableWithDescriptor:atDesc error:&err];
                     atDesc.label = @"CelestiaMetal.FragmentArgs";

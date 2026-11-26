@@ -16,16 +16,24 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Supplier;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryUtil;
 
 public final class CelestiaRenderPass implements RenderPassBackend {
+    private record TexelKey(long bufHandle, long offset, long length, int format) {}
+
     private final CelestiaMetalDevice device;
     private final CelestiaCommandEncoder encoder;
     private final int depthFormat;
     private final int[] vtxStrides = new int[8];
+    private final Map<TexelKey, Long> texelBufferViews = new HashMap<>();
+    private Object[] pendingUniforms = new Object[16];
+    private boolean uniformsDirty;
     private CelestiaPipeline pipeline;
     private IndexType indexType = IndexType.INT;
     private long indexBaseOffset;
@@ -39,6 +47,20 @@ public final class CelestiaRenderPass implements RenderPassBackend {
 
     void closePass() {
         closed = true;
+        if (!texelBufferViews.isEmpty()) {
+            long[] handles = new long[texelBufferViews.size()];
+            int i = 0;
+            for (Long h : texelBufferViews.values()) {
+                handles[i++] = h != null ? h : 0L;
+            }
+            texelBufferViews.clear();
+            long devHandle = device.handle();
+            encoder.runWhenSubmitDone(() -> {
+                for (long h : handles) {
+                    if (h != 0L) MetalNative.textureViewDestroy(devHandle, h);
+                }
+            });
+        }
     }
 
     @Override
@@ -61,35 +83,59 @@ public final class CelestiaRenderPass implements RenderPassBackend {
         }
         long pso = this.pipeline.getOrCreatePso(depthFormat);
         MetalNative.passSetPipeline(device.handle(), pso);
+        this.uniformsDirty = true;
     }
 
     @Override
     public void setUniform(int index, Object value) {
-        if (closed || pipeline == null || value == null) return;
+        if (closed || index < 0) return;
+        if (index >= pendingUniforms.length) {
+            pendingUniforms = Arrays.copyOf(pendingUniforms, Math.max(pendingUniforms.length * 2, index + 1));
+        }
+        pendingUniforms[index] = value;
+        uniformsDirty = true;
+    }
+
+    private void flushUniforms() {
+        if (!uniformsDirty || pipeline == null) return;
+        uniformsDirty = false;
         List<BindGroupLayout.UniformDescription> uniforms = pipeline.uniforms();
         List<MetalShaderTranslator.SlotBinding> bindings = pipeline.bindings();
-        if (index < 0 || index >= bindings.size()) return;
-        UniformType type = uniforms.get(index).type();
-        MetalShaderTranslator.SlotBinding sb = bindings.get(index);
+        int count = Math.min(bindings.size(), pendingUniforms.length);
+        for (int index = 0; index < count; index++) {
+            Object value = pendingUniforms[index];
+            if (value == null) continue;
+            BindGroupLayout.UniformDescription desc = uniforms.get(index);
+            UniformType type = desc.type();
+            MetalShaderTranslator.SlotBinding sb = bindings.get(index);
 
-        switch (type) {
-            case UNIFORM_BUFFER -> {
-                if (value instanceof GpuBufferSlice slice && slice.buffer() instanceof CelestiaBuffer cb) {
-                    MetalNative.passSetUniformBuffer(device.handle(), sb.bufferSlot(), cb.handle(), slice.offset());
-                } else if (value instanceof CelestiaBuffer cb) {
-                    MetalNative.passSetUniformBuffer(device.handle(), sb.bufferSlot(), cb.handle(), 0L);
+            switch (type) {
+                case UNIFORM_BUFFER -> {
+                    if (value instanceof GpuBufferSlice slice && slice.buffer() instanceof CelestiaBuffer cb) {
+                        MetalNative.passSetUniformBuffer(device.handle(), sb.bufferSlot(), cb.handle(), slice.offset());
+                    } else if (value instanceof CelestiaBuffer cb) {
+                        MetalNative.passSetUniformBuffer(device.handle(), sb.bufferSlot(), cb.handle(), 0L);
+                    }
                 }
-            }
-            case COMBINED_IMAGE_SAMPLER -> {
-                if (value instanceof TextureViewAndSampler tvs
-                    && tvs.view() instanceof CelestiaTextureView tv
-                    && tvs.sampler() instanceof CelestiaSampler samp) {
-                    MetalNative.passSetTextureSampler(device.handle(), sb.textureSlot(), tv.handle(), sb.samplerSlot(), samp.handle());
+                case COMBINED_IMAGE_SAMPLER -> {
+                    if (value instanceof TextureViewAndSampler tvs
+                        && tvs.view() instanceof CelestiaTextureView tv
+                        && tvs.sampler() instanceof CelestiaSampler samp) {
+                        MetalNative.passSetTextureSampler(device.handle(), sb.textureSlot(), tv.handle(), sb.samplerSlot(), samp.handle());
+                    }
                 }
-            }
-            case TEXEL_BUFFER -> {
-                if (value instanceof CelestiaTextureView tv) {
-                    MetalNative.passSetTextureSampler(device.handle(), sb.textureSlot(), tv.handle(), -1, 0L);
+                case TEXEL_BUFFER -> {
+                    if (value instanceof GpuBufferSlice slice && slice.buffer() instanceof CelestiaBuffer cb) {
+                        int nativeFmt = MetalConst.toNativeFormat(desc.gpuFormat());
+                        TexelKey key = new TexelKey(cb.handle(), slice.offset(), slice.length(), nativeFmt);
+                        long viewHandle = texelBufferViews.computeIfAbsent(key, k ->
+                            MetalNative.textureBufferCreate(device.handle(), k.bufHandle(), k.offset(), k.length(), k.format()));
+                        if (viewHandle != 0L) {
+                            MetalNative.passSetTextureSampler(device.handle(), sb.textureSlot(), viewHandle, -1, 0L);
+                        }
+                    } else if (value instanceof CelestiaTextureView tv) {
+                        MetalNative.passSetTextureSampler(device.handle(), sb.textureSlot(), tv.handle(), -1, 0L);
+                    }
                 }
             }
         }
@@ -148,6 +194,7 @@ public final class CelestiaRenderPass implements RenderPassBackend {
     @Override
     public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
         if (closed || vertexCount <= 0 || instanceCount <= 0) return;
+        flushUniforms();
         if (pipeline != null && pipeline.topology() == PrimitiveTopology.TRIANGLE_FAN && vertexCount >= 3) {
             drawTriangleFan(vertexCount, instanceCount, firstVertex, firstInstance);
             return;
@@ -175,6 +222,7 @@ public final class CelestiaRenderPass implements RenderPassBackend {
     @Override
     public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int baseVertex, int firstInstance) {
         if (closed || indexCount <= 0 || instanceCount <= 0) return;
+        flushUniforms();
         MetalNative.passDrawIndexed(device.handle(), nativeTopology(), indexBaseOffset,
             indexCount, instanceCount, baseVertex, firstIndex, firstInstance);
     }
@@ -182,6 +230,7 @@ public final class CelestiaRenderPass implements RenderPassBackend {
     @Override
     public void multiDraw(IntBuffer drawCommands, int drawCount, int instanceCount, int firstInstance) {
         if (closed || drawCount <= 0 || drawCommands == null) return;
+        flushUniforms();
         // VkMultiDrawInfoEXT interleaved layout: { uint32 firstVertex, uint32 vertexCount }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment firsts = arena.allocate(4L * drawCount, 4);
@@ -198,6 +247,7 @@ public final class CelestiaRenderPass implements RenderPassBackend {
     @Override
     public void multiDraw(IntBuffer firsts, IntBuffer counts, int drawCount) {
         if (closed || drawCount <= 0 || firsts == null || counts == null) return;
+        flushUniforms();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment firstSeg = copyInts(arena, firsts, drawCount);
             MemorySegment countSeg = copyInts(arena, counts, drawCount);
@@ -208,6 +258,7 @@ public final class CelestiaRenderPass implements RenderPassBackend {
     @Override
     public void multiDrawIndexed(IntBuffer drawCommands, int drawCount, int instanceCount, int firstInstance) {
         if (closed || drawCount <= 0 || drawCommands == null) return;
+        flushUniforms();
         // VkMultiDrawIndexedInfoEXT interleaved layout: { uint32 firstIndex, uint32 indexCount, int32 vertexOffset }
         int idxBytes = indexType == IndexType.INT ? 4 : 2;
         try (Arena arena = Arena.ofConfined()) {
@@ -229,6 +280,7 @@ public final class CelestiaRenderPass implements RenderPassBackend {
     @Override
     public void multiDrawIndexed(PointerBuffer indices, IntBuffer counts, IntBuffer baseVertices, int drawCount) {
         if (closed || drawCount <= 0 || indices == null || counts == null) return;
+        flushUniforms();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment offsets = arena.allocate(8L * drawCount, 8);
             int pPos = indices.position();
@@ -245,6 +297,7 @@ public final class CelestiaRenderPass implements RenderPassBackend {
     @Override
     public void drawIndexedIndirect(GpuBufferSlice indirectBuffer, int drawCount) {
         if (closed || drawCount <= 0 || !(indirectBuffer.buffer() instanceof CelestiaBuffer cb)) return;
+        flushUniforms();
         MetalNative.passDrawIndirect(device.handle(), nativeTopology(), cb.handle(), indirectBuffer.offset(),
             drawCount, 20, true);
     }
@@ -252,6 +305,7 @@ public final class CelestiaRenderPass implements RenderPassBackend {
     @Override
     public void drawIndirect(GpuBufferSlice indirectBuffer, int drawCount) {
         if (closed || drawCount <= 0 || !(indirectBuffer.buffer() instanceof CelestiaBuffer cb)) return;
+        flushUniforms();
         MetalNative.passDrawIndirect(device.handle(), nativeTopology(), cb.handle(), indirectBuffer.offset(),
             drawCount, 16, false);
     }
