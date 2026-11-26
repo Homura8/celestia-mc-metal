@@ -42,7 +42,7 @@ Celestia Metal replaces Minecraft's legacy OpenGL path with Apple's native **Met
 ## Installation
 
 1. Install **Fabric Loader 0.19.5+** for **Minecraft 26.3**.
-2. Download `celestia-metal-0.1.0-alpha.1.jar` from Releases (or build with `./gradlew build`).
+2. Download `celestia-metal-0.1.0-alpha.8.jar` from Releases (or build with `./gradlew build`).
 3. Place the JAR in your instance's `mods/` folder.
 4. Launch Minecraft. Celestia Metal activates automatically when **Graphics API** is set to **Default** (press **F3** to check the `Celestia Metal` debug entry).
 
@@ -75,13 +75,15 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@25 ./gradlew build check
 JAVA_HOME=/opt/homebrew/opt/openjdk@25 ./gradlew runNativeTests
 ```
 
-The output single JAR is written to `build/libs/celestia-metal-0.1.0-alpha.1.jar`.
+The output single JAR is written to `build/libs/celestia-metal-0.1.0-alpha.8.jar`.
 
 ---
 
 ## Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Native Metal 4/3 backend, RenderPearl integration, memory & lifetime model, and Phase 2 roadmap.
+- [DEVELOPMENT.md](DEVELOPMENT.md) — Engineering retrospective, design rationale, and debugging postmortems across `0.1.0-alpha.1`–`0.1.0-alpha.8`.
+- [AGENTS.md](AGENTS.md) — Practical guide for AI agents and contributors (commands, invariants, FFM & Metal 4 pitfalls).
 - [SHADER_PACK_SPEC.md](SHADER_PACK_SPEC.md) — Celestia Shader Pack API v1 guide for writing and porting native MSL shader packs (including Celestia Shaders).
 - [CREDITS.md](CREDITS.md) — Explicit attributions and licenses for the Apple Silicon Minecraft Metal ecosystem.
 - [CHANGELOG.md](CHANGELOG.md) — Release history.
