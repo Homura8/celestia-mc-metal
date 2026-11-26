@@ -17,7 +17,7 @@
 @property (nonatomic) uint32_t depthKey;
 @end
 
-static void ensure_cmd_begun(CMContext *ctx) {
+void cm_ensure_cmd_begun(CMContext *ctx) {
     if (ctx.metal4Active) {
         if (ctx.activeM4CmdBuf) return;
         if (@available(macOS 26.0, *)) {
@@ -75,7 +75,7 @@ static void emit_m4_blit_intra_barrier_if_needed(CMContext *ctx, id enc) {
 static void flush_pending_clears(CMContext *ctx);
 
 static id ensure_blit_encoder(CMContext *ctx) {
-    ensure_cmd_begun(ctx);
+    cm_ensure_cmd_begun(ctx);
     if (ctx.activeRenderEnc) {
         cm_pass_end((int64_t)(__bridge void *)ctx);
     }
@@ -96,8 +96,9 @@ static id ensure_blit_encoder(CMContext *ctx) {
     return ctx.activeBlitEnc;
 }
 
-static void emit_m4_render_producer_barrier(id<MTL4RenderCommandEncoder> enc) {
+void cm_emit_m4_render_producer_barrier(id rawEnc) {
     if (@available(macOS 26.0, *)) {
+        id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)rawEnc;
         [enc barrierAfterStages:MTLStageVertex | MTLStageFragment
               beforeQueueStages:MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit
               visibilityOptions:MTL4VisibilityOptionDevice];
@@ -108,7 +109,7 @@ void cm_cmd_begin(int64_t ctxPtr) {
     if (!ctxPtr) return;
     @autoreleasepool {
         CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
-        ensure_cmd_begun(ctx);
+        cm_ensure_cmd_begun(ctx);
     }
 }
 
@@ -261,7 +262,7 @@ static void emit_clear_encoder(CMContext *ctx, id<MTLTexture> ctex, const float 
             }
             if (dtex) configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment, dtex, YES, depth);
             id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
-            emit_m4_render_producer_barrier(enc);
+            cm_emit_m4_render_producer_barrier(enc);
             [enc endEncoding];
         }
     } else {
@@ -294,7 +295,7 @@ static void remove_pending_clear(CMContext *ctx, int32_t idx) {
 static void flush_pending_clears(CMContext *ctx) {
     int32_t n = ctx->_pendingClearCount;
     if (n <= 0) return;
-    ensure_cmd_begun(ctx);
+    cm_ensure_cmd_begun(ctx);
     for (int32_t i = 0; i < n; i++) {
         id<MTLTexture> tex = ctx->_pendingClearTex[i];
         if (!ctx->_pendingClearIsDepth[i] && i + 1 < n && ctx->_pendingClearIsDepth[i + 1]) {
@@ -332,7 +333,7 @@ static void defer_clear(CMContext *ctx, id<MTLTexture> tex, const float *rgba, B
 }
 
 static void begin_clear(CMContext *ctx) {
-    ensure_cmd_begun(ctx);
+    cm_ensure_cmd_begun(ctx);
     if (ctx.activeRenderEnc) cm_pass_end((int64_t)(__bridge void *)ctx);
     cm_end_blit_if_active(ctx);
 }
@@ -567,7 +568,7 @@ void cm_blit_copy_texture(int64_t ctxPtr, int64_t srcTex, int32_t srcMip, int32_
 
 // ---- Render Pass & Drawing ----
 
-static void reset_pass_cache(CMContext *ctx) {
+void cm_reset_pass_cache(CMContext *ctx) {
     ctx.boundPipeline = 0;
     ctx.boundDepthKey = UINT32_MAX;
     ctx.boundCullMode = -1;
@@ -642,7 +643,7 @@ int32_t cm_pass_begin(int64_t ctxPtr,
     if (!ctxPtr) return 0;
     @autoreleasepool {
         CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
-        ensure_cmd_begun(ctx);
+        cm_ensure_cmd_begun(ctx);
         ctx->_stats[CM_STAT_PASSES_BEGUN]++;
         colorCount = MAX(0, MIN(colorCount, CM_MAX_COLOR_ATTACHMENTS));
 
@@ -698,7 +699,7 @@ int32_t cm_pass_begin(int64_t ctxPtr,
         // preserving their order relative to this pass (nothing else was encoded in between).
         if (ctx->_pendingClearCount > 0) flush_pending_clears(ctx);
 
-        reset_pass_cache(ctx);
+        cm_reset_pass_cache(ctx);
         ctx->_stats[CM_STAT_RENDER_ENCODERS]++;
 
         int32_t texW = 0;
@@ -742,6 +743,7 @@ int32_t cm_pass_begin(int64_t ctxPtr,
                              atStages:MTLRenderStageVertex | MTLRenderStageFragment];
                 [enc setFrontFacingWinding:MTLWindingClockwise];
                 ctx.activeRenderEnc = enc;
+                if (ctx.shadeGlobalsEnabled) cm_shade_bind_render_encoder(ctx, colorViewPtrs, colorCount);
             }
         } else {
             MTLRenderPassDescriptor *rpd = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -775,6 +777,7 @@ int32_t cm_pass_begin(int64_t ctxPtr,
             if (ctx.debugLabels && labelUtf8) enc.label = [NSString stringWithUTF8String:labelUtf8];
             [enc setFrontFacingWinding:MTLWindingClockwise];
             ctx.activeRenderEnc = enc;
+            if (ctx.shadeGlobalsEnabled) cm_shade_bind_render_encoder(ctx, colorViewPtrs, colorCount);
         }
 
         // Remember the attachments so an immediately following compatible pass can merge.
@@ -805,7 +808,7 @@ void cm_pass_end(int64_t ctxPtr) {
     if (ctx.metal4Active) {
         if (@available(macOS 26.0, *)) {
             id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc;
-            emit_m4_render_producer_barrier(enc);
+            cm_emit_m4_render_producer_barrier(enc);
             [enc endEncoding];
         }
     } else {

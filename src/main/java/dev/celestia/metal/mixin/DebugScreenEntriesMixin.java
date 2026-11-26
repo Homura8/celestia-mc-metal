@@ -47,6 +47,7 @@ public abstract class DebugScreenEntriesMixin {
                     perf.effectiveRenderScalePercent(), WorldRenderScale.statusLabel(),
                     perf.thermalLabel(), shader
                 ));
+                displayer.addLine("Celestia Shade: " + dev.shade().statusSummary());
                 long[] st = dev.lastFrameStats();
                 displayer.addLine(String.format(
                     "Celestia Encoders: %d passes -> %d render encoders (%d merged) | %d blit | clears %d folded / %d flushed | %d draws",

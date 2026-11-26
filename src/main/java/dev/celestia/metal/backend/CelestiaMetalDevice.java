@@ -20,6 +20,7 @@ import com.mojang.renderpearl.backend.api.CommandEncoderBackend;
 import com.mojang.renderpearl.backend.api.GpuDeviceBackend;
 import com.mojang.renderpearl.backend.api.GpuSurfaceBackend;
 import dev.celestia.metal.perf.CelestiaConfig;
+import dev.celestia.metal.shade.CelestiaShade;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
@@ -51,6 +52,7 @@ public final class CelestiaMetalDevice implements GpuDeviceBackend {
     private final DeviceInfo deviceInfo;
     private final MetalNative.ProbeInfo probeInfo;
     private final CelestiaCommandEncoder commandEncoder;
+    private final CelestiaShade shade;
     private final Map<Long, ArrayDeque<PooledBuffer>> bufferPool = new HashMap<>();
     private final Map<SamplerKey, CelestiaSampler> samplerCache = new HashMap<>();
     private long bufferPoolBytes;
@@ -75,6 +77,7 @@ public final class CelestiaMetalDevice implements GpuDeviceBackend {
         this.metal4 = MetalNative.deviceIsMetal4(this.handle);
         applyEncoderOptions();
         this.commandEncoder = new CelestiaCommandEncoder(this);
+        this.shade = new CelestiaShade(this);
 
         DeviceLimits limits = new DeviceLimits(
             probe.maxAnisotropy(),
@@ -130,6 +133,10 @@ public final class CelestiaMetalDevice implements GpuDeviceBackend {
 
     public MetalNative.ProbeInfo probeInfo() {
         return probeInfo;
+    }
+
+    public CelestiaShade shade() {
+        return shade;
     }
 
     private static long bucketSize(long size) {
@@ -340,6 +347,7 @@ public final class CelestiaMetalDevice implements GpuDeviceBackend {
         if (closed) return;
         closed = true;
         if (current == this) current = null;
+        shade.close();
         commandEncoder.close();
         synchronized (samplerCache) {
             for (CelestiaSampler s : samplerCache.values()) {

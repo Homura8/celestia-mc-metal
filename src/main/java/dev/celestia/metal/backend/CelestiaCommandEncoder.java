@@ -14,6 +14,8 @@ import com.mojang.renderpearl.api.textures.GpuTexture;
 import com.mojang.renderpearl.backend.api.CommandEncoderBackend;
 import com.mojang.renderpearl.backend.api.RenderPassBackend;
 import dev.celestia.metal.perf.CelestiaConfig;
+import dev.celestia.metal.shade.CelestiaShade;
+import dev.celestia.metal.shade.ShadeShaderPatcher;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -224,25 +226,50 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
             throw new IllegalArgumentException("Too many color attachments: " + colorCount);
         }
 
+        CelestiaShade shade = device.shade();
+        int passColorOverride = CelestiaPipeline.NO_COLOR_OVERRIDE;
+        ShadeShaderPatcher.Variant passVariant = ShadeShaderPatcher.Variant.BASE;
         {
             MemorySegment cViews = colorCount > 0 ? passScratch.asSlice(PASS_VIEWS_OFF, 8L * colorCount) : MemorySegment.NULL;
             MemorySegment cFlags = colorCount > 0 ? passScratch.asSlice(PASS_FLAGS_OFF, 4L * colorCount) : MemorySegment.NULL;
             MemorySegment cRgba = colorCount > 0 ? passScratch.asSlice(PASS_RGBA_OFF, 16L * colorCount) : MemorySegment.NULL;
+            boolean redirectedMain = false;
             for (int i = 0; i < colorCount; i++) {
                 var att = colors.get(i);
-                long viewHandle = ((CelestiaTextureView) att.textureView()).handle();
+                GpuTexture attTex = att.textureView().texture();
+                boolean redirectThis = shade != null && shade.shouldRedirect(attTex);
+                if (redirectThis) redirectedMain = true;
+                long viewHandle = redirectThis
+                    ? shade.redirectColorViewHandle(att.textureView())
+                    : ((CelestiaTextureView) att.textureView()).handle();
                 cViews.set(ValueLayout.JAVA_LONG, i * 8L, viewHandle);
                 Optional<Vector4fc> clr = att.clearValue();
                 if (clr != null && clr.isPresent()) {
                     Vector4fc v = clr.get();
                     cFlags.set(ValueLayout.JAVA_INT, i * 4L, 1);
-                    cRgba.set(ValueLayout.JAVA_FLOAT, i * 16L, v.x());
-                    cRgba.set(ValueLayout.JAVA_FLOAT, i * 16L + 4, v.y());
-                    cRgba.set(ValueLayout.JAVA_FLOAT, i * 16L + 8, v.z());
-                    cRgba.set(ValueLayout.JAVA_FLOAT, i * 16L + 12, v.w());
+                    if (redirectThis) {
+                        float[] hdrClr = shade.transformClearColorToHdr(v.x(), v.y(), v.z(), v.w());
+                        cRgba.set(ValueLayout.JAVA_FLOAT, i * 16L, hdrClr[0]);
+                        cRgba.set(ValueLayout.JAVA_FLOAT, i * 16L + 4, hdrClr[1]);
+                        cRgba.set(ValueLayout.JAVA_FLOAT, i * 16L + 8, hdrClr[2]);
+                        cRgba.set(ValueLayout.JAVA_FLOAT, i * 16L + 12, hdrClr[3]);
+                    } else {
+                        cRgba.set(ValueLayout.JAVA_FLOAT, i * 16L, v.x());
+                        cRgba.set(ValueLayout.JAVA_FLOAT, i * 16L + 4, v.y());
+                        cRgba.set(ValueLayout.JAVA_FLOAT, i * 16L + 8, v.z());
+                        cRgba.set(ValueLayout.JAVA_FLOAT, i * 16L + 12, v.w());
+                    }
                 } else {
                     cFlags.set(ValueLayout.JAVA_INT, i * 4L, 0);
                 }
+            }
+            if (redirectedMain) {
+                passColorOverride = MetalConst.FMT_RGBA16_FLOAT;
+                passVariant = ShadeShaderPatcher.Variant.HDR_WORLD;
+            } else if (shade != null && shade.isHandPassActive() && colorCount == 1) {
+                GpuTexture attTex = colors.get(0).textureView().texture();
+                passColorOverride = MetalConst.toNativeFormat(attTex.getFormat());
+                passVariant = ShadeShaderPatcher.Variant.HDR_HAND;
             }
 
             long depthViewHandle = 0L;
@@ -269,7 +296,7 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
                 depthViewHandle, depthHasClear, depthClearVal, ax, ay, aw, ah, lbl);
         }
 
-        currentRenderPass = new CelestiaRenderPass(device, this, depthFmt);
+        currentRenderPass = new CelestiaRenderPass(device, this, passColorOverride, depthFmt, passVariant);
         return currentRenderPass;
     }
 
@@ -285,6 +312,12 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
     @Override
     public void clearColorTexture(GpuTexture texture, Vector4fc color) {
         if (texture instanceof CelestiaTexture ct) {
+            CelestiaShade shade = device.shade();
+            if (shade != null && shade.shouldRedirect(ct)) {
+                float[] hdr = shade.transformClearColorToHdr(color.x(), color.y(), color.z(), color.w());
+                MetalNative.blitClearColor(device.handle(), shade.redirectColorTextureHandle(ct), hdr[0], hdr[1], hdr[2], hdr[3]);
+                return;
+            }
             MetalNative.blitClearColor(device.handle(), ct.handle(), color.x(), color.y(), color.z(), color.w());
         }
     }
@@ -292,6 +325,13 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
     @Override
     public void clearColorAndDepthTextures(GpuTexture colorTex, Vector4fc color, GpuTexture depthTex, double depth) {
         if (colorTex instanceof CelestiaTexture ct && depthTex instanceof CelestiaTexture dt) {
+            CelestiaShade shade = device.shade();
+            if (shade != null && shade.shouldRedirect(ct)) {
+                float[] hdr = shade.transformClearColorToHdr(color.x(), color.y(), color.z(), color.w());
+                MetalNative.blitClearColorDepth(device.handle(), shade.redirectColorTextureHandle(ct),
+                    hdr[0], hdr[1], hdr[2], hdr[3], dt.handle(), depth);
+                return;
+            }
             MetalNative.blitClearColorDepth(device.handle(), ct.handle(),
                 color.x(), color.y(), color.z(), color.w(), dt.handle(), depth);
         }

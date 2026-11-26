@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 
-#define CM_ABI_VERSION 3
+#define CM_ABI_VERSION 4
 #define CM_MAX_COLOR_ATTACHMENTS 8
 #define CM_MAX_VERTEX_BUFFERS 8
 #define CM_MAX_UNIFORM_BUFFERS 15
@@ -21,6 +21,19 @@
 #define CM_MAX_SAMPLERS 16
 #define CM_INFLIGHT_SLOTS 4
 #define CM_MAX_PENDING_CLEARS 8
+
+// Global shader-suite slot reservations (CelestiaShade P1+)
+#define CM_SHADE_BUF_FRAME     24
+#define CM_SHADE_BUF_LOOK      25
+#define CM_SHADE_BUF_GPU       26
+#define CM_SHADE_BUF_RESOURCES 27
+#define CM_SHADE_BUF_HIST      28
+#define CM_SHADE_BUF_BLOOM     29
+#define CM_SHADE_TEX_SHADOW    16
+#define CM_SHADE_TEX_SKY_LUT   17
+#define CM_SHADE_SAMP_SHADOW   12
+#define CM_SHADE_SAMP_LINEAR   13
+#define CM_SHADE_MAX_RES_TEX   16
 
 typedef enum CMFormat {
     CM_FMT_R8_UNORM = 0,
@@ -244,6 +257,7 @@ __attribute__((objc_direct_members))
     _Atomic int64_t _waitThrottleUs;
     _Atomic int64_t _waitFenceUs;
     _Atomic int64_t _waitSlotUs;
+    id _shadeResTextures[CM_SHADE_MAX_RES_TEX];
 }
 @property (nonatomic, strong) id<MTLDevice> device;
 @property (nonatomic) BOOL metal4Active;
@@ -315,6 +329,21 @@ __attribute__((objc_direct_members))
 
 // World render-scale upscaling state (CMUpscalePath, cm_upscaler.m)
 @property (nonatomic, strong) id upscalePath;
+// Global shader-suite state (CelestiaShade P1+)
+@property (nonatomic, assign) BOOL shadeGlobalsEnabled;
+@property (nonatomic, strong) id shadeFrameBuf;
+@property (nonatomic, assign) uint64_t shadeFrameOffset;
+@property (nonatomic, strong) id shadeLookBuf;
+@property (nonatomic, assign) uint64_t shadeLookOffset;
+@property (nonatomic, strong) id shadeGpuBuf;
+@property (nonatomic, assign) uint64_t shadeGpuOffset;
+@property (nonatomic, strong) id shadeResBuf;
+@property (nonatomic, assign) uint64_t shadeResOffset;
+@property (nonatomic, strong) id shadeSkyLutTex;
+@property (nonatomic, strong) id shadeShadowTex;
+@property (nonatomic, strong) id shadeDummyTex;
+@property (nonatomic, strong) id shadeLinearSampler;
+@property (nonatomic, strong) id shadeShadowSampler;
 @end
 
 // Internal helpers shared across native .m modules
@@ -335,6 +364,10 @@ void cm_end_blit_if_active(CMContext *ctx);
 // Ends any open render encoder, flushes deferred clears and ends the blit encoder.
 // Call before encoding any non-render-pass GPU work (compute, MetalFX, present, submit).
 void cm_flush_encoders(CMContext *ctx);
+void cm_ensure_cmd_begun(CMContext *ctx);
+void cm_reset_pass_cache(CMContext *ctx);
+void cm_emit_m4_render_producer_barrier(id enc);
+void cm_shade_bind_render_encoder(CMContext *ctx, const int64_t *colorViewPtrs, int32_t colorCount);
 // Waits for submit `serial`; the blocked time is accounted to *waitUs (may be NULL). timeoutNs == 0 only polls.
 int32_t cm_wait_submit_accounted(CMContext *ctx, uint64_t serial, uint64_t timeoutNs, _Atomic int64_t *waitUs);
 NSUInteger cm_bytes_per_pixel(MTLPixelFormat fmt);
@@ -498,6 +531,26 @@ void cm_compute_dispatch(int64_t ctxPtr, int64_t computePipePtr,
                          const int64_t *sampPtrs, int32_t sampCount,
                          int32_t gx, int32_t gy, int32_t gz,
                          int32_t tx, int32_t ty, int32_t tz);
+
+// Global shader-suite bindings & fullscreen post passes (P1+)
+void cm_shade_set_enabled(int64_t ctxPtr, int32_t enabled);
+void cm_shade_set_globals(int64_t ctxPtr,
+                          int64_t frameBufPtr, int64_t frameOffset,
+                          int64_t lookBufPtr, int64_t lookOffset,
+                          int64_t gpuBufPtr, int64_t gpuOffset,
+                          int64_t resBufPtr, int64_t resOffset,
+                          int64_t shadowTexPtr, int64_t skyLutTexPtr,
+                          int64_t shadowSampPtr, int64_t linearSampPtr);
+void cm_shade_set_resource(int64_t ctxPtr, int32_t slot, int64_t texPtr);
+void cm_shade_fullscreen_pass(int64_t ctxPtr, int64_t psoPtr, int64_t colorTexPtr,
+                              const int64_t *texPtrs, int32_t texCount,
+                              const int64_t *sampPtrs, int32_t sampCount,
+                              const void *pushData, int32_t pushBytes);
+void cm_shade_exposure_run(int64_t ctxPtr,
+                           int64_t histComputePsoPtr, int64_t expComputePsoPtr,
+                           int64_t srcTexPtr, int64_t gpuBufPtr, int64_t gpuOffset,
+                           int64_t lookBufPtr, int64_t lookOffset,
+                           int32_t gx, int32_t gy);
 
 #ifdef __cplusplus
 }
