@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.0-alpha.13
+
+### Performance
+- **Per-draw CPU overhead cut by ~33–47%** (new `benchmark_draw_overhead` in `tools/test_metal_backend.m`, 2000 draws on M1 Pro):
+
+  | CPU per draw | Metal 4 before → after | Metal 3 before → after |
+  |---|---|---|
+  | draws only | 0.111 → 0.063–0.078 µs | 0.099 → 0.052 µs |
+  | + push constants + UBO offset (Sodium-like) | 0.459 → 0.26 µs | 0.298 → 0.204 µs |
+  | + texture switches (Xaero-like) | 0.493 → 0.285 µs | 0.326 → 0.218 µs |
+
+- **One Metal 4 argument table for both render stages**: bindings are written once instead of twice, and the driver snapshots one table per draw instead of two.
+- **Direct `CMContext` properties** (`objc_direct_members`): no `objc_msgSend` for the context state read on every draw/bind call.
+- **No per-call `@available` checks** in the hot pass/draw/bind functions (`metal4Active` already implies macOS 26).
+- **Push-constant dedup**: identical consecutive push constants reuse the already-bound bytes (Metal 4).
+- **Java uniform dirty tracking**: `CelestiaRenderPass` only re-sends uniforms whose value changed since the last `setPipeline`, instead of every uniform on any change.
+
+### Fixed
+- **Crash when the window/surface is destroyed mid-stream** (non-blocking present, alpha.12): libdispatch traps when a semaphore is released below its initial value; the present-slot semaphore is now created at 0 and filled to the pool size. Reproduced in 2 of 5 native test runs before the fix, 0 of 11 after.
+- **Present slots leaked on resize** (alpha.12): `cm_surface_configure` and `cm_surface_destroy` dropped a frame waiting for the screen without returning its slot, so each resize that landed while a frame was waiting shrank the pool; after a few resizes every frame could hit a 50 ms slot-wait timeout.
+
+### Added
+- Native Test 2j (push-constant dedup correctness, including a new encoder after identical bytes; fails with a naive dedup).
+- Test 2i now also resizes repeatedly while frames are in flight and tears the surface down with frames still queued.
+
 ## 0.1.0-alpha.12
 
 ### Performance

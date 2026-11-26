@@ -202,6 +202,8 @@ typedef struct CMAttribBindingDesc {
 @property (nonatomic) BOOL isCompute;
 @end
 
+// Properties are direct (no objc_msgSend): CMContext is read on every native draw/bind call.
+__attribute__((objc_direct_members))
 @interface CMContext : NSObject {
 @public
     MTLPixelFormat _currentColorFormats[CM_MAX_COLOR_ATTACHMENTS];
@@ -219,6 +221,10 @@ typedef struct CMAttribBindingDesc {
     MTLGPUAddress _boundUboAddrV[CM_MAX_UNIFORM_BUFFERS];
     MTLGPUAddress _boundUboAddrF[CM_MAX_UNIFORM_BUFFERS];
     MTLGPUAddress _boundVtxAddr[CM_MAX_VERTEX_BUFFERS];
+    // Last push-constant bytes and their ring address (Metal 4): identical consecutive pushes reuse the address.
+    uint8_t _lastPush[256];
+    int32_t _lastPushSize;
+    MTLGPUAddress _lastPushAddr;
     // Soft-ended pass attachments (used to merge the next compatible pass into the same encoder)
     uintptr_t _passColorViews[CM_MAX_COLOR_ATTACHMENTS];
     // Deferred clears (folded into the next pass that targets the texture, or flushed before other work)

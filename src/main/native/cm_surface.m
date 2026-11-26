@@ -295,7 +295,10 @@ int64_t cm_surface_create(int64_t ctxPtr, int64_t caMetalLayerPtr, int32_t hdrEn
         for (int i = 0; i < CM_PRESENT_SLOTS; i++) atomic_init(&surf->_slotBusy[i], 0);
         dispatch_queue_attr_t attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0);
         surf.presentQueue = dispatch_queue_create("dev.celestia.metal.present", attr);
-        surf.slotsFree = dispatch_semaphore_create(CM_PRESENT_SLOTS);
+        // Created at 0 and signalled up to the pool size: libdispatch traps if a semaphore is disposed below its
+        // initial value, which happens when the surface is torn down while frames still hold slots.
+        surf.slotsFree = dispatch_semaphore_create(0);
+        for (int i = 0; i < CM_PRESENT_SLOTS; i++) dispatch_semaphore_signal(surf.slotsFree);
         surf.presentCmdQueue = [ctx.device newCommandQueue];
         surf.presentCmdQueue.label = @"CelestiaMetal.PresentQueue";
         surf.listener = [[MTLSharedEventListener alloc] initWithDispatchQueue:surf.presentQueue];
@@ -333,7 +336,7 @@ void cm_surface_destroy(int64_t ctxPtr, int64_t surfPtr) {
         atomic_store(&surf->_shutdown, 1);
         // Let queued present work observe the shutdown flag (it releases slots without presenting).
         if (surf.presentQueue) dispatch_sync(surf.presentQueue, ^{
-            surf->_waitingSlot = -1;
+            if (surf->_waitingSlot >= 0) { release_slot(surf, surf->_waitingSlot); surf->_waitingSlot = -1; }
         });
         surf.currentDrawable = nil;
         surf.layer = nil;
@@ -352,7 +355,9 @@ void cm_surface_configure(int64_t surfPtr, int32_t width, int32_t height, int32_
             // The present queue may be inside nextDrawable; serialize layer changes behind it (rare: resize / mode change).
             int32_t w = surf.width, h = surf.height, hdr = hdrEnabled;
             dispatch_sync(surf.presentQueue, ^{
-                surf->_waitingSlot = -1;
+                // A waiting frame was rendered for the old configuration: hand its slot back (never just forget it,
+                // or the slot pool shrinks permanently).
+                if (surf->_waitingSlot >= 0) { release_slot(surf, surf->_waitingSlot); surf->_waitingSlot = -1; }
                 cm_surface_apply_layer_config(surf, w, h, vsync, hdr);
             });
             return;

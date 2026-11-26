@@ -1,6 +1,9 @@
 #import "celestia_metal.h"
 
 #pragma clang diagnostic ignored "-Wunguarded-availability-new"
+#pragma clang diagnostic ignored "-Wunguarded-availability"
+// Hot draw/bind entry points below branch on ctx.metal4Active without @available: metal4Active is only ever set on
+// macOS 26+ (cm_device_create), and @available costs a __isPlatformVersionAtLeast call per invocation.
 
 // Keep in sync with cm_resources.m CMPipelineBox
 @interface CMPipelineBox : NSObject
@@ -556,6 +559,8 @@ static void reset_pass_cache(CMContext *ctx) {
     memset(ctx->_boundUboAddrV, 0, sizeof(ctx->_boundUboAddrV));
     memset(ctx->_boundUboAddrF, 0, sizeof(ctx->_boundUboAddrF));
     memset(ctx->_boundVtxAddr, 0, sizeof(ctx->_boundVtxAddr));
+    ctx->_lastPushSize = -1;
+    ctx->_lastPushAddr = 0;
     ctx.m4ArgDirtyVertex = YES;
     ctx.m4ArgDirtyFragment = YES;
 }
@@ -711,8 +716,8 @@ int32_t cm_pass_begin(int64_t ctxPtr,
                 id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
                 if (!enc) return 0;
                 if (ctx.debugLabels && labelUtf8) enc.label = [NSString stringWithUTF8String:labelUtf8];
-                [enc setArgumentTable:(id<MTL4ArgumentTable>)ctx.m4VertexArgTable atStages:MTLRenderStageVertex];
-                [enc setArgumentTable:(id<MTL4ArgumentTable>)ctx.m4FragmentArgTable atStages:MTLRenderStageFragment];
+                [enc setArgumentTable:(id<MTL4ArgumentTable>)ctx.m4VertexArgTable
+                             atStages:MTLRenderStageVertex | MTLRenderStageFragment];
                 [enc setFrontFacingWinding:MTLWindingClockwise];
                 ctx.activeRenderEnc = enc;
             }
@@ -807,7 +812,7 @@ void cm_pass_set_pipeline(int64_t ctxPtr, int64_t pipePtr) {
     CMPipelineBox *box = (__bridge CMPipelineBox *)(void *)pipePtr;
     ctx.boundPipeline = (uintptr_t)pipePtr;
     if (ctx.metal4Active) {
-        if (@available(macOS 26.0, *)) {
+        {
             id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc;
             [enc setRenderPipelineState:box.state];
             if (ctx.boundDepthKey != box.depthKey) {
@@ -858,7 +863,7 @@ void cm_pass_set_scissor(int64_t ctxPtr, int32_t enabled, int32_t x, int32_t y, 
         sr = (MTLScissorRect){ 0, 0, (NSUInteger)ctx.currentPassWidth, (NSUInteger)ctx.currentPassHeight };
     }
     if (ctx.metal4Active) {
-        if (@available(macOS 26.0, *)) [(id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc setScissorRect:sr];
+        [(id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc setScissorRect:sr];
     } else {
         [(id<MTLRenderCommandEncoder>)ctx.activeRenderEnc setScissorRect:sr];
     }
@@ -870,15 +875,11 @@ void cm_pass_set_uniform_buffer(int64_t ctxPtr, int32_t slot, int64_t bufPtr, in
     if (!ctx.activeRenderEnc) return;
     id<MTLBuffer> buf = (__bridge id<MTLBuffer>)(void *)bufPtr;
     if (ctx.metal4Active) {
-        if (@available(macOS 26.0, *)) {
+        {
             MTLGPUAddress addr = buf.gpuAddress + (MTLGPUAddress)offset;
             if (ctx->_boundUboAddrV[slot] != addr) {
                 ctx->_boundUboAddrV[slot] = addr;
                 [(id<MTL4ArgumentTable>)ctx.m4VertexArgTable setAddress:addr atIndex:(NSUInteger)slot];
-            }
-            if (ctx->_boundUboAddrF[slot] != addr) {
-                ctx->_boundUboAddrF[slot] = addr;
-                [(id<MTL4ArgumentTable>)ctx.m4FragmentArgTable setAddress:addr atIndex:(NSUInteger)slot];
             }
         }
     } else {
@@ -897,19 +898,17 @@ void cm_pass_set_texture_sampler(int64_t ctxPtr, int32_t texSlot, int64_t texVie
     id<MTLSamplerState> samp = sampPtr ? (__bridge id<MTLSamplerState>)(void *)sampPtr : nil;
 
     if (ctx.metal4Active) {
-        if (@available(macOS 26.0, *)) {
+        {
             if (texSlot >= 0 && texSlot < CM_MAX_TEXTURES && tex) {
                 if (ctx->_boundTextures[texSlot] != (uintptr_t)texViewPtr) {
                     ctx->_boundTextures[texSlot] = (uintptr_t)texViewPtr;
                     [(id<MTL4ArgumentTable>)ctx.m4VertexArgTable setTexture:tex.gpuResourceID atIndex:(NSUInteger)texSlot];
-                    [(id<MTL4ArgumentTable>)ctx.m4FragmentArgTable setTexture:tex.gpuResourceID atIndex:(NSUInteger)texSlot];
                 }
             }
             if (sampSlot >= 0 && sampSlot < CM_MAX_SAMPLERS && samp) {
                 if (ctx->_boundSamplers[sampSlot] != (uintptr_t)sampPtr) {
                     ctx->_boundSamplers[sampSlot] = (uintptr_t)sampPtr;
                     [(id<MTL4ArgumentTable>)ctx.m4VertexArgTable setSamplerState:samp.gpuResourceID atIndex:(NSUInteger)sampSlot];
-                    [(id<MTL4ArgumentTable>)ctx.m4FragmentArgTable setSamplerState:samp.gpuResourceID atIndex:(NSUInteger)sampSlot];
                 }
             }
         }
@@ -933,7 +932,11 @@ void cm_pass_push_constants(int64_t ctxPtr, int32_t slot, const void *data, int3
     CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
     if (!ctx.activeRenderEnc) return;
     if (ctx.metal4Active) {
-        if (@available(macOS 26.0, *)) {
+        {
+            if (size <= (int32_t)sizeof(ctx->_lastPush) && size == ctx->_lastPushSize && slot == CM_PUSH_CONSTANT_SLOT
+                && memcmp(ctx->_lastPush, data, (size_t)size) == 0) {
+                return; // identical to the bytes already bound at this slot
+            }
             NSUInteger aligned = (((NSUInteger)size) + 15UL) & ~15UL;
             NSUInteger slotLimit = ((ctx.activeM4AllocatorIdx + 1) * (ctx.pushRingSize / CM_INFLIGHT_SLOTS));
             if (ctx.pushRingOffset + aligned > slotLimit) {
@@ -944,7 +947,13 @@ void cm_pass_push_constants(int64_t ctxPtr, int32_t slot, const void *data, int3
             MTLGPUAddress addr = ctx.pushRingBuffer.gpuAddress + ctx.pushRingOffset;
             ctx.pushRingOffset += aligned;
             [(id<MTL4ArgumentTable>)ctx.m4VertexArgTable setAddress:addr atIndex:(NSUInteger)slot];
-            [(id<MTL4ArgumentTable>)ctx.m4FragmentArgTable setAddress:addr atIndex:(NSUInteger)slot];
+            if (slot == CM_PUSH_CONSTANT_SLOT && size <= (int32_t)sizeof(ctx->_lastPush)) {
+                memcpy(ctx->_lastPush, data, (size_t)size);
+                ctx->_lastPushSize = size;
+                ctx->_lastPushAddr = addr;
+            } else {
+                ctx->_lastPushSize = -1;
+            }
         }
     } else {
         id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)ctx.activeRenderEnc;
@@ -960,7 +969,7 @@ void cm_pass_set_vertex_buffer(int64_t ctxPtr, int32_t slot, int64_t bufPtr, int
     id<MTLBuffer> buf = (__bridge id<MTLBuffer>)(void *)bufPtr;
     NSUInteger metalSlot = CM_VERTEX_BUFFER_BASE + (NSUInteger)slot;
     if (ctx.metal4Active) {
-        if (@available(macOS 26.0, *)) {
+        {
             MTLGPUAddress addr = buf.gpuAddress + (MTLGPUAddress)offset;
             if (ctx->_boundVtxAddr[slot] != addr) {
                 ctx->_boundVtxAddr[slot] = addr;
@@ -1029,7 +1038,7 @@ void cm_pass_draw(int64_t ctxPtr, int32_t topology, int32_t vertexCount, int32_t
         id<MTLBuffer> fbuf = ensure_fan_index_buffer(ctx, idxCount);
         if (!fbuf) return;
         if (ctx.metal4Active) {
-            if (@available(macOS 26.0, *)) {
+            {
                 [(id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                                                               indexCount:idxCount
                                                                                indexType:MTLIndexTypeUInt32
@@ -1054,7 +1063,7 @@ void cm_pass_draw(int64_t ctxPtr, int32_t topology, int32_t vertexCount, int32_t
     MTLPrimitiveType pt = cm_primitive_type(topology);
     ctx->_stats[CM_STAT_DRAWS]++;
     if (ctx.metal4Active) {
-        if (@available(macOS 26.0, *)) {
+        {
             [(id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc drawPrimitives:pt
                                                                  vertexStart:(NSUInteger)firstVertex
                                                                  vertexCount:(NSUInteger)vertexCount
@@ -1083,7 +1092,7 @@ void cm_pass_draw_indexed(int64_t ctxPtr, int32_t topology, int64_t indexBufOffs
     ctx->_stats[CM_STAT_DRAWS]++;
 
     if (ctx.metal4Active) {
-        if (@available(macOS 26.0, *)) {
+        {
             [(id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc drawIndexedPrimitives:pt
                                                                           indexCount:(NSUInteger)indexCount
                                                                            indexType:ctx.boundIndexType
@@ -1113,7 +1122,7 @@ void cm_pass_multi_draw(int64_t ctxPtr, int32_t topology, const int32_t *firstVe
     MTLPrimitiveType pt = cm_primitive_type(topology);
     ctx->_stats[CM_STAT_DRAWS] += count;
     if (ctx.metal4Active) {
-        if (@available(macOS 26.0, *)) {
+        {
             id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc;
             for (int32_t i = 0; i < count; i++) {
                 if (vertexCounts[i] <= 0) continue;
@@ -1144,7 +1153,7 @@ void cm_pass_multi_draw_indexed(int64_t ctxPtr, int32_t topology,
     MTLPrimitiveType pt = cm_primitive_type(topology);
     ctx->_stats[CM_STAT_DRAWS] += count;
     if (ctx.metal4Active) {
-        if (@available(macOS 26.0, *)) {
+        {
             id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc;
             for (int32_t i = 0; i < count; i++) {
                 int32_t ic = indexCounts[i];
@@ -1185,7 +1194,7 @@ void cm_pass_multi_draw_packed(int64_t ctxPtr, int32_t topology, const uint32_t 
     MTLPrimitiveType pt = cm_primitive_type(topology);
     ctx->_stats[CM_STAT_DRAWS] += count;
     if (ctx.metal4Active) {
-        if (@available(macOS 26.0, *)) {
+        {
             id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc;
             for (int32_t i = 0; i < count; i++) {
                 uint32_t vc = cmds[i * 2 + 1];
@@ -1218,7 +1227,7 @@ void cm_pass_multi_draw_indexed_packed(int64_t ctxPtr, int32_t topology, const u
     MTLPrimitiveType pt = cm_primitive_type(topology);
     ctx->_stats[CM_STAT_DRAWS] += count;
     if (ctx.metal4Active) {
-        if (@available(macOS 26.0, *)) {
+        {
             id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc;
             for (int32_t i = 0; i < count; i++) {
                 const uint32_t *c = &cmds[i * 3];
@@ -1260,7 +1269,7 @@ void cm_pass_draw_indirect(int64_t ctxPtr, int32_t topology, int64_t indirectBuf
         if (!ctx.boundIndexBuffer) return;
         id<MTLBuffer> ibuf = (__bridge id<MTLBuffer>)(void *)ctx.boundIndexBuffer;
         if (ctx.metal4Active) {
-            if (@available(macOS 26.0, *)) {
+            {
                 id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc;
                 for (int32_t i = 0; i < count; i++) {
                     [enc drawIndexedPrimitives:pt indexType:ctx.boundIndexType
@@ -1278,7 +1287,7 @@ void cm_pass_draw_indirect(int64_t ctxPtr, int32_t topology, int64_t indirectBuf
         }
     } else {
         if (ctx.metal4Active) {
-            if (@available(macOS 26.0, *)) {
+            {
                 id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc;
                 for (int32_t i = 0; i < count; i++) {
                     [enc drawPrimitives:pt indirectBuffer:ind.gpuAddress + (MTLGPUAddress)offset + (MTLGPUAddress)i * step];

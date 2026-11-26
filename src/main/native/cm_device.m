@@ -267,11 +267,11 @@ int64_t cm_device_create(int32_t preferMetal4, int32_t debugLabels, const char *
                     atDesc.maxSamplerStateBindCount = 16;
                     atDesc.initializeBindings = YES;
                     atDesc.supportAttributeStrides = NO;
-                    atDesc.label = @"CelestiaMetal.VertexArgs";
+                    // One table bound to both render stages: every binding is written once and the driver snapshots a
+                    // single table per draw (the vertex and fragment tables always held identical bindings anyway).
+                    atDesc.label = @"CelestiaMetal.RenderArgs";
                     id<MTL4ArgumentTable> vArgs = [dev newArgumentTableWithDescriptor:atDesc error:&err];
-                    atDesc.label = @"CelestiaMetal.FragmentArgs";
-                    atDesc.supportAttributeStrides = NO;
-                    id<MTL4ArgumentTable> fArgs = [dev newArgumentTableWithDescriptor:atDesc error:&err];
+                    id<MTL4ArgumentTable> fArgs = vArgs;
 
                     if (allocOk && vArgs && fArgs) {
                         [m4q addResidencySet:rs];
