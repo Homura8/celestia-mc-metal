@@ -1,5 +1,6 @@
 package dev.celestia.metal;
 
+import dev.celestia.metal.shade.ShadeSettings;
 import dev.celestia.metal.shader.pack.ShaderOptionDef;
 import dev.celestia.metal.shader.pack.ShaderOptionState;
 import dev.celestia.metal.shader.pack.ShaderPackLoader;
@@ -19,21 +20,21 @@ class ShaderManifestTest {
         List<ShaderPackManifest> packs = ShaderPackLoader.discoverAll(null);
         assertTrue(packs.stream().anyMatch(p -> "off".equals(p.id)));
         assertTrue(packs.stream().anyMatch(p -> "builtin:celestia-native".equals(p.id)));
-        assertTrue(packs.stream().anyMatch(p -> "builtin:celestia-minimal".equals(p.id)));
+        assertEquals(2, packs.size());
 
         ShaderPackManifest nativePack = packs.stream()
             .filter(p -> "builtin:celestia-native".equals(p.id))
             .findFirst()
             .orElseThrow();
 
-        assertEquals(ShaderPackManifest.PackKind.NATIVE_MSL, nativePack.kind);
-        assertEquals(4, nativePack.presets.size());
-        assertTrue(nativePack.options.size() >= 18);
-        assertEquals(6, nativePack.passes.size());
+        assertEquals(ShaderPackManifest.PackKind.WORLD_MSL, nativePack.kind);
+        assertEquals(List.of("Performance", "Balanced", "Quality", "Ultra"), List.copyOf(nativePack.presets.keySet()));
+        assertEquals(34, nativePack.options.size());
+        assertTrue(nativePack.passes.isEmpty());
     }
 
     @Test
-    void presetApplicationAndMslDefinesAreDeterministic(@TempDir Path tmpDir) {
+    void nativeOptionsApplyOnSnapshotAndPersist(@TempDir Path tmpDir) {
         ShaderPackManifest nativePack = ShaderPackLoader.discoverAll(null).stream()
             .filter(p -> "builtin:celestia-native".equals(p.id))
             .findFirst()
@@ -49,10 +50,24 @@ class ShaderManifestTest {
         assertEquals("1024", state.get("SHADOW_RES"));
         assertNotEquals(balancedHash, state.configHash());
 
-        String mslDefines = state.toMslDefines();
-        assertTrue(mslDefines.contains("#define SHADOWS_ENABLED 1"));
-        assertTrue(mslDefines.contains("#define SSAO_ENABLED 0"));
-        assertTrue(mslDefines.contains("#define CLOUD_STEPS 8"));
+        ShadeSettings applied = ShadeSettings.from(state);
+        assertEquals(1024, applied.shadows().resolution());
+        assertEquals(0f, applied.water().swell());
+        assertEquals(16, applied.water().ssrBudget());
+        assertFalse(applied.atmosphere().volumetrics());
+        assertEquals(8, applied.atmosphere().cloudSteps());
+
+        ShaderOptionState draft = state.copy();
+        draft.applyPreset("Ultra");
+        assertEquals(4096, ShadeSettings.from(draft).shadows().resolution());
+        assertEquals(1024, ShadeSettings.from(state).shadows().resolution());
+        draft.set("EXPOSURE", "NaN");
+        assertEquals(0f, ShadeSettings.from(draft).post().exposureEv());
+        draft.set("EXPOSURE", "42");
+        assertEquals(2f, ShadeSettings.from(draft).post().exposureEv());
+        draft.set("WATER_REFLECTIONS", "OFF");
+        assertFalse(ShadeSettings.from(draft).water().screenReflections());
+        assertEquals(0f, ShadeSettings.from(draft).water().reflectionStrength());
 
         state.saveToDisk(tmpDir);
         ShaderOptionState reloaded = new ShaderOptionState(nativePack);

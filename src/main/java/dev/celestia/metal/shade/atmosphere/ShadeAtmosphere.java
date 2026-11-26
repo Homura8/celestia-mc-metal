@@ -6,6 +6,7 @@ import dev.celestia.metal.backend.MetalNative;
 import dev.celestia.metal.shade.CelestiaShade;
 import dev.celestia.metal.shade.ShadeFrame;
 import dev.celestia.metal.shade.ShadeLook;
+import dev.celestia.metal.shade.ShadeSettings;
 import dev.celestia.metal.shade.ShadeShaderPatcher;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -33,13 +34,15 @@ public final class ShadeAtmosphere {
     private int width, height;
     private boolean failed, clouds, volume, noiseBaked, domeReady;
     private float previousCloudBase;
+    private double cloudPhase;
+    private ShadeSettings.Atmosphere previousOptions;
     private ClientLevel weatherLevel;
     private float wetness, puddles, snow;
 
     public void prepare(long ctx, ClientLevel level, CameraRenderState camera, ShadeFrame frame, ShadeLook look,
-                        CloudStatus status, float cloudHeight, float dt, int w, int h) {
+                        CloudStatus status, float cloudHeight, float dt, int w, int h, ShadeSettings.Atmosphere options) {
         clouds = volume = false;
-        look.cloudsEnabled = look.fancyClouds = false;
+        look.cloudsEnabled = false;
         look.wetness = look.puddles = look.snow = look.flashStrength = 0f;
         if (level == null || frame.dimension != ShadeFrame.DIM_OVERWORLD) {
             weatherLevel = null;
@@ -47,6 +50,9 @@ public final class ShadeAtmosphere {
             return;
         }
         if (!initialize(ctx)) return;
+        if (!options.equals(previousOptions)) domeReady = false;
+        previousOptions = options;
+        cloudPhase += dt * options.cloudSpeed();
         if (w != width || h != height) {
             destroyTexture(ctx, CLOUD_SCREEN);
             destroyTexture(ctx, VOLUME);
@@ -62,7 +68,7 @@ public final class ShadeAtmosphere {
         float base = Float.isFinite(cloudHeight) ? cloudHeight : 192f;
         if (base != previousCloudBase) domeReady = false;
         previousCloudBase = base;
-        if (status != CloudStatus.OFF) {
+        if (options.clouds() && status != CloudStatus.OFF) {
             if (textures[CLOUD_SCREEN] == 0L) {
                 textures[CLOUD_SCREEN] = texture(ctx, CLOUD_SCREEN, (w + 3) / 4, (h + 3) / 4);
             }
@@ -70,11 +76,20 @@ public final class ShadeAtmosphere {
         } else {
             domeReady = false;
         }
-        volume = VOLUMETRICS && frame.fogType == ShadeFrame.FOG_AIR && frame.eyeSkyLight >= 2 && frame.sky.lightDir[1] > 0.015f;
+        volume = VOLUMETRICS && options.volumetrics() && options.lightStrength() > 0f && frame.fogType == ShadeFrame.FOG_AIR && frame.eyeSkyLight >= 2 && frame.sky.lightDir[1] > 0.015f;
         if (volume && textures[VOLUME] == 0L) {
             textures[VOLUME] = texture(ctx, VOLUME, (w + 3) / 4, (h + 3) / 4);
         }
         volume &= textures[VOLUME] != 0L;
+
+        look.cloudsEnabled = clouds;
+        look.cloudSteps = status == CloudStatus.FANCY ? options.cloudSteps() : Math.max(4, Math.round(options.cloudSteps() * 4f / 7f));
+        look.cloudBase = base;
+        look.cloudPhase = (float) cloudPhase;
+        if (!options.weather()) {
+            wetness = puddles = snow = 0f;
+            return;
+        }
 
         Precipitation precipitation = level.getPrecipitationAt(camera.blockPos);
         boolean rainsHere = precipitation == Precipitation.RAIN;
@@ -82,9 +97,6 @@ public final class ShadeAtmosphere {
         float puddleTarget = rainsHere ? Math.clamp((wetness - 0.35f) / 0.55f, 0f, 1f) : 0f;
         puddles = approach(puddles, puddleTarget, 10f, 110f, dt);
         snow = approach(snow, precipitation == Precipitation.SNOW ? frame.rain : 0f, 30f, 240f, dt);
-        look.cloudsEnabled = clouds;
-        look.fancyClouds = status == CloudStatus.FANCY;
-        look.cloudBase = base;
         look.wetness = wetness;
         look.puddles = puddles;
         look.snow = snow;

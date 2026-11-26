@@ -142,7 +142,7 @@
 #define SHADE_SSR_TOP 0.15
 #endif
 
-// Mirrors mcwater.m's WaterParams (144 bytes, written by ShadeWater.frame).
+// 176 bytes, written by ShadeWater.packParams.
 struct ShadeWaterParams {
 	float4 still;  // atlas uv rectangle (u0, v0, u1, v1) of minecraft:block/water_still (all 0: unknown)
 	float4 flow;   // the same for minecraft:block/water_flow
@@ -166,7 +166,9 @@ struct ShadeWaterParams {
 	               // tap per pixel), z (candidate 8, SHADE_WATER_PANO) the panorama's share off screen (mcopt.shade.water.reflPano, 1; 0 = none),
 	               // w (1.2.8) the gain of the caustics' bright lines seen from above (mcopt.shade.water.causticGain; 1 = 1.2.7's)
 	float4 far;    // (1.2.9, water phase 2) x the far water's distance D (blocks, mcopt.shade.water.far; 0 = off), y its fade band (blocks)
+	int4 quality;  // x hierarchical SSR interval budget, yzw reserved
 };
+static_assert(sizeof(ShadeWaterParams) == 176, "ShadeWaterParams layout");
 
 // (1.2.9, water phase 2: the far water) Own's far draw (OwnTerrain: the translucent list's farthest run of sections, all wholly
 // beyond wp.far.x) specializes the same shade_own_fs with function constant 41 (mcown.m, kind bit 31): what SHADE_WFAR_* cut is
@@ -883,7 +885,7 @@ static inline float shadeSsrhThin(float wh, float wp, float stepW) {
 #else
 #define SHADE_SSRH_COUNT(c)
 #endif
-static float4 shadeSsrTrace(float3 s0, float3 ds, bool screenEnd, float yFloor, constant ShadeFrame &f, depth2d<float> depth, texture2d<float> pyr
+static float4 shadeSsrTrace(float3 s0, float3 ds, bool screenEnd, float yFloor, constant ShadeFrame &f, depth2d<float> depth, texture2d<float> pyr, int budget
 #ifdef SHADE_SSRH_DEBUG
                             , thread float3 &shadeSsrhDebug // (mcopt.shade.water.ssrExactDebug) x 16-pixel intervals opened, y 128-pixel ones, z 1 = out of budget
 #endif
@@ -905,7 +907,6 @@ static float4 shadeSsrTrace(float3 s0, float3 ds, bool screenEnd, float yFloor, 
 #endif
 	float2 dirO = d / max(length(d), 1e-6); // the ray on screen, and the pixels a block spans at depth 1 (shadeSsrhSmall)
 	float pxB = 0.5 * size.y * abs(f.proj[1][1]);
-	int budget = SHADE_SSRH_BUDGET;
 	for (int i = 0; i < n0 && budget > 0; i++) {
 		float ta = float(i) * inv0;
 		float za = s0.z + ds.z * ta, zb = za + ds.z * inv0;
@@ -1008,7 +1009,7 @@ static float4 shadeSsrTrace(float3 s0, float3 ds, bool screenEnd, float yFloor, 
 // shuffle together). 12 depth samples per 16-pixel interval instead of 9 (3 per lane; 1.5 pixels apart). Returns the shared hit
 // (w + 10 for a crossing behind something standing in: it is not on the ray); each pixel then reads it along its own ray
 // (shadeSsrT). Must be called by all four lanes with the same ray.
-static float4 shadeSsrTraceQuad(float3 s0, float3 ds, bool screenEnd, float yFloor, int c, constant ShadeFrame &f, depth2d<float> depth, texture2d<float> pyr) {
+static float4 shadeSsrTraceQuad(float3 s0, float3 ds, bool screenEnd, float yFloor, int c, constant ShadeFrame &f, depth2d<float> depth, texture2d<float> pyr, int budget) {
 	float2 tex = float2(depth.get_width(), depth.get_height());
 	float2 size = shadeWaterRenderSize(f, tex);
 	float A = f.proj[2][2], B = f.proj[3][2];
@@ -1037,7 +1038,6 @@ static float4 shadeSsrTraceQuad(float3 s0, float3 ds, bool screenEnd, float yFlo
 	float tBack = -1.0;
 #endif
 	float3 res = 0.0;
-	int budget = SHADE_SSRH_BUDGET;
 	for (int i = 0; i < n0 && !done && budget > 0; i++) {
 		if (((mF >> uint(i)) & 1u) != 0u) { front = true; continue; }
 		if (((mB >> uint(i)) & 1u) != 0u && !front) continue;
@@ -1222,7 +1222,7 @@ static inline float4 shadeSsrhPast(float4 hit, float3 so, float3 dso, bool scree
 // and no pixel has to re-aim a shared hit. ownOk: this pixel has a ray. Returns its hit as shadeSsrTrace does (w 11: a crossing
 // behind something standing in).
 static float4 shadeSsrTraceQuadOwn(float3 s0, float3 ds, float3 so, float3 dso, bool ownOk, bool screenEnd, float yFloor, int c, constant ShadeFrame &f,
-                                   depth2d<float> depth, texture2d<float> pyr, bool devL0 = false) {
+                                   depth2d<float> depth, texture2d<float> pyr, int budget, bool devL0 = false) {
 	float2 tex = float2(depth.get_width(), depth.get_height());
 	float2 size = shadeWaterRenderSize(f, tex);
 	float A = f.proj[2][2], B = f.proj[3][2];
@@ -1281,7 +1281,6 @@ static float4 shadeSsrTraceQuadOwn(float3 s0, float3 ds, float3 so, float3 dso, 
 	float tBack = -1.0;
 #endif
 	float3 res = 0.0;
-	int budget = SHADE_SSRH_BUDGET;
 	for (int i = 0; i < n0 && !all && budget > 0; i++) {
 		if (((mF >> uint(i)) & 1u) != 0u) { front = true; continue; }
 		if (((mB >> uint(i)) & 1u) != 0u && shadeQuadOr(uint(front && !done)) == 0u) continue; // behind everything, and no pixel was in front
@@ -1892,7 +1891,7 @@ static inline float shadeSsrHitT(float2 uv, float3 p0, constant ShadeFrame &f, d
 // footprint (candidate 8, the exact march): the scale of the footprint the hit's colour is read over (wp.mirror.y; 0 = one tap)
 static float4 shadeSsrT(float3 p0, float3 r, float2 pixel, float maxDist, float exposure, float prevExposure, constant ShadeFrame &f,
                        constant ShadeLook *L, texture2d<half> scene, depth2d<float> depth, texture2d<half> prev, texture2d<float> hz,
-                       thread float &tHit, float footprint = 1.0, float panoShare = 0.0, constant ShadeResources *R = nullptr, int dev = 0,
+                       int requestedBudget, thread float &tHit, float footprint = 1.0, float panoShare = 0.0, constant ShadeResources *R = nullptr, int dev = 0,
                        bool haveDc = false, float4 dcIn = float4(0.0)) {
 	tHit = -1.0;
 	float2 tex = float2(depth.get_width(), depth.get_height());
@@ -1900,6 +1899,7 @@ static float4 shadeSsrT(float3 p0, float3 r, float2 pixel, float maxDist, float 
 	float3 s0 = 0.0, ds = 0.0;
 	bool screenEnd = false;
 #ifdef SHADE_SSR_HIER
+	int budget = requestedBudget > 0 ? clamp(requestedBudget, 8, 32) : SHADE_SSRH_BUDGET;
 	// (candidate 8) the exact march (shadeSsrTrace / shadeSsrTraceQuad): to the pixel, without jitter. The quad works together (no
 	// lane leaves before its last shuffle): with SHADE_SSR_QUAD it traces one ray, the quad's mean, and each pixel reads that hit
 	// along its OWN ray at the shared distance (FT1.3's lanes: mirrored edges and textures per pixel, not in 2x2 blocks; only onto
@@ -1926,7 +1926,7 @@ static float4 shadeSsrT(float3 p0, float3 r, float2 pixel, float maxDist, float 
 	// (1.2.9 pricing, ShadeWaterParams.far.z = -Dmcopt.shade.water.devSsr, live: 1 no march, 2 only the 128-pixel level, 3 no resolve
 	// or panorama after the march, 4 no panorama)
 	if (dev == 1) seg = false;
-	if (seg) hit = shadeSsrTraceQuadOwn(s0, ds, so, dso, ownOk, endOwn, yFloor, int(q.x & 1u) + 2 * int(q.y & 1u), f, depth, hz, dev == 2);
+	if (seg) hit = shadeSsrTraceQuadOwn(s0, ds, so, dso, ownOk, endOwn, yFloor, int(q.x & 1u) + 2 * int(q.y & 1u), f, depth, hz, budget, dev == 2);
 #endif
 	float4 raw = hit; // (as the march returned it: shadeSsrResolve's shadeSsrhPast)
 	// (2.0.1 opt) only unproject hitNdc when onRay is true (avoids wasted invViewProj matmul on every sky miss!)
@@ -1948,7 +1948,7 @@ static float4 shadeSsrT(float3 p0, float3 r, float2 pixel, float maxDist, float 
 	if (false) {
 #else
 #ifndef SHADE_PRICE_NOMARCH
-	if (seg) hit = shadeSsrTraceQuad(s0, ds, screenEnd, yFloor, int(q.x & 1u) + 2 * int(q.y & 1u), f, depth, hz);
+	if (seg) hit = shadeSsrTraceQuad(s0, ds, screenEnd, yFloor, int(q.x & 1u) + 2 * int(q.y & 1u), f, depth, hz, budget);
 #endif
 #ifdef SHADE_PRICE_NOLANE
 	if (false) {
@@ -1971,9 +1971,9 @@ static float4 shadeSsrT(float3 p0, float3 r, float2 pixel, float maxDist, float 
 	}
 #elif defined(SHADE_SSRH_DEBUG)
 	float3 dbg = 0.0;
-	if (seg) hit = shadeSsrTrace(s0, ds, screenEnd, yFloor, f, depth, hz, dbg);
+	if (seg) hit = shadeSsrTrace(s0, ds, screenEnd, yFloor, f, depth, hz, budget, dbg);
 #else
-	if (seg) hit = shadeSsrTrace(s0, ds, screenEnd, yFloor, f, depth, hz);
+	if (seg) hit = shadeSsrTrace(s0, ds, screenEnd, yFloor, f, depth, hz, budget);
 #endif
 #ifdef SHADE_PRICE_NOHITSHADE
 	hit.w = hit.w * 1e-9 - 1.0; // (the march ran; nothing after it does)
@@ -2104,9 +2104,9 @@ static float4 shadeSsrT(float3 p0, float3 r, float2 pixel, float maxDist, float 
 #endif
 }
 static inline float4 shadeSsr(float3 p0, float3 r, float2 pixel, float maxDist, float exposure, float prevExposure, constant ShadeFrame &f,
-                              constant ShadeLook *L, texture2d<half> scene, depth2d<float> depth, texture2d<half> prev, texture2d<float> hz) {
+                              constant ShadeLook *L, texture2d<half> scene, depth2d<float> depth, texture2d<half> prev, texture2d<float> hz, int budget) {
 	float t;
-	return shadeSsrT(p0, r, pixel, maxDist, exposure, prevExposure, f, L, scene, depth, prev, hz, t);
+	return shadeSsrT(p0, r, pixel, maxDist, exposure, prevExposure, f, L, scene, depth, prev, hz, budget, t);
 }
 
 // ---- optics -------------------------------------------------------------------------------------------------------------------
@@ -2641,7 +2641,7 @@ float3 shadeWaterAbove(ShadeWaterIn w, constant ShadeFrame &f, constant ShadeWat
 	float ssrW = 0.0;
 	float fq = shadeQuadMax(shadeWaterFresnel(cosV));
 	if (shadeQuadMax(farSsr) > 0.0 && fq > 0.022 && wp.tune.y > 0.0 && !SHADE_WDEV_IS(f, SHADE_WDEV_NO_SSR)) {
-		ssrHit = shadeSsrT(w.p + n * 0.02, rr, w.pixel, wp.tune.y, w.exposure, w.prevExposure, f, w.look, scene, depth, prev, hz, tHit, wp.mirror.y, top ? wp.mirror.z : 0.0, w.res, int(wp.far.z), true, dcRr);
+		ssrHit = shadeSsrT(w.p + n * 0.02, rr, w.pixel, wp.tune.y, w.exposure, w.prevExposure, f, w.look, scene, depth, prev, hz, wp.quality.x, tHit, wp.mirror.y, top ? wp.mirror.z : 0.0, w.res, int(wp.far.z), true, dcRr);
 		ssrW = ssrHit.a * smoothstep(0.022, 0.03, fq) * farSsr;
 	}
 #endif
@@ -2789,7 +2789,7 @@ float3 shadeWaterAbove(ShadeWaterIn w, constant ShadeFrame &f, constant ShadeWat
 	// behind the camera: no march there, faded in up to ~50 degrees (quad-uniform: SSR's lanes work together)
 	float fq = shadeQuadMax(shadeWaterFresnel(cosV));
 	if (shadeQuadMax(farSsr) > 0.0 && fq > 0.022 && wp.tune.y > 0.0 && !SHADE_WDEV_IS(f, SHADE_WDEV_NO_SSR)) {
-		float4 hit = shadeSsrT(w.p + n * 0.02, rr, w.pixel, wp.tune.y, w.exposure, w.prevExposure, f, w.look, scene, depth, prev, hz, tHit, wp.mirror.y);
+		float4 hit = shadeSsrT(w.p + n * 0.02, rr, w.pixel, wp.tune.y, w.exposure, w.prevExposure, f, w.look, scene, depth, prev, hz, wp.quality.x, tHit, wp.mirror.y);
 		hitWeight = hit.a * smoothstep(0.022, 0.03, fq) * farSsr;
 		refl = mix(refl, hit.rgb, hitWeight);
 	}
@@ -3013,7 +3013,7 @@ static float3 shadeWaterBelow(ShadeWaterIn w, constant ShadeFrame &f, constant S
 		// (2.0.1 opt) calm the TIR reflection normal like above-water SSR (prevents 1.8x amplified ripples from diverging
 		// every 2x2 quad and triggering catastrophic L1/fine SSR reads in water_underwater_up!) and cap at underwater fog range
 		float3 nTir = normalize(mix(n, float3(0.0, -1.0, 0.0), 0.7));
-		float4 hit = shadeSsr(w.p + n * 0.02, reflect(v, nTir), w.pixel, min(wp.tune.y, 28.0), w.exposure, 0.0, f, w.look, scene, depth, prev, hz);
+		float4 hit = shadeSsr(w.p + n * 0.02, reflect(v, nTir), w.pixel, min(wp.tune.y, 28.0), w.exposure, 0.0, f, w.look, scene, depth, prev, hz, wp.quality.x);
 		below = mix(below, hit.rgb, hit.a);
 	}
 #endif
@@ -3053,7 +3053,7 @@ static float4 shadeGlossy(float3 radiance, float alpha, float3 p, float3 n, floa
 	float hitWeight = 0.0;
 #ifdef SHADE_SSR
 	if (wp.state.x > 0.5 && wp.tune.y > 0.0 && shadeQuadMax(fres) > 0.03) { // quad-uniform (SSR's lanes work together)
-		float4 hit = shadeSsr(p + n * 0.02, r, pixel, min(wp.tune.y, 128.0), exposure, prevExposure, f, L, scene, depth, prev, hz);
+		float4 hit = shadeSsr(p + n * 0.02, r, pixel, min(wp.tune.y, 128.0), exposure, prevExposure, f, L, scene, depth, prev, hz, wp.quality.x);
 		hitWeight = hit.a;
 		refl = mix(refl, hit.rgb, hit.a);
 	}

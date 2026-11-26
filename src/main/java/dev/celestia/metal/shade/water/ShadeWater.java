@@ -15,6 +15,7 @@ import dev.celestia.metal.backend.MetalNative;
 import dev.celestia.metal.shade.CelestiaShade;
 import dev.celestia.metal.shade.ShadeFrame;
 import dev.celestia.metal.shade.ShadeShaderPatcher;
+import dev.celestia.metal.shade.ShadeSettings;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -22,14 +23,14 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import org.slf4j.Logger;
 
 /**
- * Coordinates P3a native MSL water rendering: 160-byte {@code ShadeWaterParams} ring buffer,
+ * Coordinates P3a native MSL water rendering: 176-byte {@code ShadeWaterParams} ring buffer,
  * mipmapped wave/detail/swell textures baked via fullscreen passes, scene copy + 3-pass
  * {@code RG16Float} depth pyramid capture on switch to translucent terrain, and GPU SSR/Fresnel state.
  */
 public final class ShadeWater {
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    public static final int PARAMS_BYTES = 160;
+    public static final int PARAMS_BYTES = 176;
     private static final int RING_SLOTS = 4;
     private static final int SLOT_STRIDE = 256;
 
@@ -53,6 +54,7 @@ public final class ShadeWater {
     private boolean capturedThisFrame;
     private boolean wavesReady, swellReady;
     private boolean activeThisFrame;
+    private boolean screenReflections;
 
     public boolean isActive() {
         return initialized && !failed && capturedThisFrame;
@@ -106,9 +108,9 @@ public final class ShadeWater {
     }
 
     public void beginFrame(long ctx, int ringSlot, ShadeFrame frame, ClientLevel level,
-                           double camX, double camY, double camZ) {
+                           double camX, double camY, double camZ, ShadeSettings.Water options, boolean weather) {
         if (!ensureInitialized(ctx)) {
-            activeThisFrame = false;
+            disableFrame(ctx);
             return;
         }
         WaterFrame.sprites(stillRect, flowRect);
@@ -118,28 +120,36 @@ public final class ShadeWater {
 
         // Capture is only known after the world starts drawing. Keep the last bake available
         // when translucent terrain reappears, then update it on the next frame.
-        if (capturedThisFrame || !wavesReady) {
+        boolean wavesEnabled = options.waves() && options.waveStrength() > 0f;
+        boolean swellEnabled = options.swell() > 0f && !frame.underwater;
+        boolean bakeWaves = wavesEnabled && (capturedThisFrame || !wavesReady);
+        boolean bakeSwell = swellEnabled && (!swellReady || (capturedThisFrame && (++swellCounter & 1) != 0));
+        if (bakeWaves) {
             MetalNative.shadeFullscreenPass(ctx, psoBake, wavesTex,
                 MemorySegment.NULL, 0, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
             MetalNative.shadeFullscreenPass(ctx, psoBakeDetail, detailTex,
                 MemorySegment.NULL, 0, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
-            boolean bakeSwell = !frame.underwater && (!swellReady || (++swellCounter & 1) != 0);
-            if (bakeSwell) {
-                MetalNative.shadeFullscreenPass(ctx, psoBakeSwell, swellTex,
-                    MemorySegment.NULL, 0, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
-                swellReady = true;
-            }
-            MetalNative.waterGenerateMipmaps(ctx, wavesTex, detailTex, bakeSwell ? swellTex : 0L);
             wavesReady = true;
+        }
+        if (bakeSwell) {
+            MetalNative.shadeFullscreenPass(ctx, psoBakeSwell, swellTex,
+                MemorySegment.NULL, 0, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
+            swellReady = true;
+        }
+        if (bakeWaves || bakeSwell) {
+            MetalNative.waterGenerateMipmaps(ctx, bakeWaves ? wavesTex : 0L, bakeWaves ? detailTex : 0L,
+                bakeSwell ? swellTex : 0L);
         }
 
         ByteBuffer b = paramsSeg.asSlice(currentSlotOffset, PARAMS_BYTES).asByteBuffer().order(ByteOrder.nativeOrder());
-        packParams(b, stillRect, flowRect, false, surfaceAbove, frame.rain, wavesReady, swellReady);
+        packParams(b, stillRect, flowRect, false, surfaceAbove, weather ? frame.rain : 0f,
+            wavesEnabled && wavesReady, swellEnabled && swellReady, options);
 
         capturedThisFrame = false;
         activeThisFrame = true;
+        screenReflections = options.screenReflections();
         MetalNative.waterSetParams(ctx, paramsBuf, currentSlotOffset, wavesTex, detailTex, true);
-        MetalNative.shadeSetResource(ctx, 15, swellReady ? swellTex : 0L);
+        MetalNative.shadeSetResource(ctx, 15, swellEnabled && swellReady ? swellTex : 0L);
     }
 
     public void disableFrame(long ctx) {
@@ -147,12 +157,13 @@ public final class ShadeWater {
         activeThisFrame = false;
         if (ctx != 0L) {
             MetalNative.waterSetParams(ctx, 0L, 0L, 0L, 0L, false);
+            MetalNative.shadeSetResource(ctx, 15, 0L);
         }
     }
 
     public boolean captureIfNeeded(long ctx) {
         if (!initialized || failed || !activeThisFrame || capturedThisFrame || ctx == 0L) return false;
-        int ok = MetalNative.waterCapture(ctx, psoPyr, psoPyr2);
+        int ok = MetalNative.waterCapture(ctx, screenReflections ? psoPyr : 0L, screenReflections ? psoPyr2 : 0L);
         if (ok != 0) {
             capturedThisFrame = true;
             // Mark scene/depth copies valid (state.x = 1) for all translucent terrain fragments rendered afterwards.
@@ -164,15 +175,16 @@ public final class ShadeWater {
 
     public static void packParams(ByteBuffer p, float[] still, float[] flow,
                                   boolean copyValid, float surfaceAbove, float wetness,
-                                  boolean wavesReady, boolean swellReady) {
+                                  boolean wavesReady, boolean swellReady, ShadeSettings.Water options) {
         for (int i = 0; i < 4; i++) p.putFloat(i * 4, still != null ? still[i] : 0f);
         for (int i = 0; i < 4; i++) p.putFloat(16 + i * 4, flow != null ? flow[i] : 0f);
         // state: x copies valid (0/1), y surfaceAbove (underwater), z wetness, w baked waves ready
         p.putFloat(32, copyValid ? 1f : 0f).putFloat(36, surfaceAbove).putFloat(40, wetness).putFloat(44, wavesReady ? 1f : 0f);
         // tune: x wave strength, y SSR max dist (blocks), z reflection strength, w caustics
-        p.putFloat(48, 1f).putFloat(52, 144f).putFloat(56, 1f).putFloat(60, 1f);
+        p.putFloat(48, options.waveStrength()).putFloat(52, options.screenReflections() ? options.ssrDistance() : 0f)
+            .putFloat(56, options.reflectionStrength()).putFloat(60, options.caustics());
         // swell: x strength, y masking k, z crest glow, w Fresnel share
-        p.putFloat(64, 1.3f).putFloat(68, 0.45f).putFloat(72, 0.5f).putFloat(76, 1f);
+        p.putFloat(64, options.swell()).putFloat(68, 0.45f).putFloat(72, 0.5f).putFloat(76, 1f);
         // swell2: x openFar (< 0 = full swell everywhere), y mirrorCalm, z long calm, w detail ripple scale
         p.putFloat(80, -1f).putFloat(84, 0.75f).putFloat(88, 0.55f).putFloat(92, 2.0f);
         // swell3: x swellRefl, y glitter, z glintSharp, w reflTemporal
@@ -183,6 +195,8 @@ public final class ShadeWater {
         p.putFloat(128, 0f).putFloat(132, 1f).putFloat(136, 0f).putFloat(140, 2.5f);
         // far: x dist, y band, z dev, w baked swell ready
         p.putFloat(144, 176f).putFloat(148, 64f).putFloat(152, 0f).putFloat(156, swellReady ? 1f : 0f);
+        int budget = Math.clamp(Integer.getInteger("celestiametal.shade.water.ssrBudget", options.ssrBudget()), 8, 32);
+        p.putInt(160, budget).putInt(164, 0).putInt(168, 0).putInt(172, 0);
     }
 
     public void close(long ctx) {

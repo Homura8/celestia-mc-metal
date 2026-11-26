@@ -18,8 +18,7 @@ import java.util.zip.ZipFile;
  */
 public final class ShaderPackLoader {
     private static final List<String> BUILTIN_PACK_RESOURCES = List.of(
-        "/assets/celestiametal/shaderpacks/celestia-native/celestia-shader.json",
-        "/assets/celestiametal/shaderpacks/celestia-minimal/celestia-shader.json"
+        "/assets/celestiametal/shaderpacks/celestia-native/celestia-shader.json"
     );
 
     private ShaderPackLoader() {}

@@ -36,11 +36,11 @@ struct ShadeLook {
 	float4 fogR;       // 432  rgb haze extinction sigma (1/block, at base height), w scale height (blocks)
 	float4 fogM;       // 448  x mist sigma (1/block), y mist scale height, z mist base y (absolute), w mist albedo
 	float4 fogMisc;    // 464  x haze base y (absolute), y border fog start fraction, z border fog radius (blocks, 0 = off), w evening glow
-	float4 vl;         // 480  player water colour rgb + weight
+	float4 vl;         // 480  volumetric light: x samples, y strength, zw reserved
 	float4 wet;        // 496  x wetness, y puddles, z snow cover, w rain intensity
 	float4 wind;       // 512  xy wind direction, z rain slant, w snowfall at camera
 	float4 clouds0;    // 528  x cumulus base y, y top y, z cloud shadow strength, w volumetric clouds on
-	float4 clouds1;    // 544  x reflection dome enabled, y fancy clouds, zw reserved
+	float4 clouds1;    // 544  x reflection dome enabled, y samples, z density scale, w drift phase
 	float4 waterShadow;// 560  water soft shadow / DH direct / contact / torch caustics
 	float4 water;      // 576  wet-all look / film roughness / veg roughness / gate
 	float4 waterAbs;   // 592  wet film look parameters

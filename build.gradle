@@ -71,7 +71,7 @@ tasks.register('buildNativeTests', Exec) {
 	def testSrc = file("tools/test_metal_backend.m")
 	def headers = fileTree(nativeDir) { include '*.h' }
 	def shaders = fileTree("src/main/resources/assets/celestiametal") { include '**/*.metal', '**/*.json' }
-	inputs.files testSrc, headers, nativeOut, shaders
+	inputs.files testSrc, headers, nativeOut, shaders, fileTree("tools/fixtures/shaderpacks")
 	outputs.file nativeTestOut
 	doFirst {
 		nativeTestOut.get().asFile.parentFile.mkdirs()
