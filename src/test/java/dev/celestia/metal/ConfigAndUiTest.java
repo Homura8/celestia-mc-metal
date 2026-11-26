@@ -9,6 +9,7 @@ import dev.celestia.metal.backend.MetalConst;
 import dev.celestia.metal.backend.StartupGuard;
 import dev.celestia.metal.perf.CelestiaConfig;
 import dev.celestia.metal.shader.pack.ShaderOptionDef;
+import dev.celestia.metal.ui.CelestiaWidgets;
 import dev.celestia.metal.ui.OptionEntry;
 import java.nio.file.Path;
 import net.minecraft.client.PreferredGraphicsApi;
@@ -85,5 +86,19 @@ class ConfigAndUiTest {
         assertTrue(entry.matches("edr"));
         assertTrue(entry.matches("display p3"));
         assertFalse(entry.matches("shadows"));
+    }
+
+    @Test
+    void proportionalWidthDistributionFitsAndPreservesHierarchy() {
+        int[] labels = {42, 40, 66, 70, 42, 50};
+        // Wide layout fills full bar cleanly
+        int[] wide = CelestiaWidgets.distributeWidths(labels, 600, 4, 8, 16);
+        assertEquals(600, java.util.Arrays.stream(wide).sum() + 4 * 5);
+        assertTrue(wide[2] > wide[0]);
+
+        // Narrow 427px window layout still never exceeds available width
+        int[] narrow = CelestiaWidgets.distributeWidths(labels, 411, 4, 8, 16);
+        assertTrue(java.util.Arrays.stream(narrow).sum() + 4 * 5 <= 411);
+        assertTrue(narrow[3] >= labels[3] + 8);
     }
 }

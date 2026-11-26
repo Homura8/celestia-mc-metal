@@ -31,6 +31,7 @@ public final class CelestiaShaderOptionsScreen extends Screen {
     private ShaderOptionDef draggingOption;
     private int catX, catY, catW, catH;
     private int optX, optY, optW, optH;
+    private int lastContentW = 220;
     private int infoX, infoY, infoW, infoH;
 
     public CelestiaShaderOptionsScreen(Screen parent, ShaderPackManifest pack) {
@@ -42,9 +43,21 @@ public final class CelestiaShaderOptionsScreen extends Screen {
         this.activeCategory = this.categories.get(0);
     }
 
+    private int searchW() {
+        return Math.min(156, Math.max(96, width / 3 - 8));
+    }
+
+    private int searchX() {
+        return width - searchW() - 14;
+    }
+
     @Override
     protected void init() {
-        searchBox = new EditBox(this.font, width - 176, 12, 160, 18, Component.literal("Search options..."));
+        int sx = searchX();
+        int sw = searchW();
+        searchBox = new EditBox(this.font, sx + 6, 17, sw - 10, 12, Component.literal("Search options..."));
+        searchBox.setBordered(false);
+        searchBox.setTextColor(CelestiaTheme.TEXT_MAIN);
         searchBox.setHint(Component.literal("Search options..."));
         searchBox.setValue(searchQuery);
         searchBox.setResponder(q -> {
@@ -99,9 +112,14 @@ public final class CelestiaShaderOptionsScreen extends Screen {
         CelestiaTheme.drawBackdrop(gui, width, height);
 
         CelestiaTheme.drawGlassPanel(gui, 8, 6, width - 16, 30, false);
-        gui.text(font, "✦ " + pack.name, 18, 17, CelestiaTheme.ACCENT_BRIGHT, false);
+        String title = "✦ " + pack.name;
+        gui.text(font, title, 18, 17, CelestiaTheme.ACCENT_BRIGHT, false);
+        int sx = searchX();
+        int sw = searchW();
+        CelestiaTheme.drawSearchFieldChrome(gui, sx, 12, sw, 18, searchBox != null && searchBox.isFocused());
         String presetText = state.activePreset().isEmpty() ? pack.kind.badge : ("Preset: " + state.activePreset());
-        CelestiaTheme.drawBadge(gui, font, presetText, 24 + font.width("✦ " + pack.name), 14, CelestiaTheme.ACCENT_LAVENDER);
+        int bx = 24 + font.width(title);
+        CelestiaTheme.drawBadgeClipped(gui, font, presetText, bx, 14, Math.max(40, sx - bx - 8), CelestiaTheme.ACCENT_LAVENDER);
 
         catX = 8;
         catY = 44;
@@ -141,22 +159,26 @@ public final class CelestiaShaderOptionsScreen extends Screen {
         CelestiaTheme.drawGlassPanel(gui, optX, optY, optW, optH, false);
         List<ShaderOptionDef> opts = visibleOptions();
         int totalH = opts.size() * CelestiaWidgets.ROW_HEIGHT + 8;
-        int maxScroll = Math.max(0, totalH - optH);
+        int maxScroll = Math.max(0, totalH - (optH - 8));
         scrollOffset = Math.max(0.0, Math.min(scrollOffset, maxScroll));
+        int contentW = maxScroll > 0 ? (optW - 18) : (optW - 12);
+        this.lastContentW = contentW;
 
         hoveredOption = null;
-        gui.enableScissor(optX + 2, optY + 2, optX + optW - 2, optY + optH - 2);
+        gui.enableScissor(optX + 2, optY + 4, optX + optW - 2, optY + optH - 4);
         int oy = optY + 6 - (int) scrollOffset;
         for (ShaderOptionDef def : opts) {
             if (oy + CelestiaWidgets.ROW_HEIGHT >= optY && oy <= optY + optH) {
-                boolean hov = CelestiaWidgets.inside(mouseX, mouseY, optX + 6, oy, optW - 12, CelestiaWidgets.ROW_HEIGHT)
-                    && CelestiaWidgets.inside(mouseX, mouseY, optX, optY, optW, optH);
+                boolean hov = CelestiaWidgets.inside(mouseX, mouseY, optX + 6, oy, contentW, CelestiaWidgets.ROW_HEIGHT - 2)
+                    && CelestiaWidgets.inside(mouseX, mouseY, optX, optY + 2, optW, optH - 4);
                 if (hov) hoveredOption = def;
-                CelestiaWidgets.drawOptionRow(gui, font, toOptionEntry(def), optX + 6, oy, optW - 12, hov);
+                CelestiaWidgets.drawOptionRow(gui, font, toOptionEntry(def), optX + 6, oy, contentW, hov);
             }
             oy += CelestiaWidgets.ROW_HEIGHT;
         }
+        CelestiaTheme.drawScrollFades(gui, optX + 2, optY + 4, optW - 4, optH - 8, scrollOffset, maxScroll);
         gui.disableScissor();
+        CelestiaTheme.drawScrollbar(gui, optX + optW - 6, optY + 6, optH - 12, scrollOffset, maxScroll, totalH);
 
         if (wide) {
             CelestiaTheme.drawGlassPanel(gui, infoX, infoY, infoW, infoH, false);
@@ -180,15 +202,17 @@ public final class CelestiaShaderOptionsScreen extends Screen {
             }
         }
 
-        // Footer
+        // Responsive footer
         int fy = height - 28;
-        boolean hovReset = CelestiaWidgets.inside(mouseX, mouseY, 8, fy, 118, 20);
-        boolean hovApply = CelestiaWidgets.inside(mouseX, mouseY, width - 178, fy, 82, 20);
-        boolean hovDone = CelestiaWidgets.inside(mouseX, mouseY, width - 90, fy, 82, 20);
+        int bw = Math.min(82, Math.max(54, (width - 148) / 3));
+        int rstW = Math.min(118, Math.max(84, width - bw * 2 - 30));
+        boolean hovReset = CelestiaWidgets.inside(mouseX, mouseY, 8, fy, rstW, 20);
+        boolean hovApply = CelestiaWidgets.inside(mouseX, mouseY, width - bw * 2 - 14, fy, bw, 20);
+        boolean hovDone = CelestiaWidgets.inside(mouseX, mouseY, width - bw - 8, fy, bw, 20);
 
-        CelestiaWidgets.drawButton(gui, font, 8, fy, 118, 20, "Reset Defaults", hovReset, false, true);
-        CelestiaWidgets.drawButton(gui, font, width - 178, fy, 82, 20, "Apply", hovApply, true, true);
-        CelestiaWidgets.drawButton(gui, font, width - 90, fy, 82, 20, "Done", hovDone, true, true);
+        CelestiaWidgets.drawButton(gui, font, 8, fy, rstW, 20, "Reset Defaults", hovReset, false, true);
+        CelestiaWidgets.drawButton(gui, font, width - bw * 2 - 14, fy, bw, 20, "Apply", hovApply, true, true);
+        CelestiaWidgets.drawButton(gui, font, width - bw - 8, fy, bw, 20, "Done", hovDone, true, true);
 
         super.extractRenderState(gui, mouseX, mouseY, partialTick);
     }
@@ -215,7 +239,7 @@ public final class CelestiaShaderOptionsScreen extends Screen {
         if (CelestiaWidgets.inside(mx, my, optX, optY, optW, optH)) {
             int oy = optY + 6 - (int) scrollOffset;
             for (ShaderOptionDef def : visibleOptions()) {
-                if (CelestiaWidgets.inside(mx, my, optX + 6, oy, optW - 12, CelestiaWidgets.ROW_HEIGHT)) {
+                if (CelestiaWidgets.inside(mx, my, optX + 6, oy, lastContentW, CelestiaWidgets.ROW_HEIGHT - 2)) {
                     handleOptionClick(def, mx, event.button());
                     return true;
                 }
@@ -225,16 +249,18 @@ public final class CelestiaShaderOptionsScreen extends Screen {
 
         // Footer
         int fy = height - 28;
-        if (CelestiaWidgets.inside(mx, my, 8, fy, 118, 20)) {
+        int bw = Math.min(82, Math.max(54, (width - 148) / 3));
+        int rstW = Math.min(118, Math.max(84, width - bw * 2 - 30));
+        if (CelestiaWidgets.inside(mx, my, 8, fy, rstW, 20)) {
             state.resetToDefaults();
             applyOptions();
             return true;
         }
-        if (CelestiaWidgets.inside(mx, my, width - 178, fy, 82, 20)) {
+        if (CelestiaWidgets.inside(mx, my, width - bw * 2 - 14, fy, bw, 20)) {
             applyOptions();
             return true;
         }
-        if (CelestiaWidgets.inside(mx, my, width - 90, fy, 82, 20)) {
+        if (CelestiaWidgets.inside(mx, my, width - bw - 8, fy, bw, 20)) {
             applyOptions();
             onClose();
             return true;
@@ -260,7 +286,7 @@ public final class CelestiaShaderOptionsScreen extends Screen {
     }
 
     private void applySliderDrag(ShaderOptionDef def, double mx) {
-        int rowW = optW - 12;
+        int rowW = lastContentW;
         int controlW = Math.min(136, Math.max(96, rowW / 3));
         int ctrlX = optX + 6 + rowW - controlW - 8;
         double t = Math.max(0.0, Math.min(1.0, (mx - ctrlX) / (double) controlW));

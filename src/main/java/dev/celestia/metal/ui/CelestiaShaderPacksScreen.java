@@ -27,6 +27,7 @@ public final class CelestiaShaderPacksScreen extends Screen {
     private String selectedId;
     private double scrollOffset;
     private int listX, listY, listW, listH;
+    private int lastContentW = 240;
     private int infoX, infoY, infoW, infoH;
 
     public CelestiaShaderPacksScreen(Screen parent) {
@@ -36,9 +37,33 @@ public final class CelestiaShaderPacksScreen extends Screen {
         this.selectedId = spm.activePack().id;
     }
 
+    private int searchW() {
+        return Math.min(156, Math.max(96, width / 3 - 8));
+    }
+
+    private int searchX() {
+        return width - searchW() - 14;
+    }
+
+    private int presetStartY(ShaderPackManifest sel) {
+        int descLines = Math.max(1, font.split(Component.literal(sel.description), Math.max(40, infoW - 24)).size());
+        int descH = descLines * (font.lineHeight + 1);
+        return infoY + 46 + Math.max(20, descH) + 8 + 14;
+    }
+
+    private String[] footerLabels(boolean wide) {
+        return wide
+            ? new String[]{"Open Folder", "Reload (R)", spm.isShadersEnabled() ? "Pause (K)" : "Resume (K)", "Apply", "Done"}
+            : new String[]{"Folder", "Reload", "Options", "Apply", "Done"};
+    }
+
     @Override
     protected void init() {
-        searchBox = new EditBox(this.font, width - 176, 12, 160, 18, Component.literal("Search packs..."));
+        int sx = searchX();
+        int sw = searchW();
+        searchBox = new EditBox(this.font, sx + 6, 17, sw - 10, 12, Component.literal("Search packs..."));
+        searchBox.setBordered(false);
+        searchBox.setTextColor(CelestiaTheme.TEXT_MAIN);
         searchBox.setHint(Component.literal("Search packs..."));
         searchBox.setValue(searchQuery);
         searchBox.setResponder(q -> {
@@ -70,9 +95,16 @@ public final class CelestiaShaderPacksScreen extends Screen {
         CelestiaTheme.drawBackdrop(gui, width, height);
 
         CelestiaTheme.drawGlassPanel(gui, 8, 6, width - 16, 30, false);
-        gui.text(font, "✦ Shader Packs", 18, 17, CelestiaTheme.ACCENT_BRIGHT, false);
+        String title = "✦ Shader Packs";
+        gui.text(font, title, 18, 17, CelestiaTheme.ACCENT_BRIGHT, false);
+        int sx = searchX();
+        int sw = searchW();
+        CelestiaTheme.drawSearchFieldChrome(gui, sx, 12, sw, 18, searchBox != null && searchBox.isFocused());
+
         String activeTxt = spm.isShadersEnabled() ? ("Active: " + spm.activeDisplayName()) : "Shaders Paused (K)";
-        CelestiaTheme.drawBadge(gui, font, activeTxt, 114, 14,
+        int bx = 18 + font.width(title) + 8;
+        int maxBw = Math.max(40, sx - bx - 8);
+        CelestiaTheme.drawBadgeClipped(gui, font, activeTxt, bx, 14, maxBw,
             spm.isShadersEnabled() ? CelestiaTheme.BADGE_GREEN : CelestiaTheme.ORB_ROSE);
 
         boolean wide = width >= 500;
@@ -95,37 +127,45 @@ public final class CelestiaShaderPacksScreen extends Screen {
         List<ShaderPackManifest> packs = filteredPacks();
         int rowH = 38;
         int totalH = packs.size() * rowH + 8;
-        int maxScroll = Math.max(0, totalH - listH);
+        int maxScroll = Math.max(0, totalH - (listH - 8));
         scrollOffset = Math.max(0.0, Math.min(scrollOffset, maxScroll));
+        int contentW = maxScroll > 0 ? (listW - 18) : (listW - 12);
+        this.lastContentW = contentW;
 
-        gui.enableScissor(listX + 2, listY + 2, listX + listW - 2, listY + listH - 2);
+        gui.enableScissor(listX + 2, listY + 4, listX + listW - 2, listY + listH - 4);
         int cy = listY + 6 - (int) scrollOffset;
         for (ShaderPackManifest pack : packs) {
             if (cy + rowH >= listY && cy <= listY + listH) {
-                boolean hov = CelestiaWidgets.inside(mouseX, mouseY, listX + 6, cy, listW - 12, rowH - 4)
-                    && CelestiaWidgets.inside(mouseX, mouseY, listX, listY, listW, listH);
+                boolean hov = CelestiaWidgets.inside(mouseX, mouseY, listX + 6, cy, contentW, rowH - 4)
+                    && CelestiaWidgets.inside(mouseX, mouseY, listX, listY + 2, listW, listH - 4);
                 boolean sel = pack.id.equals(selectedId);
                 boolean active = pack.id.equals(spm.activePack().id);
                 int bg = sel ? CelestiaTheme.SURFACE_ACTIVE : (hov ? CelestiaTheme.SURFACE_HOVER : CelestiaTheme.SURFACE_CARD);
                 int rim = active ? CelestiaTheme.ACCENT_LAVENDER : (sel ? CelestiaTheme.GLASS_RIM_STRONG : CelestiaTheme.GLASS_RIM);
-                gui.fill(listX + 6, cy, listX + listW - 6, cy + rowH - 4, bg);
-                gui.outline(listX + 6, cy, listW - 12, rowH - 4, rim);
-
-                gui.text(font, pack.name, listX + 14, cy + 6, CelestiaTheme.TEXT_MAIN, false);
-                String sub = pack.author + " · v" + pack.version + (active ? " · Active" : "");
-                gui.text(font, font.plainSubstrByWidth(sub, listW - 110), listX + 14, cy + 19, CelestiaTheme.TEXT_MUTED, false);
+                gui.fill(listX + 6, cy, listX + 6 + contentW, cy + rowH - 4, bg);
+                gui.outline(listX + 6, cy, contentW, rowH - 4, rim);
+                if (hov && !sel) {
+                    gui.fill(listX + 7, cy + 2, listX + 9, cy + rowH - 6, CelestiaTheme.ACCENT_LAVENDER);
+                }
 
                 int badgeColor = switch (pack.kind) {
                     case NATIVE_MSL -> CelestiaTheme.ACCENT_BRIGHT;
                     case IRIS_GLSL -> CelestiaTheme.ORB_GOLD;
                     case OFF -> CelestiaTheme.TEXT_MUTED;
                 };
-                int bw = font.width(pack.kind.badge) + 10;
-                CelestiaTheme.drawBadge(gui, font, pack.kind.badge, listX + listW - bw - 14, cy + 10, badgeColor);
+                int bw = CelestiaTheme.badgeWidth(font, pack.kind.badge);
+                int textMaxW = Math.max(40, contentW - bw - 22);
+                gui.text(font, font.plainSubstrByWidth(pack.name, textMaxW), listX + 14, cy + 6, CelestiaTheme.TEXT_MAIN, false);
+                String sub = pack.author + " · v" + pack.version + (active ? " · Active" : "");
+                gui.text(font, font.plainSubstrByWidth(sub, textMaxW), listX + 14, cy + 19, CelestiaTheme.TEXT_MUTED, false);
+
+                CelestiaTheme.drawBadge(gui, font, pack.kind.badge, listX + 6 + contentW - bw - 8, cy + 10, badgeColor);
             }
             cy += rowH;
         }
+        CelestiaTheme.drawScrollFades(gui, listX + 2, listY + 4, listW - 4, listH - 8, scrollOffset, maxScroll);
         gui.disableScissor();
+        CelestiaTheme.drawScrollbar(gui, listX + listW - 6, listY + 6, listH - 12, scrollOffset, maxScroll, totalH);
 
         if (wide) {
             ShaderPackManifest sel = selectedPack();
@@ -138,7 +178,7 @@ public final class CelestiaShaderPacksScreen extends Screen {
                 sel.kind == ShaderPackManifest.PackKind.NATIVE_MSL ? CelestiaTheme.ACCENT_LAVENDER : CelestiaTheme.TEXT_MUTED);
             iy += 20;
             gui.textWithWordWrap(font, Component.literal(sel.description), ix, iy, infoW - 24, CelestiaTheme.TEXT_MUTED);
-            iy += 46;
+            iy = presetStartY(sel) - 14;
 
             if (!sel.presets.isEmpty()) {
                 ShaderOptionState st = spm.optionState(sel);
@@ -178,21 +218,21 @@ public final class CelestiaShaderPacksScreen extends Screen {
                 "Configure Pack Options...", hovCfg, false, canCfg);
         }
 
-        // Footer
+        // Responsive footer
         int fy = height - 28;
-        boolean hovOpen = CelestiaWidgets.inside(mouseX, mouseY, 8, fy, 108, 20);
-        boolean hovReload = CelestiaWidgets.inside(mouseX, mouseY, 122, fy, 86, 20);
-        boolean hovToggle = CelestiaWidgets.inside(mouseX, mouseY, 214, fy, 92, 20);
-        boolean hovApply = CelestiaWidgets.inside(mouseX, mouseY, width - 178, fy, 82, 20);
-        boolean hovDone = CelestiaWidgets.inside(mouseX, mouseY, width - 90, fy, 82, 20);
-
-        CelestiaWidgets.drawButton(gui, font, 8, fy, 108, 20, "Open Folder", hovOpen, false, true);
-        CelestiaWidgets.drawButton(gui, font, 122, fy, 86, 20, "Reload (R)", hovReload, false, true);
-        CelestiaWidgets.drawButton(gui, font, 214, fy, 92, 20, spm.isShadersEnabled() ? "Pause (K)" : "Resume (K)",
-            hovToggle, !spm.isShadersEnabled(), true);
-        CelestiaWidgets.drawButton(gui, font, width - 178, fy, 82, 20, "Apply", hovApply,
-            !selectedId.equals(spm.activePack().id), true);
-        CelestiaWidgets.drawButton(gui, font, width - 90, fy, 82, 20, "Done", hovDone, true, true);
+        String[] labels = footerLabels(wide);
+        int fGap = wide ? 5 : 4;
+        int[] bws = CelestiaWidgets.computeProportionalWidths(font, labels, width - 16, fGap, 8, 14);
+        ShaderPackManifest sel = selectedPack();
+        boolean canCfgCompact = sel.kind != ShaderPackManifest.PackKind.OFF && !sel.options.isEmpty();
+        boolean[] selectedFlags = {false, false, wide ? !spm.isShadersEnabled() : false, !selectedId.equals(spm.activePack().id), true};
+        boolean[] enabledFlags = {true, true, wide || canCfgCompact, true, true};
+        int fx = 8;
+        for (int i = 0; i < labels.length; i++) {
+            boolean hov = CelestiaWidgets.inside(mouseX, mouseY, fx, fy, bws[i], 20);
+            CelestiaWidgets.drawButton(gui, font, fx, fy, bws[i], 20, labels[i], hov, selectedFlags[i], enabledFlags[i]);
+            fx += bws[i] + fGap;
+        }
 
         super.extractRenderState(gui, mouseX, mouseY, partialTick);
     }
@@ -208,7 +248,7 @@ public final class CelestiaShaderPacksScreen extends Screen {
             int rowH = 38;
             int cy = listY + 6 - (int) scrollOffset;
             for (ShaderPackManifest pack : packs) {
-                if (CelestiaWidgets.inside(mx, my, listX + 6, cy, listW - 12, rowH - 4)) {
+                if (CelestiaWidgets.inside(mx, my, listX + 6, cy, lastContentW, rowH - 4)) {
                     selectedId = pack.id;
                     if (doubleClick) {
                         spm.selectPack(selectedId);
@@ -230,7 +270,7 @@ public final class CelestiaShaderPacksScreen extends Screen {
                 return true;
             }
             if (!sel.presets.isEmpty()) {
-                int iy = infoY + 106;
+                int iy = presetStartY(sel);
                 int px = ix;
                 for (String presetName : sel.presets.keySet()) {
                     int pw = font.width(presetName) + 12;
@@ -249,31 +289,44 @@ public final class CelestiaShaderPacksScreen extends Screen {
         }
 
         // Footer
+        boolean wide = infoW > 0;
         int fy = height - 28;
-        if (CelestiaWidgets.inside(mx, my, 8, fy, 108, 20)) {
-            try {
-                Path dir = spm.shaderpacksDir();
-                Files.createDirectories(dir);
-                new ProcessBuilder("open", dir.toAbsolutePath().toString()).start();
-            } catch (Exception ignored) {}
-            return true;
-        }
-        if (CelestiaWidgets.inside(mx, my, 122, fy, 86, 20)) {
-            spm.reloadActivePack();
-            return true;
-        }
-        if (CelestiaWidgets.inside(mx, my, 214, fy, 92, 20)) {
-            spm.toggleShaders();
-            return true;
-        }
-        if (CelestiaWidgets.inside(mx, my, width - 178, fy, 82, 20)) {
-            spm.selectPack(selectedId);
-            return true;
-        }
-        if (CelestiaWidgets.inside(mx, my, width - 90, fy, 82, 20)) {
-            spm.selectPack(selectedId);
-            onClose();
-            return true;
+        String[] labels = footerLabels(wide);
+        int fGap = wide ? 5 : 4;
+        int[] bws = CelestiaWidgets.computeProportionalWidths(font, labels, width - 16, fGap, 8, 14);
+        int fx = 8;
+        for (int i = 0; i < bws.length; i++) {
+            int bw = bws[i];
+            if (CelestiaWidgets.inside(mx, my, fx, fy, bw, 20)) {
+                switch (i) {
+                    case 0 -> {
+                        try {
+                            Path dir = spm.shaderpacksDir();
+                            Files.createDirectories(dir);
+                            new ProcessBuilder("open", dir.toAbsolutePath().toString()).start();
+                        } catch (Exception ignored) {}
+                    }
+                    case 1 -> spm.reloadActivePack();
+                    case 2 -> {
+                        if (wide) {
+                            spm.toggleShaders();
+                        } else {
+                            ShaderPackManifest sel = selectedPack();
+                            if (sel.kind != ShaderPackManifest.PackKind.OFF && !sel.options.isEmpty()) {
+                                spm.selectPack(sel.id);
+                                Minecraft.getInstance().gui.setScreen(new CelestiaShaderOptionsScreen(this, sel));
+                            }
+                        }
+                    }
+                    case 3 -> spm.selectPack(selectedId);
+                    case 4 -> {
+                        spm.selectPack(selectedId);
+                        onClose();
+                    }
+                }
+                return true;
+            }
+            fx += bw + fGap;
         }
         return false;
     }

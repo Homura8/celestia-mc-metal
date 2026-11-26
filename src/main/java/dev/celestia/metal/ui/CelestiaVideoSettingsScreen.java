@@ -50,7 +50,11 @@ public final class CelestiaVideoSettingsScreen extends Screen {
     private OptionEntry hoveredEntry;
     private OptionEntry draggingSlider;
     private int listX, listY, listW, listH;
+    private int lastContentW = 240;
     private int infoX, infoY, infoW, infoH;
+    private int badgeX, badgeY, badgeW, badgeH;
+    private boolean switchedToDefaultThisSession;
+    private int pendingGuiScale;
     private boolean dirty;
     private boolean allowVanillaBypass;
 
@@ -59,11 +63,24 @@ public final class CelestiaVideoSettingsScreen extends Screen {
         this.parent = parent;
         this.mcOptions = options;
         this.workingConfig = CelestiaConfig.get().copy();
+        this.pendingGuiScale = options.guiScale().get();
+    }
+
+    private int searchW() {
+        return Math.min(156, Math.max(96, width / 3 - 8));
+    }
+
+    private int searchX() {
+        return width - searchW() - 14;
     }
 
     @Override
     protected void init() {
-        searchBox = new EditBox(this.font, width - 176, 12, 160, 18, Component.literal("Search options..."));
+        int sx = searchX();
+        int sw = searchW();
+        searchBox = new EditBox(this.font, sx + 6, 17, sw - 10, 12, Component.literal("Search options..."));
+        searchBox.setBordered(false);
+        searchBox.setTextColor(CelestiaTheme.TEXT_MAIN);
         searchBox.setHint(Component.literal("Search options..."));
         searchBox.setValue(searchQuery);
         searchBox.setResponder(q -> {
@@ -119,11 +136,14 @@ public final class CelestiaVideoSettingsScreen extends Screen {
                     ShaderOptionDef.Impact.NEGLIGIBLE,
                     () -> mcOptions.fullscreen().get(),
                     v -> { mcOptions.fullscreen().set(v); dirty = true; }));
+                var window = Minecraft.getInstance().getWindow();
+                int windowMaxScale = window != null ? window.calculateScale(0, mcOptions.forceUnicodeFont().get()) : 8;
+                int maxGuiScale = Math.max(8, Math.max(pendingGuiScale, windowMaxScale));
                 list.add(new OptionEntry.IntSlider("GUI Scale",
-                    "Interface scale factor (0 = Auto).",
-                    ShaderOptionDef.Impact.NEGLIGIBLE, 0, 4, 1,
-                    () -> mcOptions.guiScale().get(),
-                    v -> { mcOptions.guiScale().set(v); dirty = true; },
+                    "Interface scale factor (0 = Auto). Applied when clicking Apply or Done so dragging never shifts the UI.",
+                    ShaderOptionDef.Impact.NEGLIGIBLE, 0, maxGuiScale, 1,
+                    () -> pendingGuiScale,
+                    v -> { pendingGuiScale = v; dirty = true; },
                     v -> v == 0 ? "Auto" : (v + "x")));
                 list.add(new OptionEntry.FloatSlider("Brightness",
                     "Adjusts gamma curve for dark caves and night scenes.",
@@ -316,7 +336,11 @@ public final class CelestiaVideoSettingsScreen extends Screen {
                     ShaderOptionDef.Impact.NEGLIGIBLE, Arrays.asList(PreferredGraphicsApi.values()),
                     () -> mcOptions.preferredGraphicsBackend().get(),
                     v -> { mcOptions.preferredGraphicsBackend().set(v); dirty = true; },
-                    PreferredGraphicsApi::name));
+                    api -> switch (api) {
+                        case DEFAULT -> "Default (Metal)";
+                        case OPENGL -> "OpenGL";
+                        case VULKAN -> "Vulkan";
+                    }));
                 list.add(new OptionEntry.Toggle("Metal Validation Labels",
                     "Attaches debug labels to buffers, textures, and render encoders.",
                     ShaderOptionDef.Impact.NEGLIGIBLE,
@@ -344,27 +368,52 @@ public final class CelestiaVideoSettingsScreen extends Screen {
 
         // Header bar
         CelestiaTheme.drawGlassPanel(gui, 8, 6, width - 16, 30, false);
-        gui.text(font, "✦ Celestia Metal", 18, 17, CelestiaTheme.ACCENT_BRIGHT, false);
+        String titleStr = "✦ Celestia Metal";
+        gui.text(font, titleStr, 18, 17, CelestiaTheme.ACCENT_BRIGHT, false);
+
+        int sx = searchX();
+        int sw = searchW();
+        CelestiaTheme.drawSearchFieldChrome(gui, sx, 12, sw, 18, searchBox != null && searchBox.isFocused());
 
         CelestiaMetalDevice dev = CelestiaMetalDevice.current;
         PerformanceEngine perf = PerformanceEngine.get();
-        String statusBadge = (dev != null && dev.isMetal4()) ? "Metal 4 · " + perf.displayRefreshHz() + " Hz"
-            : (dev != null ? "Metal 3 · " + perf.displayRefreshHz() + " Hz" : "Fallback Backend");
-        CelestiaTheme.drawBadge(gui, font, statusBadge, 118, 14, CelestiaTheme.ACCENT_LAVENDER);
+        PreferredGraphicsApi configuredApi = mcOptions.preferredGraphicsBackend().get();
+        String statusBadge;
+        int badgeColor;
+        if (dev != null) {
+            statusBadge = (dev.isMetal4() ? "Metal 4 · " : "Metal 3 · ") + perf.displayRefreshHz() + " Hz";
+            badgeColor = CelestiaTheme.BADGE_GREEN;
+        } else if (configuredApi == PreferredGraphicsApi.OPENGL) {
+            statusBadge = "OpenGL · Click -> Metal";
+            badgeColor = CelestiaTheme.ORB_ROSE;
+        } else if (switchedToDefaultThisSession || configuredApi == PreferredGraphicsApi.DEFAULT) {
+            statusBadge = "Metal Ready · Restart";
+            badgeColor = CelestiaTheme.ACCENT_LAVENDER;
+        } else {
+            statusBadge = "Vulkan · Click -> Metal";
+            badgeColor = CelestiaTheme.ORB_GOLD;
+        }
+        badgeX = 18 + font.width(titleStr) + 8;
+        badgeY = 14;
+        int maxBadgeW = Math.max(40, sx - badgeX - 8);
+        badgeW = CelestiaTheme.drawBadgeClipped(gui, font, statusBadge, badgeX, badgeY, maxBadgeW, badgeColor);
+        badgeH = 14;
 
-        // Tab bar
+        // Tab bar (proportional widths so longer labels like Performance and Apple Silicon fit cleanly)
         Tab[] tabs = Tab.values();
+        String[] tabLabels = new String[tabs.length];
+        for (int i = 0; i < tabs.length; i++) tabLabels[i] = tabs[i].title;
+        int tabGap = 4;
+        int[] tabWidths = CelestiaWidgets.computeProportionalWidths(font, tabLabels, width - 16, tabGap, 8, 16);
         int tabY = 42;
         int tabH = 22;
-        int tabGap = 4;
-        int availW = width - 16;
-        int tabW = Math.min(110, (availW - tabGap * (tabs.length - 1)) / tabs.length);
-        int tabStartX = 8;
+        int tx = 8;
         for (int i = 0; i < tabs.length; i++) {
-            int tx = tabStartX + i * (tabW + tabGap);
-            boolean hov = CelestiaWidgets.inside(mouseX, mouseY, tx, tabY, tabW, tabH);
+            int tw = tabWidths[i];
+            boolean hov = CelestiaWidgets.inside(mouseX, mouseY, tx, tabY, tw, tabH);
             boolean sel = searchQuery.isBlank() && activeTab == tabs[i];
-            CelestiaWidgets.drawButton(gui, font, tx, tabY, tabW, tabH, tabs[i].title, hov, sel, true);
+            CelestiaWidgets.drawButton(gui, font, tx, tabY, tw, tabH, tabs[i].title, hov, sel, true);
+            tx += tw + tabGap;
         }
 
         // Main split area
@@ -388,23 +437,27 @@ public final class CelestiaVideoSettingsScreen extends Screen {
         List<OptionEntry> entries = buildCurrentEntries();
         int totalH = 8;
         for (OptionEntry e : entries) totalH += CelestiaWidgets.rowHeight(e);
-        int maxScroll = Math.max(0, totalH - listH);
+        int maxScroll = Math.max(0, totalH - (listH - 8));
         scrollOffset = Math.max(0.0, Math.min(scrollOffset, maxScroll));
+        int contentW = maxScroll > 0 ? (listW - 18) : (listW - 12);
+        this.lastContentW = contentW;
 
         hoveredEntry = null;
-        gui.enableScissor(listX + 2, listY + 2, listX + listW - 2, listY + listH - 2);
+        gui.enableScissor(listX + 2, listY + 4, listX + listW - 2, listY + listH - 4);
         int cy = listY + 6 - (int) scrollOffset;
         for (OptionEntry e : entries) {
             int rh = CelestiaWidgets.rowHeight(e);
             if (cy + rh >= listY && cy <= listY + listH) {
-                boolean hov = CelestiaWidgets.inside(mouseX, mouseY, listX + 6, cy, listW - 12, rh)
-                    && CelestiaWidgets.inside(mouseX, mouseY, listX, listY, listW, listH);
+                boolean hov = CelestiaWidgets.inside(mouseX, mouseY, listX + 6, cy, contentW, rh - 2)
+                    && CelestiaWidgets.inside(mouseX, mouseY, listX, listY + 2, listW, listH - 4);
                 if (hov && !(e instanceof OptionEntry.Header)) hoveredEntry = e;
-                CelestiaWidgets.drawOptionRow(gui, font, e, listX + 6, cy, listW - 12, hov);
+                CelestiaWidgets.drawOptionRow(gui, font, e, listX + 6, cy, contentW, hov);
             }
             cy += rh;
         }
+        CelestiaTheme.drawScrollFades(gui, listX + 2, listY + 4, listW - 4, listH - 8, scrollOffset, maxScroll);
         gui.disableScissor();
+        CelestiaTheme.drawScrollbar(gui, listX + listW - 6, listY + 6, listH - 12, scrollOffset, maxScroll, totalH);
 
         // Contextual info + Apple Silicon telemetry panel
         if (wide) {
@@ -424,24 +477,31 @@ public final class CelestiaVideoSettingsScreen extends Screen {
                 String gpu = probe != null ? probe.gpuName() : "Apple Silicon GPU";
                 gui.text(font, font.plainSubstrByWidth(gpu, infoW - 24), ix, iy, CelestiaTheme.TEXT_MAIN, false);
                 iy += 13;
-                gui.text(font, String.format("FPS: %.0f (1%% low: %.0f)", perf.estimatedFps(), perf.onePercentLowFps()),
-                    ix, iy, CelestiaTheme.TEXT_MUTED, false);
-                iy += 12;
-                gui.text(font, String.format("GPU Frame: %.2f ms", perf.ewmaGpuMs()), ix, iy, CelestiaTheme.TEXT_MUTED, false);
-                iy += 12;
-                gui.text(font, "Thermal: " + perf.thermalLabel() + (perf.isLowPowerMode() ? " (Low Power)" : ""),
-                    ix, iy, CelestiaTheme.TEXT_MUTED, false);
-                iy += 12;
-                gui.text(font, "Shader: " + ShaderPipelineManager.get().activeDisplayName(),
-                    ix, iy, CelestiaTheme.ACCENT_BRIGHT, false);
+                if (dev == null && configuredApi != PreferredGraphicsApi.DEFAULT) {
+                    gui.textWithWordWrap(font, Component.literal("Active API: " + configuredApi.name()
+                        + ". Click the status pill above or set Graphics API Preference to Default (Metal) and restart."),
+                        ix, iy, infoW - 24, CelestiaTheme.ORB_ROSE);
+                } else {
+                    gui.text(font, String.format("FPS: %.0f (1%% low: %.0f)", perf.estimatedFps(), perf.onePercentLowFps()),
+                        ix, iy, CelestiaTheme.TEXT_MUTED, false);
+                    iy += 12;
+                    gui.text(font, String.format("GPU Frame: %.2f ms", perf.ewmaGpuMs()), ix, iy, CelestiaTheme.TEXT_MUTED, false);
+                    iy += 12;
+                    gui.text(font, "Thermal: " + perf.thermalLabel() + (perf.isLowPowerMode() ? " (Low Power)" : ""),
+                        ix, iy, CelestiaTheme.TEXT_MUTED, false);
+                    iy += 12;
+                    gui.text(font, "Shader: " + ShaderPipelineManager.get().activeDisplayName(),
+                        ix, iy, CelestiaTheme.ACCENT_BRIGHT, false);
+                }
             }
         }
 
         // Footer bar
         int fy = height - 28;
-        int bw = 82;
-        boolean hovShaders = CelestiaWidgets.inside(mouseX, mouseY, 8, fy, 112, 20);
-        CelestiaWidgets.drawButton(gui, font, 8, fy, 112, 20, "✦ Shader Packs", hovShaders, false, true);
+        int bw = Math.min(82, Math.max(54, (width - 148) / 3));
+        int spW = Math.min(112, Math.max(88, width - bw * 3 - 34));
+        boolean hovShaders = CelestiaWidgets.inside(mouseX, mouseY, 8, fy, spW, 20);
+        CelestiaWidgets.drawButton(gui, font, 8, fy, spW, 20, "✦ Shader Packs", hovShaders, false, true);
 
         boolean hovUndo = CelestiaWidgets.inside(mouseX, mouseY, width - bw * 3 - 20, fy, bw, 20);
         boolean hovApply = CelestiaWidgets.inside(mouseX, mouseY, width - bw * 2 - 14, fy, bw, 20);
@@ -460,25 +520,41 @@ public final class CelestiaVideoSettingsScreen extends Screen {
         double mx = event.x();
         double my = event.y();
 
+        // Clickable backend badge when running on OpenGL/Vulkan fallback
+        if (CelestiaMetalDevice.current == null && CelestiaWidgets.inside(mx, my, badgeX, badgeY, badgeW, badgeH)) {
+            if (mcOptions.preferredGraphicsBackend().get() != PreferredGraphicsApi.DEFAULT) {
+                mcOptions.preferredGraphicsBackend().set(PreferredGraphicsApi.DEFAULT);
+                mcOptions.save();
+                switchedToDefaultThisSession = true;
+            }
+            return true;
+        }
+
         // Tab clicks
         Tab[] tabs = Tab.values();
-        int tabY = 42, tabH = 22, tabGap = 4;
-        int tabW = Math.min(110, (width - 16 - tabGap * (tabs.length - 1)) / tabs.length);
+        String[] tabLabels = new String[tabs.length];
+        for (int i = 0; i < tabs.length; i++) tabLabels[i] = tabs[i].title;
+        int tabGap = 4;
+        int[] tabWidths = CelestiaWidgets.computeProportionalWidths(font, tabLabels, width - 16, tabGap, 8, 16);
+        int tabY = 42, tabH = 22;
+        int tx = 8;
         for (int i = 0; i < tabs.length; i++) {
-            int tx = 8 + i * (tabW + tabGap);
-            if (CelestiaWidgets.inside(mx, my, tx, tabY, tabW, tabH)) {
+            int tw = tabWidths[i];
+            if (CelestiaWidgets.inside(mx, my, tx, tabY, tw, tabH)) {
                 activeTab = tabs[i];
                 searchQuery = "";
                 searchBox.setValue("");
                 scrollOffset = 0;
                 return true;
             }
+            tx += tw + tabGap;
         }
 
         // Footer buttons
         int fy = height - 28;
-        int bw = 82;
-        if (CelestiaWidgets.inside(mx, my, 8, fy, 112, 20)) {
+        int bw = Math.min(82, Math.max(54, (width - 148) / 3));
+        int spW = Math.min(112, Math.max(88, width - bw * 3 - 34));
+        if (CelestiaWidgets.inside(mx, my, 8, fy, spW, 20)) {
             Minecraft.getInstance().gui.setScreen(new CelestiaShaderPacksScreen(this));
             return true;
         }
@@ -489,6 +565,7 @@ public final class CelestiaVideoSettingsScreen extends Screen {
             workingConfig.appleSilicon = fresh.appleSilicon;
             workingConfig.shaders = fresh.shaders;
             workingConfig.advanced = fresh.advanced;
+            pendingGuiScale = mcOptions.guiScale().get();
             dirty = false;
             return true;
         }
@@ -507,7 +584,7 @@ public final class CelestiaVideoSettingsScreen extends Screen {
             int cy = listY + 6 - (int) scrollOffset;
             for (OptionEntry e : entries) {
                 int rh = CelestiaWidgets.rowHeight(e);
-                if (CelestiaWidgets.inside(mx, my, listX + 6, cy, listW - 12, rh)) {
+                if (CelestiaWidgets.inside(mx, my, listX + 6, cy, lastContentW, rh - 2)) {
                     handleRowClick(e, mx, event.button());
                     return true;
                 }
@@ -581,7 +658,7 @@ public final class CelestiaVideoSettingsScreen extends Screen {
     }
 
     private void applySliderDrag(OptionEntry entry, double mx) {
-        int rowW = listW - 12;
+        int rowW = lastContentW;
         int controlW = Math.min(136, Math.max(96, rowW / 3));
         int ctrlX = listX + 6 + rowW - controlW - 8;
         double t = Math.max(0.0, Math.min(1.0, (mx - ctrlX) / (double) controlW));
@@ -598,6 +675,10 @@ public final class CelestiaVideoSettingsScreen extends Screen {
 
     private void applyChanges() {
         CelestiaConfig.replace(workingConfig.copy());
+        if (pendingGuiScale != mcOptions.guiScale().get()) {
+            mcOptions.guiScale().set(pendingGuiScale);
+            pendingGuiScale = mcOptions.guiScale().get();
+        }
         mcOptions.save();
         dirty = false;
     }
