@@ -11,7 +11,6 @@ import com.mojang.renderpearl.api.pipeline.UniformType;
 import com.mojang.renderpearl.backend.api.BackendRenderPipeline;
 import com.mojang.renderpearl.backend.api.RenderPassBackend;
 import com.mojang.renderpearl.util.TextureViewAndSampler;
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
@@ -158,13 +157,9 @@ public final class CelestiaRenderPass implements RenderPassBackend {
             MemorySegment seg = MemorySegment.ofBuffer(data);
             MetalNative.passPushConstants(device.handle(), MetalShaderTranslator.PUSH_CONSTANT_SLOT, seg, size);
         } else {
-            try (Arena arena = Arena.ofConfined()) {
-                byte[] tmp = new byte[size];
-                data.duplicate().get(tmp);
-                MemorySegment seg = arena.allocate(size);
-                MemorySegment.copy(tmp, 0, seg, ValueLayout.JAVA_BYTE, 0, size);
-                MetalNative.passPushConstants(device.handle(), MetalShaderTranslator.PUSH_CONSTANT_SLOT, seg, size);
-            }
+            MemorySegment seg = encoder.drawScratch().get(size);
+            MemorySegment.copy(MemorySegment.ofBuffer(data), 0L, seg, 0L, size);
+            MetalNative.passPushConstants(device.handle(), MetalShaderTranslator.PUSH_CONSTANT_SLOT, seg, size);
         }
     }
 
@@ -217,69 +212,61 @@ public final class CelestiaRenderPass implements RenderPassBackend {
 
     @Override
     public void multiDraw(IntBuffer drawCommands, int instanceCount, int firstInstance, int drawCount) {
-        if (closed || drawCount <= 0 || drawCommands == null) return;
+        if (closed || drawCount <= 0 || drawCommands == null || instanceCount <= 0) return;
         flushUniforms();
-        // VkMultiDrawInfoEXT interleaved layout: { uint32 firstVertex, uint32 vertexCount }
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment firsts = arena.allocate(4L * drawCount, 4);
-            MemorySegment counts = arena.allocate(4L * drawCount, 4);
-            int basePos = drawCommands.position();
-            for (int i = 0; i < drawCount; i++) {
-                firsts.set(ValueLayout.JAVA_INT, i * 4L, drawCommands.get(basePos + i * 2));
-                counts.set(ValueLayout.JAVA_INT, i * 4L, drawCommands.get(basePos + i * 2 + 1));
-            }
-            MetalNative.passMultiDraw(device.handle(), nativeTopology(), firsts, counts, drawCount, instanceCount, firstInstance);
-        }
+        // VkMultiDrawInfoEXT interleaved layout { uint32 firstVertex, uint32 vertexCount } read natively
+        MemorySegment cmds = intView(drawCommands, 2L * drawCount);
+        MetalNative.passMultiDrawPacked(device.handle(), nativeTopology(), cmds, drawCount, instanceCount, firstInstance);
     }
 
     @Override
     public void multiDraw(IntBuffer firsts, IntBuffer counts, int drawCount) {
         if (closed || drawCount <= 0 || firsts == null || counts == null) return;
         flushUniforms();
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment firstSeg = copyInts(arena, firsts, drawCount);
-            MemorySegment countSeg = copyInts(arena, counts, drawCount);
-            MetalNative.passMultiDraw(device.handle(), nativeTopology(), firstSeg, countSeg, drawCount, 1, 0);
+        MemorySegment firstSeg;
+        MemorySegment countSeg;
+        if (firsts.isDirect() && counts.isDirect()) {
+            firstSeg = directInts(firsts, drawCount);
+            countSeg = directInts(counts, drawCount);
+        } else {
+            long bytes = 4L * drawCount;
+            MemorySegment scratch = encoder.drawScratch().get(2L * bytes);
+            firstSeg = copyInts(scratch.asSlice(0L, bytes), firsts, drawCount);
+            countSeg = copyInts(scratch.asSlice(bytes, bytes), counts, drawCount);
         }
+        MetalNative.passMultiDraw(device.handle(), nativeTopology(), firstSeg, countSeg, drawCount, 1, 0);
     }
 
     @Override
     public void multiDrawIndexed(IntBuffer drawCommands, int instanceCount, int firstInstance, int drawCount) {
-        if (closed || drawCount <= 0 || drawCommands == null) return;
+        if (closed || drawCount <= 0 || drawCommands == null || instanceCount <= 0) return;
         flushUniforms();
-        // VkMultiDrawIndexedInfoEXT interleaved layout: { uint32 firstIndex, uint32 indexCount, int32 vertexOffset }
-        int idxBytes = indexType == IndexType.INT ? 4 : 2;
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment offsets = arena.allocate(8L * drawCount, 8);
-            MemorySegment counts = arena.allocate(4L * drawCount, 4);
-            MemorySegment bases = arena.allocate(4L * drawCount, 4);
-            int basePos = drawCommands.position();
-            for (int i = 0; i < drawCount; i++) {
-                long firstIdx = Integer.toUnsignedLong(drawCommands.get(basePos + i * 3));
-                offsets.set(ValueLayout.JAVA_LONG, i * 8L, indexBaseOffset + firstIdx * idxBytes);
-                counts.set(ValueLayout.JAVA_INT, i * 4L, drawCommands.get(basePos + i * 3 + 1));
-                bases.set(ValueLayout.JAVA_INT, i * 4L, drawCommands.get(basePos + i * 3 + 2));
-            }
-            MetalNative.passMultiDrawIndexed(device.handle(), nativeTopology(),
-                offsets, counts, bases, drawCount, instanceCount, firstInstance);
-        }
+        // VkMultiDrawIndexedInfoEXT interleaved layout { uint32 firstIndex, uint32 indexCount, int32 vertexOffset }
+        MemorySegment cmds = intView(drawCommands, 3L * drawCount);
+        MetalNative.passMultiDrawIndexedPacked(device.handle(), nativeTopology(), cmds, drawCount,
+            indexBaseOffset, instanceCount, firstInstance);
     }
 
     @Override
     public void multiDrawIndexed(PointerBuffer indices, IntBuffer counts, IntBuffer baseVertices, int drawCount) {
         if (closed || drawCount <= 0 || indices == null || counts == null) return;
         flushUniforms();
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment offsets = arena.allocate(8L * drawCount, 8);
-            int pPos = indices.position();
-            for (int i = 0; i < drawCount; i++) {
-                offsets.set(ValueLayout.JAVA_LONG, i * 8L, indices.get(pPos + i));
-            }
-            MemorySegment countSeg = copyInts(arena, counts, drawCount);
-            MemorySegment baseSeg = baseVertices != null ? copyInts(arena, baseVertices, drawCount) : null;
-            MetalNative.passMultiDrawIndexed(device.handle(), nativeTopology(),
-                offsets, countSeg, baseSeg, drawCount, 1, 0);
+        // PointerBuffer is always direct and holds 64-bit byte offsets on arm64: pass it through unchanged.
+        MemorySegment offsets = MemorySegment.ofAddress(indices.address()).reinterpret(8L * drawCount);
+        MemorySegment countSeg;
+        MemorySegment baseSeg = null;
+        boolean direct = counts.isDirect() && (baseVertices == null || baseVertices.isDirect());
+        if (direct) {
+            countSeg = directInts(counts, drawCount);
+            if (baseVertices != null) baseSeg = directInts(baseVertices, drawCount);
+        } else {
+            long bytes = 4L * drawCount;
+            MemorySegment scratch = encoder.drawScratch().get(2L * bytes);
+            countSeg = copyInts(scratch.asSlice(0L, bytes), counts, drawCount);
+            if (baseVertices != null) baseSeg = copyInts(scratch.asSlice(bytes, bytes), baseVertices, drawCount);
         }
+        MetalNative.passMultiDrawIndexed(device.handle(), nativeTopology(),
+            offsets, countSeg, baseSeg, drawCount, 1, 0);
     }
 
     @Override
@@ -309,16 +296,28 @@ public final class CelestiaRenderPass implements RenderPassBackend {
         }
     }
 
-    private static MemorySegment copyInts(Arena arena, IntBuffer buf, int count) {
+    /** Zero-copy view of a direct buffer, or a copy into draw scratch memory for heap buffers. */
+    private MemorySegment intView(IntBuffer buf, long intCount) {
         if (buf.isDirect()) {
-            long addr = MemoryUtil.memAddress(buf, buf.position());
-            return MemorySegment.ofAddress(addr).reinterpret(4L * count);
+            return MemorySegment.ofAddress(MemoryUtil.memAddress(buf, buf.position())).reinterpret(4L * intCount);
         }
-        MemorySegment seg = arena.allocate(4L * count, 4);
+        MemorySegment seg = encoder.drawScratch().get(4L * intCount);
         int pos = buf.position();
-        for (int i = 0; i < count; i++) {
-            seg.set(ValueLayout.JAVA_INT, i * 4L, buf.get(pos + i));
+        for (long i = 0; i < intCount; i++) {
+            seg.setAtIndex(ValueLayout.JAVA_INT, i, buf.get(pos + (int) i));
         }
         return seg;
+    }
+
+    private static MemorySegment directInts(IntBuffer buf, int count) {
+        return MemorySegment.ofAddress(MemoryUtil.memAddress(buf, buf.position())).reinterpret(4L * count);
+    }
+
+    private static MemorySegment copyInts(MemorySegment dst, IntBuffer buf, int count) {
+        int pos = buf.position();
+        for (int i = 0; i < count; i++) {
+            dst.setAtIndex(ValueLayout.JAVA_INT, i, buf.get(pos + i));
+        }
+        return dst;
     }
 }

@@ -40,6 +40,10 @@ public final class CelestiaConfig {
         public boolean relaxedTerrainMath = true;
         public boolean terrainLod = true;
         public int terrainLodRadiusPercent = 75;
+        /** Continue the open Metal render encoder for consecutive passes on identical attachments. */
+        public boolean renderPassMerging = true;
+        /** Fold texture clears into the next render pass's load action instead of separate clear encoders. */
+        public boolean deferredClears = true;
     }
 
     public static final class AppleSiliconSection {

@@ -161,8 +161,8 @@ void cm_surface_blit_and_present(int64_t ctxPtr, int64_t surfPtr, int64_t srcTex
         id<MTLTexture> srcTex = (__bridge id<MTLTexture>)(void *)srcTexViewPtr;
 
         cm_cmd_begin(ctxPtr);
-        if (ctx.activeRenderEnc) cm_pass_end(ctxPtr);
-        cm_end_blit_if_active(ctx);
+        cm_flush_encoders(ctx);
+        ctx->_stats[CM_STAT_RENDER_ENCODERS]++;
 
         id<MTLRenderPipelineState> pso = (dstTex.pixelFormat == MTLPixelFormatRGBA16Float)
             ? surf.presentPsoHdr : surf.presentPsoSdr;

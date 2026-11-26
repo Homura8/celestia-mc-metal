@@ -181,6 +181,22 @@ public final class CelestiaSodiumConfigEntrypoint implements ConfigEntryPoint {
                 .setStorageHandler(saveHandler)
                 .setBinding(v -> CelestiaConfig.get().performance.maxChunkUploadsPerFrame = v,
                     () -> CelestiaConfig.get().performance.maxChunkUploadsPerFrame))
+            .addOption(boolOpt(builder, "render_pass_merging",
+                "Render Pass Merging",
+                "Continue the open Metal render encoder for consecutive passes on the same targets. Turn off if a mod renders incorrectly.",
+                true,
+                OptionImpact.HIGH,
+                saveHandler,
+                () -> CelestiaConfig.get().performance.renderPassMerging,
+                v -> CelestiaConfig.get().performance.renderPassMerging = v))
+            .addOption(boolOpt(builder, "deferred_clears",
+                "Deferred Clears",
+                "Fold texture clears into the next render pass instead of separate clear passes. Turn off if a mod renders incorrectly.",
+                true,
+                OptionImpact.MEDIUM,
+                saveHandler,
+                () -> CelestiaConfig.get().performance.deferredClears,
+                v -> CelestiaConfig.get().performance.deferredClears = v))
             .addOption(boolOpt(builder, "validation_labels",
                 "Metal Debug Labels",
                 "Attach debug names to Metal buffers, textures, passes, and encoders (slightly higher CPU overhead).",

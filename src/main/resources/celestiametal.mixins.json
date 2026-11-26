@@ -6,6 +6,7 @@
   "client": [
     "PreferredGraphicsApiMixin",
     "DebugScreenEntriesMixin",
+    "DebugScreenEntryListMixin",
     "MinecraftMixin",
     "GuiMixin",
     "HudMixin",

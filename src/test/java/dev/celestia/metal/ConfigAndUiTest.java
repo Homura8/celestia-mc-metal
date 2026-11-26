@@ -38,6 +38,28 @@ class ConfigAndUiTest {
     }
 
     @Test
+    void encoderOptimizationTogglesDefaultOnAndRoundTrip(@TempDir Path tmpDir) throws Exception {
+        CelestiaConfig fresh = new CelestiaConfig();
+        assertTrue(fresh.performance.renderPassMerging);
+        assertTrue(fresh.performance.deferredClears);
+
+        // Configs written before these options existed must keep the optimizations enabled
+        Path legacy = tmpDir.resolve("legacy.json");
+        java.nio.file.Files.writeString(legacy, "{\"performance\":{\"bufferPooling\":false}}");
+        CelestiaConfig loadedLegacy = CelestiaConfig.load(legacy);
+        assertTrue(loadedLegacy.performance.renderPassMerging);
+        assertTrue(loadedLegacy.performance.deferredClears);
+
+        fresh.performance.renderPassMerging = false;
+        fresh.performance.deferredClears = false;
+        Path file = tmpDir.resolve("toggles.json");
+        fresh.save(file);
+        CelestiaConfig reloaded = CelestiaConfig.load(file);
+        assertFalse(reloaded.performance.renderPassMerging);
+        assertFalse(reloaded.performance.deferredClears);
+    }
+
+    @Test
     void startupGuardCreatesAndClearsLock(@TempDir Path gameDir) {
         StartupGuard.begin(PreferredGraphicsApi.DEFAULT, gameDir);
         assertTrue(StartupGuard.isAttemptingMetal());

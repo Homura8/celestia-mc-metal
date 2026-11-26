@@ -12,8 +12,7 @@ void cm_compute_dispatch(int64_t ctxPtr, int64_t computePipePtr,
     @autoreleasepool {
         CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
         cm_cmd_begin(ctxPtr);
-        if (ctx.activeRenderEnc) cm_pass_end(ctxPtr);
-        cm_end_blit_if_active(ctx);
+        cm_flush_encoders(ctx);
 
         id<MTLComputePipelineState> cps = (__bridge id<MTLComputePipelineState>)(void *)computePipePtr;
         MTLSize groups = MTLSizeMake((NSUInteger)gx, (NSUInteger)gy, (NSUInteger)gz);

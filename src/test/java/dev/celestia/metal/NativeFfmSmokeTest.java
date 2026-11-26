@@ -187,6 +187,29 @@ class NativeFfmSmokeTest {
             MetalNative.passDrawIndexed(ctx, 3, 0, 3, 1, 0, 0, 0);
             MetalNative.passMultiDraw(ctx, 3, firsts, counts, 1, 1, 0);
             MetalNative.passMultiDrawIndexed(ctx, 3, idxOffs, counts, null, 1, 1, 0);
+            // Packed (interleaved RenderPearl command) multi-draws read natively without Java copies
+            MemorySegment packed = arena.allocate(12, 4);
+            packed.setAtIndex(ValueLayout.JAVA_INT, 0, 0);
+            packed.setAtIndex(ValueLayout.JAVA_INT, 1, 3);
+            packed.setAtIndex(ValueLayout.JAVA_INT, 2, 0);
+            MetalNative.passMultiDrawPacked(ctx, 3, packed, 1, 1, 0);
+            MetalNative.passMultiDrawIndexedPacked(ctx, 3, packed, 1, 0L, 1, 0);
+            MetalNative.passFinish(ctx);
+
+            // A following load-only pass on identical attachments merges into the still-open encoder
+            MemorySegment stats0 = arena.allocate(8L * MetalConst.STAT_COUNT, 8);
+            MemorySegment stats1 = arena.allocate(8L * MetalConst.STAT_COUNT, 8);
+            MetalNative.deviceStats(ctx, stats0, MetalConst.STAT_COUNT);
+            MemorySegment noClear = arena.allocate(4, 4);
+            assertTrue(MetalNative.passBegin(ctx, clrViews, noClear, clrRgba, 1, dview, false, 0.0, 0, 0, 32, 32, null));
+            MetalNative.passSetPipeline(ctx, psoFull);
+            MetalNative.passDraw(ctx, 3, 3, 1, 0, 0);
+            MetalNative.passFinish(ctx);
+            MetalNative.deviceStats(ctx, stats1, MetalConst.STAT_COUNT);
+            long merged = stats1.getAtIndex(ValueLayout.JAVA_LONG, MetalConst.STAT_PASSES_MERGED)
+                - stats0.getAtIndex(ValueLayout.JAVA_LONG, MetalConst.STAT_PASSES_MERGED);
+            assertEquals(1L, merged);
+            MetalNative.deviceSetOption(ctx, MetalConst.OPT_PASS_MERGE, 1);
             MetalNative.passEnd(ctx);
 
             // Also cover passBegin with null color arrays (depth-only pass)

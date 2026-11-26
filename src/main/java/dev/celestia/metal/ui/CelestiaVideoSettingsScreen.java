@@ -341,6 +341,18 @@ public final class CelestiaVideoSettingsScreen extends Screen {
                         case OPENGL -> "OpenGL";
                         case VULKAN -> "Vulkan";
                     }));
+                list.add(new OptionEntry.Toggle("Render Pass Merging",
+                    "Continues the open Metal render encoder for consecutive passes drawing to the same targets, "
+                        + "saving a full-resolution tile store/load per pass. Turn off if a mod renders incorrectly.",
+                    ShaderOptionDef.Impact.HIGH,
+                    () -> workingConfig.performance.renderPassMerging,
+                    v -> { workingConfig.performance.renderPassMerging = v; dirty = true; }));
+                list.add(new OptionEntry.Toggle("Deferred Clears",
+                    "Folds texture clears into the next render pass instead of running separate clear passes. "
+                        + "Turn off if a mod renders incorrectly.",
+                    ShaderOptionDef.Impact.MEDIUM,
+                    () -> workingConfig.performance.deferredClears,
+                    v -> { workingConfig.performance.deferredClears = v; dirty = true; }));
                 list.add(new OptionEntry.Toggle("Metal Validation Labels",
                     "Attaches debug labels to buffers, textures, and render encoders.",
                     ShaderOptionDef.Impact.NEGLIGIBLE,

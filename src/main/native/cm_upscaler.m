@@ -99,9 +99,8 @@ void cm_upscaler_encode(int64_t ctxPtr, int64_t upscalerPtr, int64_t colorTexPtr
     @autoreleasepool {
         CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
         CMUpscalerBox *box = (__bridge CMUpscalerBox *)(void *)upscalerPtr;
-        if (ctx.activeRenderEnc) cm_pass_end(ctxPtr);
-        cm_end_blit_if_active(ctx);
         cm_cmd_begin(ctxPtr);
+        cm_flush_encoders(ctx);
 
         id<MTLTexture> col = (__bridge id<MTLTexture>)(void *)colorTexPtr;
         id<MTLTexture> out = (__bridge id<MTLTexture>)(void *)outTexPtr;

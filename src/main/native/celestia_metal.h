@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 
-#define CM_ABI_VERSION 1
+#define CM_ABI_VERSION 2
 #define CM_MAX_COLOR_ATTACHMENTS 8
 #define CM_MAX_VERTEX_BUFFERS 8
 #define CM_MAX_UNIFORM_BUFFERS 15
@@ -20,6 +20,7 @@
 #define CM_MAX_TEXTURES 31
 #define CM_MAX_SAMPLERS 16
 #define CM_INFLIGHT_SLOTS 4
+#define CM_MAX_PENDING_CLEARS 8
 
 typedef enum CMFormat {
     CM_FMT_R8_UNORM = 0,
@@ -128,6 +129,24 @@ typedef enum CMTopology {
     CM_TOPO_TRIANGLE_FAN = 5,
 } CMTopology;
 
+// Device option ids for cm_device_set_option
+typedef enum CMDeviceOption {
+    CM_OPT_PASS_MERGE = 0,   // 1 = merge consecutive load-only passes on identical attachments (default 1)
+    CM_OPT_DEFER_CLEARS = 1, // 1 = fold clears into the next pass load action (default 1)
+} CMDeviceOption;
+
+// Cumulative encoder statistics (indices into cm_device_stats output array)
+typedef enum CMStatIndex {
+    CM_STAT_PASSES_BEGUN = 0,      // RenderPearl render passes begun
+    CM_STAT_RENDER_ENCODERS = 1,   // Metal render encoders actually created (passes + flushed clears + present)
+    CM_STAT_PASSES_MERGED = 2,     // passes that reused the still-open previous encoder
+    CM_STAT_CLEARS_FOLDED = 3,     // clear requests folded into a pass load action
+    CM_STAT_CLEARS_FLUSHED = 4,    // clear requests emitted as standalone clear encoders
+    CM_STAT_DRAWS = 5,             // individual GPU draw calls encoded
+    CM_STAT_BLIT_ENCODERS = 6,     // blit (Metal 4 compute) encoders opened
+    CM_STAT_COUNT = 8,
+} CMStatIndex;
+
 typedef struct CMProbeInfo {
     int32_t supported;
     int32_t metal4Supported;
@@ -193,6 +212,20 @@ typedef struct CMAttribBindingDesc {
     _Atomic uint64_t _lastGpuFrameNs;
     _Atomic int32_t _deviceLost;
     _Atomic int32_t _errorCount;
+    // Metal 4 argument-table GPU address dedup caches (reset on every new render encoder)
+    MTLGPUAddress _boundUboAddrV[CM_MAX_UNIFORM_BUFFERS];
+    MTLGPUAddress _boundUboAddrF[CM_MAX_UNIFORM_BUFFERS];
+    MTLGPUAddress _boundVtxAddr[CM_MAX_VERTEX_BUFFERS];
+    // Soft-ended pass attachments (used to merge the next compatible pass into the same encoder)
+    uintptr_t _passColorViews[CM_MAX_COLOR_ATTACHMENTS];
+    // Deferred clears (folded into the next pass that targets the texture, or flushed before other work)
+    __strong id<MTLTexture> _pendingClearTex[CM_MAX_PENDING_CLEARS];
+    float _pendingClearColor[CM_MAX_PENDING_CLEARS][4];
+    double _pendingClearDepth[CM_MAX_PENDING_CLEARS];
+    BOOL _pendingClearIsDepth[CM_MAX_PENDING_CLEARS];
+    int32_t _pendingClearCount;
+    // Cumulative statistics (render thread only)
+    int64_t _stats[CM_STAT_COUNT];
 }
 @property (nonatomic, strong) id<MTLDevice> device;
 @property (nonatomic) BOOL metal4Active;
@@ -253,6 +286,14 @@ typedef struct CMAttribBindingDesc {
 @property (nonatomic) BOOL m4ArgDirtyVertex;
 @property (nonatomic) BOOL m4ArgDirtyFragment;
 @property (nonatomic) dispatch_semaphore_t inflightSem;
+
+// Render pass merging state
+@property (nonatomic) BOOL passMergeEnabled;
+@property (nonatomic) BOOL deferClearsEnabled;
+@property (nonatomic) BOOL passSoftEnded;       // RenderPearl ended the pass but the encoder is kept open
+@property (nonatomic) BOOL passMergeable;       // the open encoder can accept a following load-only pass
+@property (nonatomic) int32_t passColorCount;
+@property (nonatomic) uintptr_t passDepthView;
 @end
 
 // Internal helpers shared across native .m modules
@@ -270,6 +311,9 @@ void cm_retire_object(CMContext *ctx, id obj, uint64_t serial);
 void cm_drain_retired(CMContext *ctx);
 id<MTLDepthStencilState> cm_get_depth_state(CMContext *ctx, BOOL enabled, int32_t cmp, BOOL writeDepth);
 void cm_end_blit_if_active(CMContext *ctx);
+// Ends any open render encoder, flushes deferred clears and ends the blit encoder.
+// Call before encoding any non-render-pass GPU work (compute, MetalFX, present, submit).
+void cm_flush_encoders(CMContext *ctx);
 NSUInteger cm_bytes_per_pixel(MTLPixelFormat fmt);
 
 // Public C ABI exported to Java FFM & native test harness
@@ -291,6 +335,9 @@ uint64_t cm_device_next_submit(int64_t ctxPtr);
 uint64_t cm_device_last_gpu_ns(int64_t ctxPtr);
 int32_t cm_device_drain_errors(int64_t ctxPtr, char *buf, int32_t bufSize);
 void cm_device_wait_idle(int64_t ctxPtr);
+void cm_device_set_option(int64_t ctxPtr, int32_t option, int32_t value);
+// Copies min(count, CM_STAT_COUNT) cumulative counters (see CMStatIndex) into out.
+void cm_device_stats(int64_t ctxPtr, int64_t *out, int32_t count);
 
 // Buffers
 int64_t cm_buffer_create(int64_t ctxPtr, int64_t sizeBytes, const void *initialData, const char *labelUtf8);
@@ -366,7 +413,11 @@ int32_t cm_pass_begin(int64_t ctxPtr,
                       int64_t depthViewPtr, int32_t depthHasClear, double depthClear,
                       int32_t areaX, int32_t areaY, int32_t areaW, int32_t areaH,
                       const char *labelUtf8);
+// Hard end: always ends the open render encoder (flushes deferred clears too).
 void cm_pass_end(int64_t ctxPtr);
+// Soft end used by RenderPearl: keeps the encoder open so an immediately following pass on the
+// same attachments without clears can merge into it. Any other GPU work hard-ends it first.
+void cm_pass_finish(int64_t ctxPtr);
 void cm_pass_set_pipeline(int64_t ctxPtr, int64_t pipePtr);
 void cm_pass_set_scissor(int64_t ctxPtr, int32_t enabled, int32_t x, int32_t y, int32_t w, int32_t h);
 void cm_pass_set_uniform_buffer(int64_t ctxPtr, int32_t slot, int64_t bufPtr, int64_t offset);
@@ -386,6 +437,13 @@ void cm_pass_multi_draw_indexed(int64_t ctxPtr, int32_t topology,
                                 const int64_t *indexOffsetsBytes, const int32_t *indexCounts,
                                 const int32_t *baseVertices, int32_t count,
                                 int32_t instanceCount, int32_t firstInstance);
+// Packed multi-draw variants that read RenderPearl's interleaved command arrays directly (zero copy):
+//   cmds = { uint32 firstVertex, uint32 vertexCount } x count
+void cm_pass_multi_draw_packed(int64_t ctxPtr, int32_t topology, const uint32_t *cmds, int32_t count,
+                               int32_t instanceCount, int32_t firstInstance);
+//   cmds = { uint32 firstIndex, uint32 indexCount, int32 vertexOffset } x count; indexBaseOffset in bytes
+void cm_pass_multi_draw_indexed_packed(int64_t ctxPtr, int32_t topology, const uint32_t *cmds, int32_t count,
+                                       int64_t indexBaseOffset, int32_t instanceCount, int32_t firstInstance);
 void cm_pass_draw_indirect(int64_t ctxPtr, int32_t topology, int64_t indirectBufPtr, int64_t offset,
                            int32_t count, int32_t stride, int32_t indexed);
 

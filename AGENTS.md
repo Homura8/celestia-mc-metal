@@ -23,7 +23,7 @@ Practical guidance for AI agents and contributors working on **Celestia Metal** 
   - `cm_upscaler.m`: `MTL4FX*` / `MTLFX*` Spatial & Temporal upscaling.
   - `cm_shader_runtime.m`: Compute dispatch helper for shader packs.
 - **Java Backend (`src/main/java/dev/celestia/metal/backend/`)**: RenderPearl backend (`CelestiaMetalBackend`, `CelestiaMetalDevice`, `CelestiaCommandEncoder`, `CelestiaRenderPass`, `CelestiaSurface`, `CelestiaPipeline`, `CelestiaTransientMemory`, `MetalNative`, `MetalConst`, `MetalShaderTranslator`, `StartupGuard`).
-- **Mixins (`src/main/java/dev/celestia/metal/mixin/`)**: Entry points into MC 26.3 (`PreferredGraphicsApiMixin`, `GameRendererMixin`, `GuiMixin`, `HudMixin`, `KeyboardHandlerMixin`, `MinecraftMixin`, `DebugScreenEntriesMixin`).
+- **Mixins (`src/main/java/dev/celestia/metal/mixin/`)**: Entry points into MC 26.3 (`PreferredGraphicsApiMixin`, `GameRendererMixin`, `GuiMixin`, `HudMixin`, `KeyboardHandlerMixin`, `MinecraftMixin`, `DebugScreenEntriesMixin`, `DebugScreenEntryListMixin`).
 - **Shader Packs (`src/main/java/dev/celestia/metal/shader/` & `src/main/resources/assets/celestiametal/`)**: Native MSL packs (`celestia-native`, `celestia-minimal`, `celestia_common.metal`) and Iris/OptiFine parser/bridge (`IrisPackParser`, `IrisGlslBridge`).
 - **CelestiaGlow UI (`src/main/java/dev/celestia/metal/ui/`) & Perf (`dev.celestia.metal.perf`)**: Tabbed video settings, shader pack/option screens, performance engine, and HUD pill.
 - **Tests & Benchmarks**: `src/test/java/dev/celestia/metal/` (JUnit 5 + FFM) and `tools/test_metal_backend.m` (live Metal 4 & Metal 3 GPU verification + 3024 × 1752 synthetic benchmark).
@@ -65,6 +65,7 @@ ls "$(xcrun --show-sdk-path)/System/Library/Frameworks/Metal.framework/Headers/"
 
 3. **Metal 4 Explicit Synchronization & Residency**:
    - Unlike Metal 3, `MTL4CommandBuffer` has **no automatic inter-encoder hazard tracking**. Whenever adding a Metal 4 render pass, clear encoder, compute dispatch, or dependent blit copy, emit an explicit producer/intra-encoder barrier (`barrierAfterStages:beforeQueueStages:visibilityOptions:MTL4VisibilityOptionDevice` or `barrierAfterEncoderStages:beforeEncoderStages:`).
+   - Every blit that reads or writes a resource another blit in the same encoder may touch (all copies, including `cm_blit_copy_buffer_to_texture`) must call `emit_m4_blit_intra_barrier_if_needed` first; see Test 2h.
    - Register every Metal 4 `MTLBuffer` / `MTLTexture` / texture view with `cm_track_allocation(ctx, obj)`, never destroy resources while in flight (use `cm_retire_object`), and keep `MTL4ArgumentTableDescriptor.maxBufferBindCount <= 31`.
    - Guard all Metal 4 API usage with `@available(macOS 26.0, *)` so Metal 3 (macOS 15+) and `-Wall -Werror` stay clean.
 
@@ -74,7 +75,19 @@ ls "$(xcrun --show-sdk-path)/System/Library/Frameworks/Metal.framework/Headers/"
    - **Fences & Ring Buffers**: `createFence()` must return the upcoming submit serial (`deviceNextSubmit + 1`) whenever `cm_cmd_has_active` is true, and `awaitCompletion()` must flush an active recording command buffer before waiting.
    - **Primitive Topology**: Handle `TRIANGLE_FAN` natively inside `cm_pass_draw` (`CM_TOPO_TRIANGLE_FAN`) via the grow-only `fanIndexBuffer` with `baseVertex`, without overwriting `ctx.boundIndexBuffer`.
 
-5. **Privacy Check (`checkPrivacy`) & Workspace Boundaries**:
+5. **Render Pass Merging & Deferred Clears (`cm_encoder.m`)**:
+   - Java ends each RenderPearl pass with `MetalNative.passFinish` (`cm_pass_finish`), a *soft* end: the native encoder stays open so an immediately following pass with identical color/depth views and no clears merges into it. `cm_pass_end` is the *hard* end.
+   - `cm_blit_clear_*` are deferred and folded into the next pass's `MTLLoadActionClear` when it targets the same texture (mip 0 / slice 0); anything else flushes them first.
+   - Any new native entry point that encodes non-render-pass GPU work (compute, MetalFX, blits, present, submit) **must** call `cm_flush_encoders(ctx)` (or `ensure_blit_encoder`) first, otherwise a soft-ended pass or deferred clear would be reordered. Cover new paths in `tools/test_metal_backend.m` Test 2g.
+   - Both are live config toggles (`performance.renderPassMerging` / `performance.deferredClears`, pushed per frame by `CelestiaMetalDevice.applyEncoderOptions`); `-Dcelestiametal.noPassMerge=true` / `-Dcelestiametal.noDeferClears=true` force them off for A/B checks; F3 shows per-frame `Celestia Encoders` counters (`cm_device_stats`).
+
+6. **FFM Hot Path (`MetalNative.Hot`)**:
+   - Per-frame downcalls live in the `static final` `MetalNative.Hot` holder so C2 can inline `invokeExact`. Short, non-blocking calls use `Linker.Option.critical(false)`: they must never block on the GPU, upcall into Java, or receive heap segments (use `CelestiaCommandEncoder.Scratch` / direct buffers). Calls that can wait (`cm_pass_begin`, clears, submit, present) stay non-critical.
+
+7. **Buffer Map Synchronization (`CelestiaBuffer.map`)**:
+   - Mods are often written against OpenGL, where mapping a buffer for read implicitly waits for GPU writes. Every GPU write into a `CelestiaBuffer` (`copyTextureToBuffer`, `copyToBuffer`, `writeToBuffer`, and any new blit/compute path that writes buffers) must call `markGpuWrite(recordingSerial())` so `map(read = true)` can submit and wait. Keep write-only maps unsynchronized (Minecraft's ring buffers rely on fences instead).
+
+8. **Privacy Check (`checkPrivacy`) & Workspace Boundaries**:
    - `./gradlew check` scans tracked files and non-native resources to ensure no machine-specific home directory paths or local OS usernames are committed. Always use `~/` or environment variables in docs and scripts.
    - Do not modify external user launcher instances (e.g., PrismLauncher `mods/` or `options.txt`); only inspect logs/crash reports read-only when debugging user reports.
 

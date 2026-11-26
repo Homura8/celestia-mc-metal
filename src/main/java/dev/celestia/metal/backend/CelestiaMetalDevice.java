@@ -73,6 +73,7 @@ public final class CelestiaMetalDevice implements GpuDeviceBackend {
             throw new IllegalStateException("Failed to initialize Metal device");
         }
         this.metal4 = MetalNative.deviceIsMetal4(this.handle);
+        applyEncoderOptions();
         this.commandEncoder = new CelestiaCommandEncoder(this);
 
         DeviceLimits limits = new DeviceLimits(
@@ -263,6 +264,40 @@ public final class CelestiaMetalDevice implements GpuDeviceBackend {
         String drained = MetalNative.deviceDrainErrors(handle);
         if (drained.isEmpty()) return List.of();
         return List.of(drained.split("\n"));
+    }
+
+    // -D switches force the optimizations off regardless of config (for A/B comparison and bisecting).
+    private static final boolean FORCE_NO_PASS_MERGE = Boolean.getBoolean("celestiametal.noPassMerge");
+    private static final boolean FORCE_NO_DEFER_CLEARS = Boolean.getBoolean("celestiametal.noDeferClears");
+    private int appliedPassMerge = -1;
+    private int appliedDeferClears = -1;
+
+    /**
+     * Pushes the render pass merging / deferred clear settings to the native encoder when they change.
+     * Called once per presented frame so toggling them in the settings screen takes effect immediately.
+     */
+    void applyEncoderOptions() {
+        CelestiaConfig.PerformanceSection perf = CelestiaConfig.get().performance;
+        int merge = perf.renderPassMerging && !FORCE_NO_PASS_MERGE ? 1 : 0;
+        int defer = perf.deferredClears && !FORCE_NO_DEFER_CLEARS ? 1 : 0;
+        if (merge != appliedPassMerge) {
+            MetalNative.deviceSetOption(handle, MetalConst.OPT_PASS_MERGE, merge);
+            appliedPassMerge = merge;
+        }
+        if (defer != appliedDeferClears) {
+            MetalNative.deviceSetOption(handle, MetalConst.OPT_DEFER_CLEARS, defer);
+            appliedDeferClears = defer;
+        }
+    }
+
+    /** Blocks until every queued GPU write into {@code buffer} has executed (see {@link CelestiaBuffer#map}). */
+    void awaitGpuWrites(CelestiaBuffer buffer) {
+        commandEncoder.awaitSerial(buffer.pendingGpuWriteSerial());
+    }
+
+    /** Native encoder counters for the most recently presented frame (see {@code MetalConst.STAT_*}). */
+    public long[] lastFrameStats() {
+        return commandEncoder.lastFrameStats();
     }
 
     @Override

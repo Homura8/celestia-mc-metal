@@ -64,23 +64,15 @@ public final class MetalNative {
     private static MethodHandle mhDeviceCreate;
     private static MethodHandle mhDeviceDestroy;
     private static MethodHandle mhDeviceIsMetal4;
-    private static MethodHandle mhDeviceIsLost;
-    private static MethodHandle mhDeviceCompletedSubmit;
-    private static MethodHandle mhDeviceNextSubmit;
-    private static MethodHandle mhDeviceLastGpuNs;
-    private static MethodHandle mhDeviceDrainErrors;
     private static MethodHandle mhDeviceWaitIdle;
 
     private static MethodHandle mhBufferCreate;
     private static MethodHandle mhBufferDestroy;
-    private static MethodHandle mhBufferContents;
     private static MethodHandle mhBufferWrite;
 
     private static MethodHandle mhTextureCreate;
     private static MethodHandle mhTextureDestroy;
     private static MethodHandle mhTextureViewCreate;
-    private static MethodHandle mhTextureBufferCreate;
-    private static MethodHandle mhTextureViewDestroy;
     private static MethodHandle mhSamplerCreate;
     private static MethodHandle mhSamplerDestroy;
 
@@ -94,38 +86,11 @@ public final class MetalNative {
     private static MethodHandle mhComputePipelineDestroy;
 
     private static MethodHandle mhCmdBegin;
-    private static MethodHandle mhCmdHasActive;
-    private static MethodHandle mhCmdSubmit;
-    private static MethodHandle mhWaitSubmit;
-    private static MethodHandle mhBlitClearColor;
-    private static MethodHandle mhBlitClearDepth;
-    private static MethodHandle mhBlitClearColorDepth;
-    private static MethodHandle mhBlitCopyBuffer;
-    private static MethodHandle mhBlitWriteTexture;
-    private static MethodHandle mhBlitCopyBufferToTexture;
-    private static MethodHandle mhBlitCopyTextureToBuffer;
-    private static MethodHandle mhBlitCopyTexture;
 
-    private static MethodHandle mhPassBegin;
-    private static MethodHandle mhPassEnd;
-    private static MethodHandle mhPassSetPipeline;
-    private static MethodHandle mhPassSetScissor;
-    private static MethodHandle mhPassSetUniformBuffer;
-    private static MethodHandle mhPassSetTextureSampler;
-    private static MethodHandle mhPassPushConstants;
-    private static MethodHandle mhPassSetVertexBuffer;
-    private static MethodHandle mhPassSetIndexBuffer;
-    private static MethodHandle mhPassDraw;
-    private static MethodHandle mhPassDrawIndexed;
-    private static MethodHandle mhPassMultiDraw;
-    private static MethodHandle mhPassMultiDrawIndexed;
-    private static MethodHandle mhPassDrawIndirect;
 
     private static MethodHandle mhSurfaceCreate;
     private static MethodHandle mhSurfaceDestroy;
     private static MethodHandle mhSurfaceConfigure;
-    private static MethodHandle mhSurfaceAcquire;
-    private static MethodHandle mhSurfaceBlitAndPresent;
 
     private static MethodHandle mhUpscalerCreate;
     private static MethodHandle mhUpscalerDestroy;
@@ -134,6 +99,68 @@ public final class MetalNative {
     private static MethodHandle mhComputeDispatch;
 
     private MetalNative() {}
+
+    /**
+     * Hot-path downcall handles held in {@code static final} fields so C2 can constant-fold and inline
+     * {@code invokeExact}. Initialized lazily on first use, after {@link #load()} has bound the library.
+     * Handles created with {@link Linker.Option#critical(boolean) critical(false)} skip the Java→native
+     * thread-state transition; they are used only for short, non-blocking calls that never upcall into
+     * Java and only receive native (off-heap) segments.
+     */
+    private static final class Hot {
+        private static final ValueLayout.OfInt I = ValueLayout.JAVA_INT;
+        private static final ValueLayout.OfLong L = ValueLayout.JAVA_LONG;
+        private static final ValueLayout.OfFloat F = ValueLayout.JAVA_FLOAT;
+        private static final ValueLayout.OfDouble D = ValueLayout.JAVA_DOUBLE;
+        private static final ValueLayout P = ValueLayout.ADDRESS;
+
+        static {
+            load();
+        }
+
+        static final MethodHandle mhPassSetPipeline = downcallCritical("cm_pass_set_pipeline", FunctionDescriptor.ofVoid(L, L));
+        static final MethodHandle mhPassSetScissor = downcallCritical("cm_pass_set_scissor", FunctionDescriptor.ofVoid(L, I, I, I, I, I));
+        static final MethodHandle mhPassSetUniformBuffer = downcallCritical("cm_pass_set_uniform_buffer", FunctionDescriptor.ofVoid(L, I, L, L));
+        static final MethodHandle mhPassSetTextureSampler = downcallCritical("cm_pass_set_texture_sampler", FunctionDescriptor.ofVoid(L, I, L, I, L));
+        static final MethodHandle mhPassPushConstants = downcallCritical("cm_pass_push_constants", FunctionDescriptor.ofVoid(L, I, P, I));
+        static final MethodHandle mhPassSetVertexBuffer = downcallCritical("cm_pass_set_vertex_buffer", FunctionDescriptor.ofVoid(L, I, L, L, I));
+        static final MethodHandle mhPassSetIndexBuffer = downcallCritical("cm_pass_set_index_buffer", FunctionDescriptor.ofVoid(L, L, I));
+        static final MethodHandle mhPassDraw = downcallCritical("cm_pass_draw", FunctionDescriptor.ofVoid(L, I, I, I, I, I));
+        static final MethodHandle mhPassDrawIndexed = downcallCritical("cm_pass_draw_indexed", FunctionDescriptor.ofVoid(L, I, L, I, I, I, I, I));
+        static final MethodHandle mhPassMultiDraw = downcallCritical("cm_pass_multi_draw", FunctionDescriptor.ofVoid(L, I, P, P, I, I, I));
+        static final MethodHandle mhPassMultiDrawIndexed = downcallCritical("cm_pass_multi_draw_indexed", FunctionDescriptor.ofVoid(L, I, P, P, P, I, I, I));
+        static final MethodHandle mhPassDrawIndirect = downcallCritical("cm_pass_draw_indirect", FunctionDescriptor.ofVoid(L, I, L, L, I, I, I));
+        static final MethodHandle mhCmdHasActive = downcallCritical("cm_cmd_has_active", FunctionDescriptor.of(I, L));
+        static final MethodHandle mhDeviceNextSubmit = downcallCritical("cm_device_next_submit", FunctionDescriptor.of(L, L));
+        static final MethodHandle mhDeviceCompletedSubmit = downcallCritical("cm_device_completed_submit", FunctionDescriptor.of(L, L));
+        static final MethodHandle mhDeviceLastGpuNs = downcallCritical("cm_device_last_gpu_ns", FunctionDescriptor.of(L, L));
+        static final MethodHandle mhDeviceIsLost = downcallCritical("cm_device_is_lost", FunctionDescriptor.of(I, L));
+        static final MethodHandle mhBufferContents = downcallCritical("cm_buffer_contents", FunctionDescriptor.of(L, L));
+        static final MethodHandle mhPassBegin = downcall("cm_pass_begin", FunctionDescriptor.of(I, L, P, P, P, I, L, I, D, I, I, I, I, P));
+        static final MethodHandle mhPassEnd = downcall("cm_pass_end", FunctionDescriptor.ofVoid(L));
+        static final MethodHandle mhCmdSubmit = downcall("cm_cmd_submit", FunctionDescriptor.of(L, L, I));
+        static final MethodHandle mhWaitSubmit = downcall("cm_wait_submit", FunctionDescriptor.of(I, L, L, L));
+        static final MethodHandle mhBlitClearColor = downcall("cm_blit_clear_color", FunctionDescriptor.ofVoid(L, L, F, F, F, F));
+        static final MethodHandle mhBlitClearDepth = downcall("cm_blit_clear_depth", FunctionDescriptor.ofVoid(L, L, D));
+        static final MethodHandle mhBlitClearColorDepth = downcall("cm_blit_clear_color_depth", FunctionDescriptor.ofVoid(L, L, F, F, F, F, L, D));
+        static final MethodHandle mhBlitCopyBuffer = downcall("cm_blit_copy_buffer", FunctionDescriptor.ofVoid(L, L, L, L, L, L));
+        static final MethodHandle mhBlitCopyBufferToTexture = downcall("cm_blit_copy_buffer_to_texture", FunctionDescriptor.ofVoid(L, L, L, I, L, I, I, I, I, I, I));
+        static final MethodHandle mhBlitCopyTextureToBuffer = downcall("cm_blit_copy_texture_to_buffer", FunctionDescriptor.ofVoid(L, L, I, I, I, I, I, I, L, L, I));
+        static final MethodHandle mhBlitCopyTexture = downcall("cm_blit_copy_texture", FunctionDescriptor.ofVoid(L, L, I, I, I, I, L, I, I, I, I, I, I));
+        static final MethodHandle mhBlitWriteTexture = downcall("cm_blit_write_texture", FunctionDescriptor.ofVoid(L, L, P, L, I, I, I, I, I, I, I));
+        static final MethodHandle mhSurfaceAcquire = downcall("cm_surface_acquire", FunctionDescriptor.of(I, L));
+        static final MethodHandle mhSurfaceBlitAndPresent = downcall("cm_surface_blit_and_present", FunctionDescriptor.ofVoid(L, L, L, I));
+        static final MethodHandle mhDeviceDrainErrors = downcall("cm_device_drain_errors", FunctionDescriptor.of(I, L, P, I));
+        static final MethodHandle mhTextureBufferCreate = downcall("cm_texture_buffer_create", FunctionDescriptor.of(L, L, L, L, L, I));
+        static final MethodHandle mhTextureViewDestroy = downcall("cm_texture_view_destroy", FunctionDescriptor.ofVoid(L, L));
+        static final MethodHandle mhPassFinish = downcallCritical("cm_pass_finish", FunctionDescriptor.ofVoid(L));
+        static final MethodHandle mhPassMultiDrawPacked = downcallCritical("cm_pass_multi_draw_packed", FunctionDescriptor.ofVoid(L, I, P, I, I, I));
+        static final MethodHandle mhPassMultiDrawIndexedPacked = downcallCritical("cm_pass_multi_draw_indexed_packed", FunctionDescriptor.ofVoid(L, I, P, I, L, I, I));
+        static final MethodHandle mhDeviceStats = downcallCritical("cm_device_stats", FunctionDescriptor.ofVoid(L, P, I));
+        static final MethodHandle mhDeviceSetOption = downcall("cm_device_set_option", FunctionDescriptor.ofVoid(L, I, I));
+
+        private Hot() {}
+    }
 
     public static synchronized void load() {
         if (loaded) return;
@@ -182,6 +209,11 @@ public final class MetalNative {
         return LINKER.downcallHandle(sym, desc);
     }
 
+    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
+        MemorySegment sym = lookup.find(name).orElseThrow(() -> new UnsatisfiedLinkError("Missing symbol: " + name));
+        return LINKER.downcallHandle(sym, desc, Linker.Option.critical(false));
+    }
+
     private static void bindHandles() {
         ValueLayout.OfInt I = ValueLayout.JAVA_INT;
         ValueLayout.OfLong L = ValueLayout.JAVA_LONG;
@@ -195,23 +227,15 @@ public final class MetalNative {
         mhDeviceCreate = downcall("cm_device_create", FunctionDescriptor.of(L, I, I, P));
         mhDeviceDestroy = downcall("cm_device_destroy", FunctionDescriptor.ofVoid(L));
         mhDeviceIsMetal4 = downcall("cm_device_is_metal4", FunctionDescriptor.of(I, L));
-        mhDeviceIsLost = downcall("cm_device_is_lost", FunctionDescriptor.of(I, L));
-        mhDeviceCompletedSubmit = downcall("cm_device_completed_submit", FunctionDescriptor.of(L, L));
-        mhDeviceNextSubmit = downcall("cm_device_next_submit", FunctionDescriptor.of(L, L));
-        mhDeviceLastGpuNs = downcall("cm_device_last_gpu_ns", FunctionDescriptor.of(L, L));
-        mhDeviceDrainErrors = downcall("cm_device_drain_errors", FunctionDescriptor.of(I, L, P, I));
         mhDeviceWaitIdle = downcall("cm_device_wait_idle", FunctionDescriptor.ofVoid(L));
 
         mhBufferCreate = downcall("cm_buffer_create", FunctionDescriptor.of(L, L, L, P, P));
         mhBufferDestroy = downcall("cm_buffer_destroy", FunctionDescriptor.ofVoid(L, L));
-        mhBufferContents = downcall("cm_buffer_contents", FunctionDescriptor.of(L, L));
         mhBufferWrite = downcall("cm_buffer_write", FunctionDescriptor.ofVoid(L, L, P, L));
 
         mhTextureCreate = downcall("cm_texture_create", FunctionDescriptor.of(L, L, I, I, I, I, I, I, I, I, I, P));
         mhTextureDestroy = downcall("cm_texture_destroy", FunctionDescriptor.ofVoid(L, L));
         mhTextureViewCreate = downcall("cm_texture_view_create", FunctionDescriptor.of(L, L, L, I, I));
-        mhTextureBufferCreate = downcall("cm_texture_buffer_create", FunctionDescriptor.of(L, L, L, L, L, I));
-        mhTextureViewDestroy = downcall("cm_texture_view_destroy", FunctionDescriptor.ofVoid(L, L));
         mhSamplerCreate = downcall("cm_sampler_create", FunctionDescriptor.of(L, L, I, I, I, I, I, I, I, I));
         mhSamplerDestroy = downcall("cm_sampler_destroy", FunctionDescriptor.ofVoid(L, L));
 
@@ -226,39 +250,12 @@ public final class MetalNative {
         mhComputePipelineDestroy = downcall("cm_compute_pipeline_destroy", FunctionDescriptor.ofVoid(L, L));
 
         mhCmdBegin = downcall("cm_cmd_begin", FunctionDescriptor.ofVoid(L));
-        mhCmdHasActive = downcall("cm_cmd_has_active", FunctionDescriptor.of(I, L));
-        mhCmdSubmit = downcall("cm_cmd_submit", FunctionDescriptor.of(L, L, I));
-        mhWaitSubmit = downcall("cm_wait_submit", FunctionDescriptor.of(I, L, L, L));
 
-        mhBlitClearColor = downcall("cm_blit_clear_color", FunctionDescriptor.ofVoid(L, L, F, F, F, F));
-        mhBlitClearDepth = downcall("cm_blit_clear_depth", FunctionDescriptor.ofVoid(L, L, D));
-        mhBlitClearColorDepth = downcall("cm_blit_clear_color_depth", FunctionDescriptor.ofVoid(L, L, F, F, F, F, L, D));
-        mhBlitCopyBuffer = downcall("cm_blit_copy_buffer", FunctionDescriptor.ofVoid(L, L, L, L, L, L));
-        mhBlitWriteTexture = downcall("cm_blit_write_texture", FunctionDescriptor.ofVoid(L, L, P, L, I, I, I, I, I, I, I));
-        mhBlitCopyBufferToTexture = downcall("cm_blit_copy_buffer_to_texture", FunctionDescriptor.ofVoid(L, L, L, I, L, I, I, I, I, I, I));
-        mhBlitCopyTextureToBuffer = downcall("cm_blit_copy_texture_to_buffer", FunctionDescriptor.ofVoid(L, L, I, I, I, I, I, I, L, L, I));
-        mhBlitCopyTexture = downcall("cm_blit_copy_texture", FunctionDescriptor.ofVoid(L, L, I, I, I, I, L, I, I, I, I, I, I));
 
-        mhPassBegin = downcall("cm_pass_begin", FunctionDescriptor.of(I, L, P, P, P, I, L, I, D, I, I, I, I, P));
-        mhPassEnd = downcall("cm_pass_end", FunctionDescriptor.ofVoid(L));
-        mhPassSetPipeline = downcall("cm_pass_set_pipeline", FunctionDescriptor.ofVoid(L, L));
-        mhPassSetScissor = downcall("cm_pass_set_scissor", FunctionDescriptor.ofVoid(L, I, I, I, I, I));
-        mhPassSetUniformBuffer = downcall("cm_pass_set_uniform_buffer", FunctionDescriptor.ofVoid(L, I, L, L));
-        mhPassSetTextureSampler = downcall("cm_pass_set_texture_sampler", FunctionDescriptor.ofVoid(L, I, L, I, L));
-        mhPassPushConstants = downcall("cm_pass_push_constants", FunctionDescriptor.ofVoid(L, I, P, I));
-        mhPassSetVertexBuffer = downcall("cm_pass_set_vertex_buffer", FunctionDescriptor.ofVoid(L, I, L, L, I));
-        mhPassSetIndexBuffer = downcall("cm_pass_set_index_buffer", FunctionDescriptor.ofVoid(L, L, I));
-        mhPassDraw = downcall("cm_pass_draw", FunctionDescriptor.ofVoid(L, I, I, I, I, I));
-        mhPassDrawIndexed = downcall("cm_pass_draw_indexed", FunctionDescriptor.ofVoid(L, I, L, I, I, I, I, I));
-        mhPassMultiDraw = downcall("cm_pass_multi_draw", FunctionDescriptor.ofVoid(L, I, P, P, I, I, I));
-        mhPassMultiDrawIndexed = downcall("cm_pass_multi_draw_indexed", FunctionDescriptor.ofVoid(L, I, P, P, P, I, I, I));
-        mhPassDrawIndirect = downcall("cm_pass_draw_indirect", FunctionDescriptor.ofVoid(L, I, L, L, I, I, I));
 
         mhSurfaceCreate = downcall("cm_surface_create", FunctionDescriptor.of(L, L, L, I));
         mhSurfaceDestroy = downcall("cm_surface_destroy", FunctionDescriptor.ofVoid(L, L));
         mhSurfaceConfigure = downcall("cm_surface_configure", FunctionDescriptor.ofVoid(L, I, I, I, I));
-        mhSurfaceAcquire = downcall("cm_surface_acquire", FunctionDescriptor.of(I, L));
-        mhSurfaceBlitAndPresent = downcall("cm_surface_blit_and_present", FunctionDescriptor.ofVoid(L, L, L, I));
 
         mhUpscalerCreate = downcall("cm_upscaler_create", FunctionDescriptor.of(L, L, I, I, I, I, I, I, I, I));
         mhUpscalerDestroy = downcall("cm_upscaler_destroy", FunctionDescriptor.ofVoid(L, L));
@@ -324,29 +321,41 @@ public final class MetalNative {
     }
 
     public static boolean deviceIsLost(long ctx) {
-        try { return ((int) mhDeviceIsLost.invokeExact(ctx)) != 0; } catch (Throwable t) { return true; }
+        try { return ((int) Hot.mhDeviceIsLost.invokeExact(ctx)) != 0; } catch (Throwable t) { return true; }
     }
 
     public static long deviceCompletedSubmit(long ctx) {
-        try { return (long) mhDeviceCompletedSubmit.invokeExact(ctx); } catch (Throwable t) { return 0L; }
+        try { return (long) Hot.mhDeviceCompletedSubmit.invokeExact(ctx); } catch (Throwable t) { return 0L; }
     }
 
     public static long deviceNextSubmit(long ctx) {
-        try { return (long) mhDeviceNextSubmit.invokeExact(ctx); } catch (Throwable t) { return 0L; }
+        try { return (long) Hot.mhDeviceNextSubmit.invokeExact(ctx); } catch (Throwable t) { return 0L; }
     }
 
     public static long deviceLastGpuNs(long ctx) {
-        try { return (long) mhDeviceLastGpuNs.invokeExact(ctx); } catch (Throwable t) { return 0L; }
+        try { return (long) Hot.mhDeviceLastGpuNs.invokeExact(ctx); } catch (Throwable t) { return 0L; }
     }
 
-    public static String deviceDrainErrors(long ctx) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment buf = arena.allocate(4096);
-            int count = (int) mhDeviceDrainErrors.invokeExact(ctx, buf, 4096);
-            return count > 0 ? buf.getString(0) : "";
+    private static MemorySegment errorScratch;
+
+    public static synchronized String deviceDrainErrors(long ctx) {
+        try {
+            if (errorScratch == null) errorScratch = Arena.global().allocate(4096);
+            errorScratch.set(ValueLayout.JAVA_BYTE, 0, (byte) 0);
+            int count = (int) Hot.mhDeviceDrainErrors.invokeExact(ctx, errorScratch, 4096);
+            return count > 0 ? errorScratch.getString(0) : "";
         } catch (Throwable t) {
             return "";
         }
+    }
+
+    public static void deviceSetOption(long ctx, int option, int value) {
+        try { Hot.mhDeviceSetOption.invokeExact(ctx, option, value); } catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    /** Copies cumulative native encoder counters (see {@link MetalConst#STAT_COUNT}) into {@code out}. */
+    public static void deviceStats(long ctx, MemorySegment out, int count) {
+        try { Hot.mhDeviceStats.invokeExact(ctx, out, count); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void deviceWaitIdle(long ctx) {
@@ -369,7 +378,7 @@ public final class MetalNative {
     }
 
     public static long bufferContents(long buf) {
-        try { return (long) mhBufferContents.invokeExact(buf); } catch (Throwable t) { throw new RuntimeException(t); }
+        try { return (long) Hot.mhBufferContents.invokeExact(buf); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void bufferWrite(long buf, long offset, MemorySegment src, long length) {
@@ -394,12 +403,12 @@ public final class MetalNative {
     }
 
     public static long textureBufferCreate(long ctx, long buf, long offset, long lengthBytes, int format) {
-        try { return (long) mhTextureBufferCreate.invokeExact(ctx, buf, offset, lengthBytes, format); }
+        try { return (long) Hot.mhTextureBufferCreate.invokeExact(ctx, buf, offset, lengthBytes, format); }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void textureViewDestroy(long ctx, long view) {
-        try { mhTextureViewDestroy.invokeExact(ctx, view); } catch (Throwable t) { throw new RuntimeException(t); }
+        try { Hot.mhTextureViewDestroy.invokeExact(ctx, view); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static long samplerCreate(long ctx, int u, int v, int minF, int magF, int mipF,
@@ -487,55 +496,55 @@ public final class MetalNative {
     }
 
     public static boolean cmdHasActive(long ctx) {
-        try { return ((int) mhCmdHasActive.invokeExact(ctx)) != 0; } catch (Throwable t) { return false; }
+        try { return ((int) Hot.mhCmdHasActive.invokeExact(ctx)) != 0; } catch (Throwable t) { return false; }
     }
 
     public static long cmdSubmit(long ctx, int maxInFlight) {
-        try { return (long) mhCmdSubmit.invokeExact(ctx, maxInFlight); } catch (Throwable t) { throw new RuntimeException(t); }
+        try { return (long) Hot.mhCmdSubmit.invokeExact(ctx, maxInFlight); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static boolean waitSubmit(long ctx, long serial, long timeoutNs) {
-        try { return ((int) mhWaitSubmit.invokeExact(ctx, serial, timeoutNs)) != 0; }
+        try { return ((int) Hot.mhWaitSubmit.invokeExact(ctx, serial, timeoutNs)) != 0; }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void blitClearColor(long ctx, long tex, float r, float g, float b, float a) {
-        try { mhBlitClearColor.invokeExact(ctx, tex, r, g, b, a); } catch (Throwable t) { throw new RuntimeException(t); }
+        try { Hot.mhBlitClearColor.invokeExact(ctx, tex, r, g, b, a); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void blitClearDepth(long ctx, long tex, double depth) {
-        try { mhBlitClearDepth.invokeExact(ctx, tex, depth); } catch (Throwable t) { throw new RuntimeException(t); }
+        try { Hot.mhBlitClearDepth.invokeExact(ctx, tex, depth); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void blitClearColorDepth(long ctx, long ctex, float r, float g, float b, float a, long dtex, double depth) {
-        try { mhBlitClearColorDepth.invokeExact(ctx, ctex, r, g, b, a, dtex, depth); } catch (Throwable t) { throw new RuntimeException(t); }
+        try { Hot.mhBlitClearColorDepth.invokeExact(ctx, ctex, r, g, b, a, dtex, depth); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void blitCopyBuffer(long ctx, long srcBuf, long srcOff, long dstBuf, long dstOff, long size) {
-        try { mhBlitCopyBuffer.invokeExact(ctx, srcBuf, srcOff, dstBuf, dstOff, size); } catch (Throwable t) { throw new RuntimeException(t); }
+        try { Hot.mhBlitCopyBuffer.invokeExact(ctx, srcBuf, srcOff, dstBuf, dstOff, size); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void blitWriteTexture(long ctx, long tex, MemorySegment srcData, long dataSize,
                                         int rowStride, int mip, int slice, int x, int y, int w, int h) {
-        try { mhBlitWriteTexture.invokeExact(ctx, tex, srcData, dataSize, rowStride, mip, slice, x, y, w, h); }
+        try { Hot.mhBlitWriteTexture.invokeExact(ctx, tex, srcData, dataSize, rowStride, mip, slice, x, y, w, h); }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void blitCopyBufferToTexture(long ctx, long srcBuf, long srcOff, int rowBytes,
                                                long dstTex, int mip, int slice, int dstX, int dstY, int w, int h) {
-        try { mhBlitCopyBufferToTexture.invokeExact(ctx, srcBuf, srcOff, rowBytes, dstTex, mip, slice, dstX, dstY, w, h); }
+        try { Hot.mhBlitCopyBufferToTexture.invokeExact(ctx, srcBuf, srcOff, rowBytes, dstTex, mip, slice, dstX, dstY, w, h); }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void blitCopyTextureToBuffer(long ctx, long srcTex, int mip, int slice, int srcX, int srcY,
                                                int w, int h, long dstBuf, long dstOff, int rowBytes) {
-        try { mhBlitCopyTextureToBuffer.invokeExact(ctx, srcTex, mip, slice, srcX, srcY, w, h, dstBuf, dstOff, rowBytes); }
+        try { Hot.mhBlitCopyTextureToBuffer.invokeExact(ctx, srcTex, mip, slice, srcX, srcY, w, h, dstBuf, dstOff, rowBytes); }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void blitCopyTexture(long ctx, long srcTex, int srcMip, int srcSlice, int srcX, int srcY,
                                          long dstTex, int dstMip, int dstSlice, int dstX, int dstY, int w, int h) {
-        try { mhBlitCopyTexture.invokeExact(ctx, srcTex, srcMip, srcSlice, srcX, srcY, dstTex, dstMip, dstSlice, dstX, dstY, w, h); }
+        try { Hot.mhBlitCopyTexture.invokeExact(ctx, srcTex, srcMip, srcSlice, srcX, srcY, dstTex, dstMip, dstSlice, dstX, dstY, w, h); }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 
@@ -543,9 +552,19 @@ public final class MetalNative {
                                     MemorySegment colorClearsRgba, int colorCount,
                                     long depthView, boolean depthClearFlag, double depthClear,
                                     int areaX, int areaY, int areaW, int areaH, String label) {
+        if (label == null) {
+            try {
+                return ((int) Hot.mhPassBegin.invokeExact(ctx,
+                    segOrNull(colorViews),
+                    segOrNull(colorClearsFlags),
+                    segOrNull(colorClearsRgba),
+                    colorCount, depthView, depthClearFlag ? 1 : 0, depthClear,
+                    areaX, areaY, areaW, areaH, MemorySegment.NULL)) != 0;
+            } catch (Throwable t) { throw new RuntimeException(t); }
+        }
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment lbl = label != null ? arena.allocateFrom(label) : MemorySegment.NULL;
-            return ((int) mhPassBegin.invokeExact(ctx,
+            MemorySegment lbl = arena.allocateFrom(label);
+            return ((int) Hot.mhPassBegin.invokeExact(ctx,
                 segOrNull(colorViews),
                 segOrNull(colorClearsFlags),
                 segOrNull(colorClearsRgba),
@@ -554,64 +573,83 @@ public final class MetalNative {
         } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
+    /** Hard end: always closes the native render encoder. */
     public static void passEnd(long ctx) {
-        try { mhPassEnd.invokeExact(ctx); } catch (Throwable t) { throw new RuntimeException(t); }
+        try { Hot.mhPassEnd.invokeExact(ctx); } catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    /** Soft end used per RenderPearl pass: lets the next compatible pass merge into the open encoder. */
+    public static void passFinish(long ctx) {
+        try { Hot.mhPassFinish.invokeExact(ctx); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void passSetPipeline(long ctx, long pipe) {
-        try { mhPassSetPipeline.invokeExact(ctx, pipe); } catch (Throwable t) { throw new RuntimeException(t); }
+        try { Hot.mhPassSetPipeline.invokeExact(ctx, pipe); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void passSetScissor(long ctx, boolean enabled, int x, int y, int w, int h) {
-        try { mhPassSetScissor.invokeExact(ctx, enabled ? 1 : 0, x, y, w, h); } catch (Throwable t) { throw new RuntimeException(t); }
+        try { Hot.mhPassSetScissor.invokeExact(ctx, enabled ? 1 : 0, x, y, w, h); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void passSetUniformBuffer(long ctx, int slot, long buf, long offset) {
-        try { mhPassSetUniformBuffer.invokeExact(ctx, slot, buf, offset); } catch (Throwable t) { throw new RuntimeException(t); }
+        try { Hot.mhPassSetUniformBuffer.invokeExact(ctx, slot, buf, offset); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void passSetTextureSampler(long ctx, int texSlot, long view, int sampSlot, long samp) {
-        try { mhPassSetTextureSampler.invokeExact(ctx, texSlot, view, sampSlot, samp); } catch (Throwable t) { throw new RuntimeException(t); }
+        try { Hot.mhPassSetTextureSampler.invokeExact(ctx, texSlot, view, sampSlot, samp); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void passPushConstants(long ctx, int slot, MemorySegment data, int size) {
-        try { mhPassPushConstants.invokeExact(ctx, slot, data, size); } catch (Throwable t) { throw new RuntimeException(t); }
+        try { Hot.mhPassPushConstants.invokeExact(ctx, slot, data, size); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void passSetVertexBuffer(long ctx, int slot, long buf, long offset, int stride) {
-        try { mhPassSetVertexBuffer.invokeExact(ctx, slot, buf, offset, stride); } catch (Throwable t) { throw new RuntimeException(t); }
+        try { Hot.mhPassSetVertexBuffer.invokeExact(ctx, slot, buf, offset, stride); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void passSetIndexBuffer(long ctx, long buf, boolean isInt32) {
-        try { mhPassSetIndexBuffer.invokeExact(ctx, buf, isInt32 ? 1 : 0); } catch (Throwable t) { throw new RuntimeException(t); }
+        try { Hot.mhPassSetIndexBuffer.invokeExact(ctx, buf, isInt32 ? 1 : 0); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void passDraw(long ctx, int topo, int vtxCount, int instCount, int firstVtx, int firstInst) {
-        try { mhPassDraw.invokeExact(ctx, topo, vtxCount, instCount, firstVtx, firstInst); }
+        try { Hot.mhPassDraw.invokeExact(ctx, topo, vtxCount, instCount, firstVtx, firstInst); }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void passDrawIndexed(long ctx, int topo, long idxBufOff, int idxCount, int instCount,
                                        int baseVtx, int firstIdx, int firstInst) {
-        try { mhPassDrawIndexed.invokeExact(ctx, topo, idxBufOff, idxCount, instCount, baseVtx, firstIdx, firstInst); }
+        try { Hot.mhPassDrawIndexed.invokeExact(ctx, topo, idxBufOff, idxCount, instCount, baseVtx, firstIdx, firstInst); }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void passMultiDraw(long ctx, int topo, MemorySegment firstVtx, MemorySegment vtxCounts,
                                      int count, int instCount, int firstInst) {
-        try { mhPassMultiDraw.invokeExact(ctx, topo, firstVtx, vtxCounts, count, instCount, firstInst); }
+        try { Hot.mhPassMultiDraw.invokeExact(ctx, topo, firstVtx, vtxCounts, count, instCount, firstInst); }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void passMultiDrawIndexed(long ctx, int topo, MemorySegment idxOffsets, MemorySegment idxCounts,
                                             MemorySegment baseVtx, int count, int instCount, int firstInst) {
-        try { mhPassMultiDrawIndexed.invokeExact(ctx, topo, idxOffsets, idxCounts,
+        try { Hot.mhPassMultiDrawIndexed.invokeExact(ctx, topo, idxOffsets, idxCounts,
             segOrNull(baseVtx), count, instCount, firstInst); }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 
+    /** {@code cmds} holds {@code count} interleaved {@code {firstVertex, vertexCount}} uint32 pairs (native memory). */
+    public static void passMultiDrawPacked(long ctx, int topo, MemorySegment cmds, int count, int instCount, int firstInst) {
+        try { Hot.mhPassMultiDrawPacked.invokeExact(ctx, topo, cmds, count, instCount, firstInst); }
+        catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    /** {@code cmds} holds {@code count} interleaved {@code {firstIndex, indexCount, vertexOffset}} triples (native memory). */
+    public static void passMultiDrawIndexedPacked(long ctx, int topo, MemorySegment cmds, int count,
+                                                  long indexBaseOffset, int instCount, int firstInst) {
+        try { Hot.mhPassMultiDrawIndexedPacked.invokeExact(ctx, topo, cmds, count, indexBaseOffset, instCount, firstInst); }
+        catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
     public static void passDrawIndirect(long ctx, int topo, long indBuf, long off, int count, int stride, boolean indexed) {
-        try { mhPassDrawIndirect.invokeExact(ctx, topo, indBuf, off, count, stride, indexed ? 1 : 0); }
+        try { Hot.mhPassDrawIndirect.invokeExact(ctx, topo, indBuf, off, count, stride, indexed ? 1 : 0); }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 
@@ -630,11 +668,11 @@ public final class MetalNative {
     }
 
     public static boolean surfaceAcquire(long surf) {
-        try { return ((int) mhSurfaceAcquire.invokeExact(surf)) != 0; } catch (Throwable t) { throw new RuntimeException(t); }
+        try { return ((int) Hot.mhSurfaceAcquire.invokeExact(surf)) != 0; } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static void surfaceBlitAndPresent(long ctx, long surf, long srcView, int maxInFlight) {
-        try { mhSurfaceBlitAndPresent.invokeExact(ctx, surf, srcView, maxInFlight); }
+        try { Hot.mhSurfaceBlitAndPresent.invokeExact(ctx, surf, srcView, maxInFlight); }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 

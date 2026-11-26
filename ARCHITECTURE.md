@@ -61,9 +61,9 @@ Plugs directly into Minecraft 26.3's `com.mojang.renderpearl` abstraction via `P
 
 ## Roadmap for Upcoming Alpha Releases
 
-1. **Zero-Allocation Hot-Path FFM & Metal 4 Binding Optimization**:
-   - Replace per-call `Arena.ofConfined()` allocations in `CelestiaCommandEncoder.createRenderPass`, `CelestiaRenderPass.multiDraw`/`multiDrawIndexed`, and `MetalNative.deviceDrainErrors` with reusable per-encoder scratch `MemorySegment`s and zero-copy direct `IntBuffer` pointers, and skip error-string draining when the native error count is `0`.
-   - Deduplicate Metal 4 uniform and vertex buffer GPU addresses (`setAddress:atIndex:`) in `cm_encoder.m`, and accumulate GPU timestamps across all command submissions within a frame so the Performance HUD pill reports true total GPU work alongside CPU frame time.
+1. **Remaining Hot-Path Work** (render pass merging, deferred clears, `static final` critical FFM handles, scratch memory, packed multi-draws, and Metal 4 address dedup landed in `0.1.0-alpha.11`):
+   - Cache `TEXEL_BUFFER` texture views across passes instead of creating/retiring one per pass.
+   - Accumulate GPU timestamps across all command submissions within a frame so the Performance HUD pill reports true total GPU work alongside CPU frame time.
 2. **In-Game G-Buffer & Shadow Injection Hook**: Patch live `LevelRenderer` terrain/entity/water passes to populate `gAlbedo` / `gData` / `waterMask` and execute the 2-cascade shadow pass directly inside the active world frame so `Celestia Native` and `Celestia Minimal` render live in-world.
 3. **Iris Full Frame-Graph Executor**: Extend `IrisGlslBridge` from shader/option parsing & translation to full multi-pass deferred/composite/shadow execution for third-party Iris packs.
 4. **Terrain Indirect & Distant LOD Mesher**: Optional standalone chunk mesh arena & GPU frustum/Hi-Z culling when running without Sodium.
