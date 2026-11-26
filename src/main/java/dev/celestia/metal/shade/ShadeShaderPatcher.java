@@ -36,6 +36,7 @@ public final class ShadeShaderPatcher {
     public enum Variant {
         BASE,
         HDR_WORLD,
+        HDR_WORLD_WATER_ABOVE,
         HDR_HAND
     }
 
@@ -125,17 +126,25 @@ public final class ShadeShaderPatcher {
     }
 
     public static String postSource() {
-        return prelude(true, false, null) + resource("shade_post.metal") + "\n";
+        return prelude(true, false, "#define CELESTIA_VL_COMPOSITE 1\n#define CELESTIA_SSAO 1")
+            + resource("vl.metal") + "\n" + resource("ssao.metal") + "\n" + resource("shade_post.metal") + "\n";
+    }
+
+    public static String atmosphereSource() {
+        return prelude(true, false, "#define CELESTIA_VL_MARCH 1\n#define SHADE_WX_NOISE_BAKE 1", false)
+            + resource("shade_post.metal") + "\n" + resource("clouds.metal") + "\n"
+            + resource("vl.metal") + "\n" + resource("weather_surface.metal") + "\n";
     }
 
     public static String waterDefines() {
-        return """
+        int budget = Math.clamp(Integer.getInteger("celestiametal.shade.water.ssrBudget", 24), 8, 32);
+        String quad = !"false".equalsIgnoreCase(System.getProperty("celestiametal.shade.water.ssrQuad"))
+            ? "#define SHADE_SSR_QUAD 1\n#define SHADE_SSRH_OWN 1\n" : "";
+        return quad + "#define SHADE_SSRH_BUDGET " + budget + "\n" + """
             #define SHADE_WATER 1
             #define SHADE_SSR 1
             #define SHADE_SSR_HIER 1
             #define SHADE_SSRH_THICK 2.0
-            #define SHADE_SSRH_BUDGET 32
-            #define SHADE_SSRH_OWN 1
             #define SHADE_SSRH_THIN 1
             #define SHADE_SSR_STEPS 24
             #define SHADE_SSR_RAWZ 1
@@ -154,11 +163,9 @@ public final class ShadeShaderPatcher {
             #define SHADE_WATER_DETAIL_SIZE 256
             #define SHADE_WATER_DETAIL_FAR 112.0
             #define SHADE_WATER_PATTERN_FAR 0.075
-            #define SHADE_WATER_DETAIL_EXTRAS 1
             #define SHADE_WATER_SMOOTH 1
             #define SHADE_WATER_GLINT_GRAZE 1
             #define SHADE_WAVE_BAKE 1
-            #define SHADE_WAVE_BAKE_SIZE 1024
             #define SHADE_WATER_SWELL 1
             #define SHADE_WATER_SWELL_BAKED 1
             #define SHADE_WATER_GLITTER 1
@@ -241,7 +248,8 @@ public final class ShadeShaderPatcher {
             if (terrain != null) return terrain;
         }
         if (baseFs != null && isTranslucentTerrain(lower, baseVs)) {
-            PatchedStages waterTerrain = patchTranslucentTerrain(lower, baseVs, baseVsEntry, baseFs, baseFsEntry);
+            PatchedStages waterTerrain = patchTerrainCommon(lower, baseVs, baseVsEntry, baseFs, baseFsEntry,
+                true, variant == Variant.HDR_WORLD_WATER_ABOVE);
             if (waterTerrain != null) return waterTerrain;
         }
 
@@ -329,19 +337,13 @@ public final class ShadeShaderPatcher {
     static PatchedStages patchTerrain(String pipelineNameLower,
                                       String vsMsl, String vsEntry,
                                       String fsMsl, String fsEntry) {
-        return patchTerrainCommon(pipelineNameLower, vsMsl, vsEntry, fsMsl, fsEntry, false);
-    }
-
-    static PatchedStages patchTranslucentTerrain(String pipelineNameLower,
-                                                 String vsMsl, String vsEntry,
-                                                 String fsMsl, String fsEntry) {
-        return patchTerrainCommon(pipelineNameLower, vsMsl, vsEntry, fsMsl, fsEntry, true);
+        return patchTerrainCommon(pipelineNameLower, vsMsl, vsEntry, fsMsl, fsEntry, false, false);
     }
 
     private static PatchedStages patchTerrainCommon(String pipelineNameLower,
                                                     String vsMsl, String vsEntry,
                                                     String fsMsl, String fsEntry,
-                                                    boolean translucentWater) {
+                                                    boolean translucentWater, boolean aboveWater) {
         if (vsMsl == null || fsMsl == null) return null;
         boolean sodium = isSodiumTerrainVs(vsMsl);
         String inVs = structBody(vsMsl, "main0_in");
@@ -453,7 +455,10 @@ public final class ShadeShaderPatcher {
                 + ", celLut, celLutSmplr, celShadow, celShadowCmp, celSF, celSL, celSG, celSR"
                 + ", celSceneCopy, celDepthCopy, celWP, celWaterWaves, celWaterCoarse, celWaterDetail);\n";
 
-            fs.append(prelude(true, false, waterDefines(), false));
+            String defines = waterDefines() + "#define SHADE_WEATHER 1\n#define SHADE_RIPPLES 1\n#define SHADE_RIPPLE_LAYERS 1\n";
+            if (aboveWater) defines += "#define SHADE_LEAN_ABOVE 1\n";
+            fs.append(prelude(true, false, defines, false));
+            fs.append(resource("weather_surface.metal")).append('\n');
             fs.append(resource("water.metal")).append('\n');
             fs.append(resource("shade_water_terrain.metal")).append('\n');
         } else {
@@ -463,6 +468,7 @@ public final class ShadeShaderPatcher {
                 + ", celLut, celLutSmplr, celShadow, celShadowCmp, celSF, celSL, celSG, celSR);\n";
 
             fs.append(prelude(true, false, null, false));
+            fs.append(resource("weather_surface.metal")).append('\n');
             fs.append(resource("shade_terrain.metal")).append('\n');
         }
 

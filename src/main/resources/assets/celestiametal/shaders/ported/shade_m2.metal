@@ -22,8 +22,27 @@
 #define SHADE_CLOUD_DEV_AP_SUN 32
 static inline bool shadeCloudDev(constant ShadeLook &L, int bit) { (void)L; (void)bit; return false; }
 static inline float shadeCloudShadow(float3 p, constant ShadeLook &L, texture2d<half> tex) { (void)p; (void)L; (void)tex; return 1.0; }
-static inline float4 shadeCloudsScreen(float3 dir, constant ShadeLook &L, texture2d<half> tex) { (void)dir; (void)L; (void)tex; return float4(0.0, 0.0, 0.0, 1.0); }
-static inline float4 shadeCloudsDome(float3 dir, constant ShadeLook &L, texture2d<half> tex) { (void)dir; (void)L; (void)tex; return float4(0.0, 0.0, 0.0, 1.0); }
+static inline float4 shadeCloudsScreen(float3 dir, constant ShadeLook &L, texture2d<half> tex) {
+	if (L.clouds0.w > 0.5) {
+		float4 clip = L.viewProjNoJitter * float4(dir, 0.0);
+		if (clip.w > 1e-4) {
+			float2 uv = clip.xy / clip.w * 0.5 + 0.5;
+			if (all(uv >= 0.0) && all(uv <= 1.0)) {
+				constexpr sampler linear(filter::linear, address::clamp_to_edge);
+				return float4(tex.sample(linear, uv, level(0.0)));
+			}
+		}
+	}
+	return float4(0.0, 0.0, 0.0, 1.0);
+}
+static inline float4 shadeCloudsDome(float3 dir, constant ShadeLook &L, texture2d<half> tex) {
+	if (L.clouds1.x > 0.5 && dir.y >= 0.0) {
+		constexpr sampler linear(filter::linear, s_address::repeat, t_address::clamp_to_edge);
+		float2 uv = float2(atan2(dir.z, dir.x) * (1.0 / 6.2831853) + 0.5, sqrt(saturate(dir.y)));
+		return float4(tex.sample(linear, uv, level(0.0)));
+	}
+	return float4(0.0, 0.0, 0.0, 1.0);
+}
 #endif
 
 #ifndef MCOPT_SHADE_DIMS

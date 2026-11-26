@@ -184,6 +184,13 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
 
             CompiledStages compiled = tryCompileStages(patched.vsSource(), patched.vsEntry(),
                 patched.fsSource(), patched.fsEntry(), variant);
+            if (compiled == null && variant == ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE) {
+                // The unspecialized HDR variant is compatible with both camera states.
+                CompiledStages world = resolveStages(ShadeShaderPatcher.Variant.HDR_WORLD);
+                CompiledStages fallback = new CompiledStages(world.vsLib(), world.fsLib(), world.vsFn(), world.fsFn(), false);
+                variantStages.put(variant, fallback);
+                return fallback;
+            }
             if (compiled == null && variant == ShadeShaderPatcher.Variant.HDR_WORLD && baseFsMsl != null) {
                 // Fallback from rich terrain/entity/sky patch to generic HDR fragment conversion
                 String genericFs = ShadeShaderPatcher.patchHdrFragment(baseFsMsl);

@@ -6,11 +6,15 @@ import com.mojang.renderpearl.api.commands.CommandEncoder;
 import com.mojang.renderpearl.api.textures.GpuTexture;
 import dev.celestia.metal.backend.CelestiaMetalDevice;
 import dev.celestia.metal.perf.PerformanceEngine;
+import dev.celestia.metal.render.TemporalUpscaler;
 import dev.celestia.metal.render.WorldRenderScale;
 import dev.celestia.metal.shade.CelestiaShade;
 import dev.celestia.metal.shader.pack.ShaderPipelineManager;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.client.renderer.state.OptionsRenderState;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
+import net.minecraft.client.renderer.state.level.PlayerRenderState;
 import org.joml.Matrix4f;
 import org.joml.Vector4fc;
 import org.spongepowered.asm.mixin.Final;
@@ -83,9 +87,22 @@ public final class GameRendererMixin {
     }
 
     @Inject(method = "renderLevel", at = @At(value = "INVOKE",
-        target = "Lcom/mojang/blaze3d/systems/RenderSystem;setProjectionMatrix(Lcom/mojang/renderpearl/api/buffers/GpuBufferSlice;Lcom/mojang/blaze3d/ProjectionType;)V"))
-    private void celestiametal$shadeProjection(CallbackInfo ci, @Local Matrix4f projectionMatrix) {
-        CelestiaShade.recordProjection(projectionMatrix);
+        target = "Lnet/minecraft/client/renderer/ProjectionMatrixBuffer;getBuffer(Lorg/joml/Matrix4f;)Lcom/mojang/renderpearl/api/buffers/GpuBufferSlice;"))
+    private void celestiametal$shadeProjection(CallbackInfo ci, @Local Matrix4f projectionMatrix,
+                                                @Local CameraRenderState camera) {
+        CelestiaMetalDevice dev = CelestiaMetalDevice.current;
+        TemporalUpscaler taau = dev != null && WorldRenderScale.isActive() ? dev.temporalUpscaler() : null;
+        boolean jittered = taau != null && taau.jitter(projectionMatrix, camera);
+        CelestiaShade.recordProjection(projectionMatrix, jittered ? taau.jitterNdcX() : 0f, jittered ? taau.jitterNdcY() : 0f);
+    }
+
+    @Inject(method = "render3dHud", at = @At("HEAD"))
+    private void celestiametal$captureWorldDepth(CameraRenderState camera, PlayerRenderState player, OptionsRenderState options,
+                                                 boolean hasPostEffects, CallbackInfo ci) {
+        CelestiaMetalDevice dev = CelestiaMetalDevice.current;
+        if (dev != null && WorldRenderScale.isActive()) {
+            dev.temporalUpscaler().captureDepth(mainRenderTarget, hasPostEffects ? hud3DTarget : mainRenderTarget);
+        }
     }
 
     @Inject(method = "renderLevel", at = @At(value = "INVOKE",

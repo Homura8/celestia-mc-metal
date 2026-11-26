@@ -82,7 +82,7 @@ public final class CelestiaSodiumConfigEntrypoint implements ConfigEntryPoint {
             .setName(Component.literal("Scaling & Thermals"))
             .addOption(enumOpt(builder, "upscaler",
                 "MetalFX Upscaler",
-                "Choose MetalFX Temporal, MetalFX Spatial, or lightweight Bilinear scaling.",
+                "TAAU uses previous frames to reduce shimmering. MetalFX Temporal uses the Spatial path.",
                 CelestiaConfig.UpscalerMode.class,
                 CelestiaConfig.UpscalerMode.METALFX_TEMPORAL,
                 OptionImpact.HIGH,
@@ -318,6 +318,7 @@ public final class CelestiaSodiumConfigEntrypoint implements ConfigEntryPoint {
             case METALFX_TEMPORAL -> "MetalFX Temporal";
             case METALFX_SPATIAL -> "MetalFX Spatial";
             case BILINEAR -> "Bilinear";
+            case TAAU -> "TAAU";
         });
     }
 

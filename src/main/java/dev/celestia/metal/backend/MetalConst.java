@@ -10,7 +10,7 @@ import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
  * Numeric ABI constants matching {@code src/main/native/celestia_metal.h}.
  */
 public final class MetalConst {
-    public static final int ABI_VERSION = 6;
+    public static final int ABI_VERSION = 7;
 
     // Global shader-suite slot reservations (matches celestia_metal.h & shade_slots.metal)
     public static final int SHADE_BUF_FRAME = 24;

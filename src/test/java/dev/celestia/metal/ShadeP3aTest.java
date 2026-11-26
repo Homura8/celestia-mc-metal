@@ -11,6 +11,8 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -38,8 +40,9 @@ class ShadeP3aTest {
         assertFalse(ShadeShaderPatcher.isTranslucentTerrainPipelineName("minecraft:pipeline/solid_terrain"));
     }
 
-    @Test
-    void waterBakeAndVanillaSodiumTranslucentShadersCompileOnMetal() {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void waterBakeAndVanillaSodiumTranslucentShadersCompileOnMetal(boolean preferMetal4) {
         String vanillaVs = """
             #include <metal_stdlib>
             using namespace metal;
@@ -59,8 +62,7 @@ class ShadeP3aTest {
             };
             vertex main0_out main0(main0_in in [[stage_in]], constant DynamicTransforms& DynamicTransforms [[buffer(0)]], constant Projection& Projection [[buffer(1)]]) {
                 main0_out out = {};
-                float4 _pos = (Projection.ProjMat * (DynamicTransforms.ModelViewMat * float4(in.Position, 1.0)));
-                out.gl_Position = _pos;
+                out.gl_Position = Projection.ProjMat * (DynamicTransforms.ModelViewMat * float4(in.Position, 1.0));
                 out.vertexColor = in.Color;
                 out.texCoord0 = in.UV0;
                 out.gl_Position.y = -(out.gl_Position.y);
@@ -141,7 +143,16 @@ class ShadeP3aTest {
         assertTrue(patchedSod.patched());
         assertFalse(ShadeShaderPatcher.isOpaqueOrCutoutTerrain("sodium:pipeline/translucent_terrain", sodiumVs));
 
-        long ctx = MetalNative.deviceCreate(true, false, "");
+        var leanVan = ShadeShaderPatcher.patch("minecraft:pipeline/translucent_terrain",
+            vanillaVs, "main0", vanillaFs, "main0", emptyU, emptyB, ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE);
+        var leanSod = ShadeShaderPatcher.patch("sodium:pipeline/translucent_terrain",
+            sodiumVs, "main0", sodiumFs, "main0", emptyU, emptyB, ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE);
+        assertTrue(leanVan.fsSource().contains("#define SHADE_LEAN_ABOVE 1"));
+        assertTrue(leanSod.fsSource().contains("#define SHADE_LEAN_ABOVE 1"));
+        assertFalse(patchedVan.fsSource().contains("#define SHADE_LEAN_ABOVE 1"));
+        assertFalse(patchedSod.fsSource().contains("#define SHADE_LEAN_ABOVE 1"));
+
+        long ctx = MetalNative.deviceCreate(preferMetal4, false, "");
         assertNotEquals(0L, ctx);
         try {
             StringBuilder err = new StringBuilder();
@@ -166,6 +177,14 @@ class ShadeP3aTest {
             long libSodFs = MetalNative.compileMslLibrary(ctx, patchedSod.fsSource(), "p3a.sod.fs", false, err);
             assertNotEquals(0L, libSodFs, () -> err.toString());
 
+            long leanVanFs = MetalNative.compileMslLibrary(ctx, leanVan.fsSource(), "p3a.van.above", false, err);
+            assertNotEquals(0L, leanVanFs, () -> err.toString());
+            long leanSodFs = MetalNative.compileMslLibrary(ctx, leanSod.fsSource(), "p3a.sod.above", false, err);
+            assertNotEquals(0L, leanSodFs, () -> err.toString());
+
+            MetalNative.waterGenerateMipmaps(ctx, 0L, 0L, 0L);
+            MetalNative.libraryDestroy(leanSodFs);
+            MetalNative.libraryDestroy(leanVanFs);
             MetalNative.libraryDestroy(libSodFs);
             MetalNative.libraryDestroy(libSodVs);
             MetalNative.libraryDestroy(libVanFs);

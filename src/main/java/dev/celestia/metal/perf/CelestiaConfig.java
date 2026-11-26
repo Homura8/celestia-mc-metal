@@ -16,7 +16,7 @@ public final class CelestiaConfig {
     private static volatile CelestiaConfig instance;
 
     public enum MetalMode { AUTO_METAL_4, METAL_4, METAL_3 }
-    public enum UpscalerMode { METALFX_TEMPORAL, METALFX_SPATIAL, BILINEAR }
+    public enum UpscalerMode { METALFX_TEMPORAL, METALFX_SPATIAL, BILINEAR, TAAU }
     public enum ThermalMode { OFF, BALANCED, BATTERY_SAVER }
     public enum HudMode { OFF, COMPACT, DETAILED }
 

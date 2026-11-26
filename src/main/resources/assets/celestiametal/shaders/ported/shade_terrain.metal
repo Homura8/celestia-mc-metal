@@ -45,7 +45,13 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
 	half shadow = shadeShadow(shadowMap, shadowCmp, f, p, hn, thin);
 	float ex = shadeExposure(f, g);
 	float nearW = shadeLook2Near(p, L);
+	float2 wet = 0.0;
+	if (L.wet.x + L.wet.z > 0.005) wet = shadeWetSurface(albedo, p, hn, sky, foliage, f, L, sr.weatherNoise);
 	float3 radiance = shadeLit2(albedo, hn, sky, block, shadow, thin, foliage, f, L, nearW);
+	if (wet.x + wet.y > 0.005) radiance = shadeWetLight(radiance, wet, p, hn, shadow, f, skyLut, skyLutSmplr);
+	if (L.flash.w > 0.0) {
+		radiance += float3(albedo) * L.flash.w * saturate(dot(n, L.flash.xyz)) * float(shadeSkyCurve(sky));
+	}
 	float vanillaFog = shadeVanillaFog(p, fogRanges.xy, fogRanges.zw);
 	float chunkFade = saturate(1.0 - chunkVis);
 	radiance = shadeFogAir2(radiance, p, vanillaFog, chunkFade, skyLut, skyLutSmplr, f, L, &sr);

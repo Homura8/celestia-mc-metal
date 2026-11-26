@@ -89,13 +89,14 @@ public final class CelestiaRenderPass implements RenderPassBackend {
                 vtxStrides[vb.bufferSlot()] = vb.stride();
             }
         }
+        ShadeShaderPatcher.Variant pipelineVariant = shadeVariant;
         if (shadeVariant == ShadeShaderPatcher.Variant.HDR_WORLD
             && depthFormat != CelestiaPipeline.NO_DEPTH
             && this.pipeline.isTranslucentTerrain()) {
             CelestiaShade shade = CelestiaShade.current();
-            if (shade != null) shade.onTranslucentTerrainBind();
+            if (shade != null) pipelineVariant = shade.onTranslucentTerrainBind();
         }
-        long pso = this.pipeline.getOrCreatePso(colorFormatOverride, depthFormat, shadeVariant);
+        long pso = this.pipeline.getOrCreatePso(colorFormatOverride, depthFormat, pipelineVariant);
         MetalNative.passSetPipeline(device.handle(), pso);
         Arrays.fill(pendingUniforms, null);
         Arrays.fill(boundUniforms, null);

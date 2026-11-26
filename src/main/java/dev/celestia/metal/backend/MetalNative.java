@@ -287,7 +287,7 @@ public final class MetalNative {
         mhShadowRenderVanilla = downcall("cm_shadow_render_vanilla", FunctionDescriptor.ofVoid(
             L, L, I, I, L, L, P, I, P, I, L, L, F, F, I));
         mhWaterSetParams = downcall("cm_water_set_params", FunctionDescriptor.ofVoid(L, L, L, L, L, I));
-        mhWaterGenerateMipmaps = downcall("cm_water_generate_mipmaps", FunctionDescriptor.ofVoid(L, L));
+        mhWaterGenerateMipmaps = downcall("cm_water_generate_mipmaps", FunctionDescriptor.ofVoid(L, L, L, L));
         mhWaterCapture = downcall("cm_water_capture", FunctionDescriptor.of(I, L, L, L));
         mhBlitCopyTextureFull = downcall("cm_blit_copy_texture_full", FunctionDescriptor.ofVoid(L, L, L));
     }
@@ -826,8 +826,8 @@ public final class MetalNative {
         } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
-    public static void waterGenerateMipmaps(long ctx, long tex) {
-        try { mhWaterGenerateMipmaps.invokeExact(ctx, tex); } catch (Throwable t) { throw new RuntimeException(t); }
+    public static void waterGenerateMipmaps(long ctx, long wavesTex, long detailTex, long swellTex) {
+        try { mhWaterGenerateMipmaps.invokeExact(ctx, wavesTex, detailTex, swellTex); } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     public static int waterCapture(long ctx, long pyrPso, long pyr2Pso) {

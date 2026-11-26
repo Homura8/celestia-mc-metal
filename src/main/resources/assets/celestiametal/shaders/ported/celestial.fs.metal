@@ -21,7 +21,10 @@ fragment float4 main0(CelestialOut in [[stage_in]],
 {
 	float4 color = Sampler0.sample(Sampler0Smplr, in.texCoord0);
 	if (color.a == 0.0) discard_fragment();
-	if (in.sunK < 0.5 || sl.user4.y < 0.5) return float4(shadeVanillaOut((color * dt.ColorModulator).rgb, sl), color.a * dt.ColorModulator.a);
+	if (in.sunK < 0.5 || sl.user4.y < 0.5) {
+		float transmission = shadeCloudsScreen(normalize(in.dir), sl, sr.cloudScreen).a;
+		return float4(shadeVanillaOut((color * dt.ColorModulator).rgb, sl), color.a * dt.ColorModulator.a * transmission);
+	}
 #ifdef MCOPT_HDR
 	float3 dir = normalize(in.dir);
 	float3 sunLight = sf.lightDirWorld.w > 0.5 ? sf.sunColor.rgb : float3(0.0);

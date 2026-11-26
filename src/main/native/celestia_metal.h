@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 
-#define CM_ABI_VERSION 6
+#define CM_ABI_VERSION 7
 #define CM_MAX_COLOR_ATTACHMENTS 8
 #define CM_MAX_VERTEX_BUFFERS 8
 #define CM_MAX_UNIFORM_BUFFERS 15
@@ -626,7 +626,7 @@ void cm_shadow_render_vanilla(int64_t ctxPtr, int64_t shadowTexPtr, int32_t laye
 // Water scene copy, depth pyramid & wave mipmap generation (P3a+, cm_water.m)
 void cm_water_set_params(int64_t ctxPtr, int64_t paramsBufPtr, int64_t paramsOffset,
                          int64_t wavesTexPtr, int64_t detailTexPtr, int32_t enabled);
-void cm_water_generate_mipmaps(int64_t ctxPtr, int64_t texPtr);
+void cm_water_generate_mipmaps(int64_t ctxPtr, int64_t wavesPtr, int64_t detailPtr, int64_t swellPtr);
 int32_t cm_water_capture(int64_t ctxPtr, int64_t pyrPsoPtr, int64_t pyr2PsoPtr);
 void cm_blit_copy_texture_full(int64_t ctxPtr, int64_t srcTexPtr, int64_t dstTexPtr);
 

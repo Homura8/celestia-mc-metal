@@ -827,7 +827,9 @@ static void verify_backend_ops(int32_t preferMetal4) {
         char serr[4096] = {0};
         for (NSString *fn in portedShaders) {
             NSString *body = read_file_str([portedDir stringByAppendingPathComponent:fn]);
-            NSString *src = [NSString stringWithFormat:@"%@\n%@\n%@", dummyDefines, prelude, body];
+            NSString *weather = [fn isEqualToString:@"shade_terrain.metal"]
+                ? read_file_str([portedDir stringByAppendingPathComponent:@"weather_surface.metal"]) : @"";
+            NSString *src = [NSString stringWithFormat:@"%@\n%@\n%@\n%@", dummyDefines, prelude, weather, body];
             int64_t l = cm_compile_msl_library(ctx, src.UTF8String, fn.UTF8String, 1, serr, sizeof(serr));
             if (!l) {
                 fprintf(stderr, "FAIL 2l compiling ported shader %s:\n%s\n", fn.UTF8String, serr);
@@ -1883,7 +1885,6 @@ static NSString *build_water_bake_msl(NSString *portedDir) {
          "#define SHADE_SSR 1\n"
          "#define SHADE_SSR_HIER 1\n"
          "#define SHADE_SSRH_THICK 2.0\n"
-         "#define SHADE_SSRH_BUDGET 32\n"
          "#define SHADE_SSRH_OWN 1\n"
          "#define SHADE_SSRH_THIN 1\n"
          "#define SHADE_SSR_STEPS 24\n"
@@ -1903,11 +1904,9 @@ static NSString *build_water_bake_msl(NSString *portedDir) {
          "#define SHADE_WATER_DETAIL_SIZE 256\n"
          "#define SHADE_WATER_DETAIL_FAR 112.0\n"
          "#define SHADE_WATER_PATTERN_FAR 0.075\n"
-         "#define SHADE_WATER_DETAIL_EXTRAS 1\n"
          "#define SHADE_WATER_SMOOTH 1\n"
          "#define SHADE_WATER_GLINT_GRAZE 1\n"
          "#define SHADE_WAVE_BAKE 1\n"
-         "#define SHADE_WAVE_BAKE_SIZE 1024\n"
          "#define SHADE_WATER_SWELL 1\n"
          "#define SHADE_WATER_SWELL_BAKED 1\n"
          "#define SHADE_WATER_GLITTER 1\n"
@@ -1977,7 +1976,8 @@ static void verify_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
          "                         texture2d<half> wv [[texture(%d)]],\n"
          "                         texture2d<float> pyr [[texture(%d)]],\n"
          "                         texture2d<half> det [[texture(%d)]],\n"
-         "                         constant float4 *wp [[buffer(%d)]]) {\n"
+         "                         constant float4 *wp [[buffer(%d)]],\n"
+         "                         constant ShadeResources &res [[buffer(CM_SHADE_BUF_RESOURCES)]]) {\n"
          "    if (in.uv.x <= 0.5) discard_fragment();\n"
          "    constexpr sampler ls(filter::linear, mip_filter::linear, address::repeat);\n"
          "    float3 opq = float3(sc.read(uint2(32, 64)).rgb);\n"
@@ -1988,9 +1988,10 @@ static void verify_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
          "    float2 wSlope0 = float2(wv.sample(ls, float2(0.13, 0.27), level(0.0)).xy);\n"
          "    float2 wSlope3 = float2(wv.sample(ls, float2(0.13, 0.27), level(3.0)).xy);\n"
          "    float dLen = length(float2(det.sample(ls, float2(0.41, 0.19), level(1.0)).xy));\n"
+         "    float swell = length(float2(res.waterSwell.sample(ls, float2(0.31, 0.71), level(2.0)).xy));\n"
          "    return float4(opq.g > 0.7 && dep > 0.7 ? 1.0 : 0.0,\n"
          "                  p16.x > 0.7 && p128.x > 0.7 ? 1.0 : 0.0,\n"
-         "                  (length(wSlope0) + length(wSlope3) + dLen) > 1e-4 ? 1.0 : 0.0,\n"
+         "                  length(wSlope0) > 1e-4 && length(wSlope3) > 1e-4 && dLen > 1e-4 && swell > 1e-4 ? 1.0 : 0.0,\n"
          "                  wp[2].w > 0.5 ? 1.0 : 0.0);\n"
          "}\n",
         waterSrc,
@@ -2012,7 +2013,7 @@ static void verify_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
     ff[248] = 1.25f; // sunPath.w = waterTime = 1.25s so wave height/slopes are non-zero
     uint8_t zeroLook[1136] = {0};
     uint8_t zeroGpu[512] = {0};
-    float waterParams[40] = {0};
+    float waterParams[64] = {0};
     waterParams[8] = 1.0f;  // state.x
     waterParams[11] = 1.0f; // state.w = baked waves ready
     waterParams[12] = 1.0f; // tune.x
@@ -2027,7 +2028,7 @@ static void verify_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
     int64_t cmpS = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 1, CM_CMP_GREATER_EQUAL);
     int64_t linS = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 0, 0);
 
-    int64_t wavesTex = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 1024, 1024, 1, 11, 0, 1, 1, 0, "2n_waves");
+    int64_t wavesTex = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 512, 512, 1, 10, 0, 1, 1, 0, "2n_waves");
     int64_t detTex   = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 256, 256, 1, 9, 0, 1, 1, 0, "2n_detT");
     int64_t swlTex   = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 256, 256, 1, 9, 0, 1, 1, 0, "2n_swlT");
 
@@ -2044,13 +2045,16 @@ static void verify_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
     cm_shade_set_enabled(ctx, 1);
     cm_water_set_params(ctx, wpBuf, 0, wavesTex, detTex, 1);
 
-    // Bake waves + ripples + swell & generate mipmaps
+    // Bake three independent textures and check that their mipmaps share one blit encoder.
+    cm_shade_set_resource(ctx, 15, swlTex);
     cm_shade_fullscreen_pass(ctx, pBake, wavesTex, NULL, 0, NULL, 0, NULL, 0);
-    cm_water_generate_mipmaps(ctx, wavesTex);
     cm_shade_fullscreen_pass(ctx, pDet, detTex, NULL, 0, NULL, 0, NULL, 0);
-    cm_water_generate_mipmaps(ctx, detTex);
     cm_shade_fullscreen_pass(ctx, pSwl, swlTex, NULL, 0, NULL, 0, NULL, 0);
-    cm_water_generate_mipmaps(ctx, swlTex);
+    int64_t before[CM_STAT_COUNT], after[CM_STAT_COUNT];
+    cm_device_stats(ctx, before, CM_STAT_COUNT);
+    cm_water_generate_mipmaps(ctx, wavesTex, detTex, swlTex);
+    cm_device_stats(ctx, after, CM_STAT_COUNT);
+    assert(after[CM_STAT_BLIT_ENCODERS] == before[CM_STAT_BLIT_ENCODERS] + 1);
 
     // Render opaque left half, capture scene+depth+pyramid mid-pass, draw probing water on right half
     int32_t clrOn = 1;
@@ -2139,7 +2143,7 @@ static void benchmark_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
     int64_t sLut = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 8, 8, 1, 1, 0, 1, 1, 0, "bp3a_lut");
     int64_t cmpS = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 1, CM_CMP_GREATER_EQUAL);
     int64_t linS = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 0, 0);
-    int64_t wavesTex = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 1024, 1024, 1, 11, 0, 1, 1, 0, "bp3a_w");
+    int64_t wavesTex = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 512, 512, 1, 10, 0, 1, 1, 0, "bp3a_w");
     int64_t detTex   = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 256, 256, 1, 9, 0, 1, 1, 0, "bp3a_dt");
     int64_t swlTex   = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 256, 256, 1, 9, 0, 1, 1, 0, "bp3a_sw");
     int64_t colTex   = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "bp3a_c");
@@ -2159,11 +2163,9 @@ static void benchmark_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
         cm_cmd_begin(ctx);
         cm_shade_set_enabled(ctx, 1);
         cm_shade_fullscreen_pass(ctx, pBake, wavesTex, NULL, 0, NULL, 0, NULL, 0);
-        cm_water_generate_mipmaps(ctx, wavesTex);
         cm_shade_fullscreen_pass(ctx, pDet, detTex, NULL, 0, NULL, 0, NULL, 0);
-        cm_water_generate_mipmaps(ctx, detTex);
         cm_shade_fullscreen_pass(ctx, pSwl, swlTex, NULL, 0, NULL, 0, NULL, 0);
-        cm_water_generate_mipmaps(ctx, swlTex);
+        cm_water_generate_mipmaps(ctx, wavesTex, detTex, swlTex);
         cm_pass_begin(ctx, &colView, &noClr, clr, 1, depView, 0, 0.0, 0, 0, W, H, "bp3a_main");
         cm_water_capture(ctx, pPyr, pPyr2);
         cm_pass_end(ctx);
@@ -2171,7 +2173,7 @@ static void benchmark_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
         cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL);
         if (f >= WARM) gpuMsSum += (double)cm_device_last_gpu_ns(ctx) / 1e6;
     }
-    printf("[Benchmark M1 Pro %s @ %dx%d] P3a Water Prep (1024^2 waves+256^2 ripples/swell+mips+copy+3-pass pyr) synthetic avg: %.3f ms GPU\n",
+    printf("[Benchmark M1 Pro %s @ %dx%d] P3a Water Prep (512^2 waves+256^2 ripples/swell+mips+copy+3-pass pyr) synthetic avg: %.3f ms GPU\n",
            api, W, H, gpuMsSum / ITERS);
 
     cm_shade_set_globals(ctx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -2187,6 +2189,324 @@ static void benchmark_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
     cm_function_destroy(fnPyr2); cm_function_destroy(fnPyr);
     cm_function_destroy(fnSwl); cm_function_destroy(fnDet); cm_function_destroy(fnBake); cm_function_destroy(fnFsVs);
     cm_library_destroy(wLib);
+    cm_device_destroy(ctx);
+}
+
+static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
+    int64_t ctx = cm_device_create(preferMetal4, 0, "");
+    assert(ctx);
+    NSString *ported = [assetsDir stringByAppendingPathComponent:@"shaders/ported"];
+    NSMutableString *source = [NSMutableString stringWithString:
+        @"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n#define SHADE_WX_NOISE_BAKE 1\n"
+         "#define CELESTIA_VL_MARCH 1\n#define CELESTIA_VL_COMPOSITE 1\n#define CELESTIA_SSAO 1\n"];
+    for (NSString *fn in @[@"shade_slots.metal", @"shade_look.metal", @"shade_common.metal", @"shade_m2.metal", @"vl.metal",
+                           @"ssao.metal", @"shade_post.metal", @"clouds.metal", @"weather_surface.metal"]) {
+        [source appendFormat:@"%@\n", read_file_str([ported stringByAppendingPathComponent:fn])];
+    }
+    [source appendString:
+        @"struct AoDepthFixture { half4 color [[color(0)]]; float depth [[depth(any)]]; };\n"
+         "fragment AoDepthFixture ao_depth_fixture(ShadeFsOut in [[stage_in]]) {"
+         "return {half4(0.0h), in.uv.x < 0.5 ? 0.022 : 0.02}; }\n"];
+    char err[4096] = {0};
+    int64_t lib = cm_compile_msl_library(ctx, source.UTF8String, "P3b atmosphere", 1, err, sizeof(err));
+    if (!lib) {
+        fprintf(stderr, "FAIL 2o compiling atmosphere shaders: %s\n", err);
+        exit(1);
+    }
+    int64_t vs = cm_compile_function(lib, "shade_fs_vs", 0, 0, 0, err, sizeof(err));
+    assert(vs);
+
+    enum { NOISE, CLOUDS, DOME, VOLUME, WEATHER, FINAL, AO, PASSES };
+    const char *entries[PASSES] = {
+        "shade_cloud_noise", "shade_cloud_screen", "shade_cloud_dome", "shade_vl_march", "shade_wx_noise_fs", "shade_final",
+        "shade_ambient_occlusion"
+    };
+    const int widths[PASSES] = {272, 96, 160, 96, 1024, 96, 48};
+    const int heights[PASSES] = {272, 64, 64, 64, 1024, 64, 32};
+    const int formats[PASSES] = {CM_FMT_RG16_FLOAT, CM_FMT_RGBA16_FLOAT, CM_FMT_RGBA16_FLOAT,
+                                 CM_FMT_RGBA16_FLOAT, CM_FMT_RG16_FLOAT, CM_FMT_RGBA8_UNORM, CM_FMT_RG16_FLOAT};
+    int64_t pso[PASSES], tex[PASSES];
+    for (int i = 0; i < PASSES; i++) {
+        int64_t fs = cm_compile_function(lib, entries[i], 0, 0, 0, err, sizeof(err));
+        assert(fs);
+        CMColorAttachmentDesc color = { formats[i], 0, 1, 0, 0, 1, 0, 0, 15 };
+        pso[i] = cm_render_pipeline_create(ctx, vs, fs, NULL, 0, NULL, 0, &color, 1, -1, CM_TOPO_TRIANGLES,
+                                           0, 0, 0, 0, 0, 0, 0, entries[i], err, sizeof(err));
+        if (!pso[i]) {
+            fprintf(stderr, "FAIL 2o creating %s: %s\n", entries[i], err);
+            exit(1);
+        }
+        cm_function_destroy(fs);
+        tex[i] = cm_texture_create(ctx, formats[i], widths[i], heights[i], 1, 1, 0, 1, 1, 0, entries[i]);
+        assert(tex[i]);
+    }
+
+    float frame[256] = {0};
+    float look[284] = {0};
+    float gpu[128] = {0};
+    // Inverse Vulkan-style reversed-Z projection, camera at the origin, 90-degree field of view.
+    const float inv[16] = {1,0,0,0, 0,1,0,0, 0,0,0,10, 0,0,-1,0};
+    frame[21] = 1.0f; // proj[1][1]
+    memcpy(frame + 48, inv, sizeof(inv)); // invViewProj
+    const float cascade[16] = {0.0075f,0,0,0, 0,0.0075f,0,0, 0,0,0,0, 0,0,0.25f,1};
+    memcpy(frame + 80, cascade, sizeof(cascade)); // near shadow covers all tested samples
+    int32_t hasShadow = 1;
+    memcpy(frame + 242, &hasShadow, sizeof(hasShadow));
+    frame[133] = 0.7071068f; frame[134] = -0.7071068f;
+    for (int c = 0; c < 3; c++) {
+        frame[136 + c] = 2.0f; // sunColor
+        frame[140 + c] = 0.35f; frame[144 + c] = 0.15f; // ambient
+    }
+    look[112] = 0.002f; look[113] = 128.0f; // fogM
+    look[132] = 12.0f; look[133] = 44.0f; look[135] = 1.0f; // clouds0
+    look[137] = 1.0f; // fancy
+    look[92] = look[93] = look[94] = 1.0f; // grade3
+    look[96] = 1.4f; look[97] = 0.92f; look[98] = 0.8f; look[99] = 0.05f; // tonemap
+    look[100] = 1.0f; // output ceiling
+    for (int i = 0; i < 3; i++) {
+        look[204 + 5 * i] = 1.0f;
+        look[216 + 5 * i] = 1.0f;
+    }
+    gpu[44] = 1.0f; // exposure
+    int64_t frameBuf = cm_buffer_create(ctx, sizeof(frame), frame, "2o frame");
+    int64_t lookBuf = cm_buffer_create(ctx, sizeof(look), look, "2o look");
+    int64_t gpuBuf = cm_buffer_create(ctx, sizeof(gpu), gpu, "2o gpu");
+    int64_t resBuf = cm_buffer_create(ctx, 256, NULL, "2o resources");
+    int64_t depth = cm_texture_create(ctx, CM_FMT_D32_FLOAT, 96, 64, 1, 1, 0, 1, 1, 0, "2o depth");
+    int64_t shadow = cm_texture_create(ctx, CM_FMT_D32_FLOAT, 1, 1, 2, 1, 0, 1, 1, 0, "2o shadow");
+    int64_t lut = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 16, 8, 1, 1, 0, 1, 1, 0, "2o sky");
+    int64_t scene = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 96, 64, 1, 1, 0, 1, 1, 0, "2o scene");
+    int64_t cmp = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 1, CM_CMP_GREATER_EQUAL);
+    int64_t linear = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 0, 0);
+    int64_t cloudRead = cm_buffer_create(ctx, 96 * 64 * 8, NULL, "2o cloud read");
+    int64_t vlRead = cm_buffer_create(ctx, 256, NULL, "2o vl read");
+    int64_t wxRead = cm_buffer_create(ctx, 256, NULL, "2o weather read");
+    int64_t finalRead = cm_buffer_create(ctx, 256, NULL, "2o final read");
+
+    cm_cmd_begin(ctx);
+    cm_shade_set_globals(ctx, frameBuf, 0, lookBuf, 0, gpuBuf, 0, resBuf, 0, shadow, lut, cmp, linear);
+    cm_shade_set_enabled(ctx, 1);
+    cm_blit_clear_depth(ctx, depth, 0.0);
+    cm_blit_clear_depth(ctx, shadow, 0.0);
+    cm_blit_clear_color(ctx, lut, 0.3f, 0.4f, 0.5f, 1.0f);
+    cm_blit_clear_color(ctx, scene, 0.1f, 0.1f, 0.1f, 1.0f);
+    cm_shade_fullscreen_pass(ctx, pso[NOISE], tex[NOISE], NULL, 0, NULL, 0, NULL, 0);
+    cm_shade_fullscreen_pass(ctx, pso[CLOUDS], tex[CLOUDS], &tex[NOISE], 1, NULL, 0, NULL, 0);
+    cm_shade_fullscreen_pass(ctx, pso[DOME], tex[DOME], &tex[NOISE], 1, NULL, 0, NULL, 0);
+    cm_shade_fullscreen_pass(ctx, pso[VOLUME], tex[VOLUME], &depth, 1, NULL, 0, NULL, 0);
+    cm_shade_fullscreen_pass(ctx, pso[WEATHER], tex[WEATHER], NULL, 0, NULL, 0, NULL, 0);
+    int64_t finalInputs[6] = { scene, scene, depth, scene, tex[VOLUME], tex[AO] };
+    float finalParams[24] = {0};
+    finalParams[8] = 1.0f;
+    cm_shade_fullscreen_pass(ctx, pso[FINAL], tex[FINAL], finalInputs, 6, NULL, 0, finalParams, sizeof(finalParams));
+    cm_blit_copy_texture_to_buffer(ctx, tex[CLOUDS], 0, 0, 0, 0, 96, 64, cloudRead, 0, 96 * 8);
+    cm_blit_copy_texture_to_buffer(ctx, tex[VOLUME], 0, 0, 48, 52, 1, 1, vlRead, 0, 8);
+    cm_blit_copy_texture_to_buffer(ctx, tex[FINAL], 0, 0, 48, 52, 1, 1, finalRead, 0, 4);
+    cm_blit_copy_texture_to_buffer(ctx, tex[WEATHER], 0, 0, 4, 4, 16, 1, wxRead, 0, 16 * 4);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    const __fp16 *cloudPixels = (const __fp16 *)(void *)cm_buffer_contents(cloudRead);
+    size_t covered = 0;
+    for (size_t i = 0; i < 96 * 64; i++) {
+        float light = cloudPixels[i * 4], transmittance = cloudPixels[i * 4 + 3];
+        assert(isfinite(light) && transmittance >= 0.0f && transmittance <= 1.0f);
+        if (transmittance < 0.95f && light > 0.01f) covered++;
+    }
+    const __fp16 *vlPixel = (const __fp16 *)(void *)cm_buffer_contents(vlRead);
+    const __fp16 *wxPixels = (const __fp16 *)(void *)cm_buffer_contents(wxRead);
+    assert(covered > 96 && covered < 96 * 48);
+    assert(vlPixel[0] > 0.01f && vlPixel[3] == 128.0f);
+    assert(wxPixels[0] > 0.0f && wxPixels[1] > 0.0f && wxPixels[0] != wxPixels[30]);
+
+    const uint8_t *finalPixel = (const uint8_t *)(void *)cm_buffer_contents(finalRead);
+    uint8_t litFinal = finalPixel[0];
+    cm_cmd_begin(ctx);
+    cm_blit_clear_depth(ctx, shadow, 1.0);
+    cm_shade_fullscreen_pass(ctx, pso[VOLUME], tex[VOLUME], &depth, 1, NULL, 0, NULL, 0);
+    cm_shade_fullscreen_pass(ctx, pso[FINAL], tex[FINAL], finalInputs, 6, NULL, 0, finalParams, sizeof(finalParams));
+    cm_blit_copy_texture_to_buffer(ctx, tex[VOLUME], 0, 0, 48, 52, 1, 1, vlRead, 0, 8);
+    cm_blit_copy_texture_to_buffer(ctx, tex[FINAL], 0, 0, 48, 52, 1, 1, finalRead, 0, 4);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    if (vlPixel[0] >= 0.001f || vlPixel[3] != 128.0f || finalPixel[0] >= litFinal) {
+        fprintf(stderr, "FAIL 2o VL occlusion: scatter=%g distance=%g composite red=%u (lit %u)\n",
+                (double)vlPixel[0], (double)vlPixel[3], finalPixel[0], litFinal);
+        exit(1);
+    }
+    assert(cm_device_drain_errors(ctx, err, sizeof(err)) == 0);
+    printf("[Backend %s] Test 2o P3b atmosphere (clouds, volumetric scatter, weather bake, final composite) OK\n",
+           cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3");
+
+    cm_cmd_begin(ctx);
+    cm_blit_clear_depth(ctx, depth, 0.02);
+    cm_shade_fullscreen_pass(ctx, pso[AO], tex[AO], &depth, 1, NULL, 0, NULL, 0);
+    finalParams[9] = 1.0f;
+    cm_shade_fullscreen_pass(ctx, pso[FINAL], tex[FINAL], finalInputs, 6, NULL, 0, finalParams, sizeof(finalParams));
+    cm_blit_copy_texture_to_buffer(ctx, tex[AO], 0, 0, 24, 16, 1, 1, wxRead, 0, 4);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    assert(wxPixels[0] > 0.99f && fabsf(wxPixels[1] - 5.0f) < 0.05f);
+    int64_t fixtureFs = cm_compile_function(lib, "ao_depth_fixture", 0, 0, 0, err, sizeof(err));
+    CMColorAttachmentDesc fixtureColor = {CM_FMT_RGBA16_FLOAT, 0, 1, 0, 0, 1, 0, 0, 15};
+    int64_t fixturePso = cm_render_pipeline_create(ctx, vs, fixtureFs, NULL, 0, NULL, 0,
+        &fixtureColor, 1, CM_FMT_D32_FLOAT, CM_TOPO_TRIANGLES, 0, 0, 1, CM_CMP_ALWAYS, 1, 0, 0, "AO step", err, sizeof(err));
+    assert(fixturePso);
+    int64_t sceneView = cm_texture_view_create(ctx, scene, 0, 1);
+    int64_t depthView = cm_texture_view_create(ctx, depth, 0, 1);
+    assert(sceneView && depthView);
+    int32_t noClear = 0;
+    float clear[4] = {0};
+    cm_cmd_begin(ctx);
+    assert(cm_pass_begin(ctx, &sceneView, &noClear, clear, 1, depthView, 0, 0.0, 0, 0, 96, 64, "AO step") == 1);
+    cm_pass_set_pipeline(ctx, fixturePso);
+    cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+    cm_pass_finish(ctx);
+    cm_shade_fullscreen_pass(ctx, pso[AO], tex[AO], &depth, 1, NULL, 0, NULL, 0);
+    cm_blit_copy_texture_to_buffer(ctx, tex[AO], 0, 0, 25, 16, 1, 1, wxRead, 0, 4);
+    cm_blit_copy_texture_to_buffer(ctx, tex[AO], 0, 0, 40, 16, 1, 1, wxRead, 8, 4);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    assert(wxPixels[0] < 0.99f && wxPixels[4] > 0.99f);
+    cm_texture_view_destroy(ctx, sceneView); cm_texture_view_destroy(ctx, depthView);
+    cm_pipeline_destroy(ctx, fixturePso); cm_function_destroy(fixtureFs);
+    printf("[Backend %s] P4 SSAO flat surface, depth step contact and final binding OK\n",
+           cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3");
+    finalParams[9] = 0.0f;
+
+    // Time the recurring atmosphere passes at the owner test resolution.
+    const int W = 3024, H = 1752, SW = W / 4, SH = H / 4;
+    int64_t benchCloud = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, SW, SH, 1, 1, 0, 1, 1, 0, "P3b bench cloud");
+    int64_t benchVL = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, SW, SH, 1, 1, 0, 1, 1, 0, "P3b bench VL");
+    int64_t benchScene = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "P3b bench scene");
+    int64_t benchDepth = cm_texture_create(ctx, CM_FMT_D32_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "P3b bench depth");
+    int64_t benchOut = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, W, H, 1, 1, 0, 1, 1, 0, "P3b bench output");
+    assert(benchCloud && benchVL && benchScene && benchDepth && benchOut);
+    cm_cmd_begin(ctx);
+    cm_blit_clear_depth(ctx, shadow, 0.0);
+    cm_blit_clear_color_depth(ctx, benchScene, 0.1f, 0.1f, 0.1f, 1.0f, benchDepth, 0.0);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    int64_t benchInputs[6] = { benchScene, benchScene, benchDepth, benchScene, benchVL, tex[AO] };
+    float *lookMapped = (float *)(void *)cm_buffer_contents(lookBuf);
+    double sums[3] = {0};
+    const int warm = 6, samples = 16;
+    for (int iteration = 0; iteration < warm + samples; iteration++) {
+        // Interleave modes so each one sees the same GPU warmup and clock changes.
+        for (int offset = 0; offset < 3; offset++) {
+            int mode = (iteration + offset) % 3;
+            lookMapped[137] = mode == 2 ? 1.0f : 0.0f;
+            finalParams[8] = mode != 0 ? 1.0f : 0.0f;
+            cm_cmd_begin(ctx);
+            if (mode != 0) {
+                cm_shade_fullscreen_pass(ctx, pso[CLOUDS], benchCloud, &tex[NOISE], 1, NULL, 0, NULL, 0);
+                if ((iteration & 3) == 0) cm_shade_fullscreen_pass(ctx, pso[DOME], tex[DOME], &tex[NOISE], 1, NULL, 0, NULL, 0);
+                cm_shade_fullscreen_pass(ctx, pso[VOLUME], benchVL, &benchDepth, 1, NULL, 0, NULL, 0);
+            }
+            cm_shade_fullscreen_pass(ctx, pso[FINAL], benchOut, benchInputs, 6, NULL, 0, finalParams, sizeof(finalParams));
+            assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+            if (iteration >= warm) sums[mode] += (double)cm_device_last_gpu_ns(ctx) / 1e6;
+        }
+    }
+    printf("[Benchmark M1 Pro %s @ %dx%d] P3b atmosphere + final synthetic avg: off %.3f / Fast %.3f / Fancy %.3f ms GPU\n",
+           cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3", W, H,
+           sums[0] / samples, sums[1] / samples, sums[2] / samples);
+    assert(cm_device_drain_errors(ctx, err, sizeof(err)) == 0);
+    cm_texture_destroy(ctx, benchOut); cm_texture_destroy(ctx, benchDepth); cm_texture_destroy(ctx, benchScene);
+    cm_texture_destroy(ctx, benchVL); cm_texture_destroy(ctx, benchCloud);
+
+    cm_buffer_destroy(ctx, finalRead); cm_buffer_destroy(ctx, wxRead); cm_buffer_destroy(ctx, vlRead); cm_buffer_destroy(ctx, cloudRead);
+    cm_sampler_destroy(ctx, linear); cm_sampler_destroy(ctx, cmp);
+    cm_texture_destroy(ctx, scene); cm_texture_destroy(ctx, lut); cm_texture_destroy(ctx, shadow); cm_texture_destroy(ctx, depth);
+    cm_buffer_destroy(ctx, resBuf); cm_buffer_destroy(ctx, gpuBuf); cm_buffer_destroy(ctx, lookBuf); cm_buffer_destroy(ctx, frameBuf);
+    for (int i = 0; i < PASSES; i++) {
+        cm_texture_destroy(ctx, tex[i]);
+        cm_pipeline_destroy(ctx, pso[i]);
+    }
+    cm_function_destroy(vs);
+    cm_library_destroy(lib);
+    cm_device_destroy(ctx);
+}
+
+static void verify_p4_taau(NSString *assetsDir, int32_t preferMetal4) {
+    int64_t ctx = cm_device_create(preferMetal4, 0, "");
+    assert(ctx);
+    NSString *file = [assetsDir stringByAppendingPathComponent:@"shaders/ported/taa.metal"];
+    NSString *source = [read_file_str(file) stringByAppendingString:
+        @"\nfragment half4 taa_edge(TaaIn in [[stage_in]]) {"
+         "return half4(half3(in.uv.x < 0.5 ? 0.0h : 1.0h), 1.0h); }"];
+    char error[4096] = {0};
+    int64_t lib = cm_compile_msl_library(ctx, source.UTF8String, "TAAU Test", 0, error, sizeof(error));
+    if (!lib) {
+        fprintf(stderr, "FAIL 2p TAAU compile: %s\n", error);
+        exit(1);
+    }
+    int64_t vs = cm_compile_function(lib, "taa_vs", 0, 0, 0, error, sizeof(error));
+    assert(vs);
+    enum { EDGE, RESOLVE, OUTPUT };
+    const char *entry[] = {"taa_edge", "taa_resolve", "taa_output"};
+    int64_t pso[3];
+    for (int i = 0; i < 3; i++) {
+        int64_t fs = cm_compile_function(lib, entry[i], 0, 0, 0, error, sizeof(error));
+        CMColorAttachmentDesc color = {i == OUTPUT ? CM_FMT_RGBA8_UNORM : CM_FMT_RGBA16_FLOAT,
+                                       0, 1, 0, 0, 1, 0, 0, 15};
+        pso[i] = cm_render_pipeline_create(ctx, vs, fs, NULL, 0, NULL, 0, &color, 1, -1,
+                                           CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, entry[i], error, sizeof(error));
+        if (!pso[i]) {
+            fprintf(stderr, "FAIL 2p TAAU pipeline %s: %s\n", entry[i], error);
+            exit(1);
+        }
+        cm_function_destroy(fs);
+    }
+
+    const int inW = 32, inH = 24, outW = 64, outH = 48;
+    int64_t scene = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, inW, inH, 1, 1, 0, 1, 1, 0, "2p scene");
+    int64_t depth = cm_texture_create(ctx, CM_FMT_D32_FLOAT, inW, inH, 1, 1, 0, 1, 1, 0, "2p depth");
+    int64_t hand = cm_texture_create(ctx, CM_FMT_D32_FLOAT, inW, inH, 1, 1, 0, 1, 1, 0, "2p hand");
+    int64_t history = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, outW, outH, 1, 1, 0, 1, 1, 0, "2p history");
+    int64_t resolved = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, outW, outH, 1, 1, 0, 1, 1, 0, "2p resolved");
+    int64_t output = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, outW, outH, 1, 1, 0, 1, 1, 0, "2p output");
+    int64_t read = cm_buffer_create(ctx, 256, NULL, "2p read");
+    assert(scene && depth && hand && history && resolved && output && read);
+    int64_t textures[4] = {scene, depth, history, hand};
+
+    const float inv[16] = {1,0,0,0, 0,1,0,0, 0,0,0,10, 0,0,-1,0};
+    const float proj[16] = {1,0,0,0, 0,1,0,0, 0,0,0,-1, 0,0,0.1f,0};
+    float params[52] = {0};
+    memcpy(params, inv, sizeof(inv));
+    memcpy(params + 16, proj, sizeof(proj));
+    memcpy(params + 32, proj, sizeof(proj));
+    float current = 0.0;
+    for (int test = 0; test < 4; test++) {
+        cm_cmd_begin(ctx);
+        cm_blit_clear_depth(ctx, depth, 0.1);
+        cm_blit_clear_depth(ctx, hand, test == 3 ? 1.0 : 0.0);
+        cm_blit_clear_color(ctx, history, 0.25f, 0.25f, 0.25f, test == 2 ? 4.0f : 1.0f);
+        cm_shade_fullscreen_pass(ctx, pso[EDGE], scene, NULL, 0, NULL, 0, NULL, 0);
+        params[48] = test == 3 ? 0.0125f : 0.0f;
+        params[50] = test != 0;
+        cm_shade_fullscreen_pass(ctx, pso[RESOLVE], resolved, textures, 4, NULL, 0, params, sizeof(params));
+        cm_shade_fullscreen_pass(ctx, pso[OUTPUT], output, &resolved, 1, NULL, 0, NULL, 0);
+        cm_blit_copy_texture_to_buffer(ctx, resolved, 0, 0, outW / 2, outH / 2, 1, 1, read, 0, 8);
+        cm_blit_copy_texture_to_buffer(ctx, output, 0, 0, outW / 2, outH / 2, 1, 1, read, 16, 4);
+        assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+
+        const __fp16 *pixel = (const __fp16 *)(void *)cm_buffer_contents(read);
+        const uint8_t *display = (const uint8_t *)pixel + 16;
+        float rgb = pixel[0];
+        assert(display[3] == 255);
+        assert(fabsf(pixel[3] - (test == 3 ? -1.0f : 1.0f)) < 0.005f);
+        switch (test) {
+            case 0: current = rgb; assert(current > 0.65f && current < 0.85f); break;
+            case 1: assert(rgb > 0.25f && rgb < current - 0.2f); break;
+            case 2:
+            case 3: assert(fabsf(rgb - current) < 0.006f); break;
+        }
+    }
+    assert(cm_device_drain_errors(ctx, error, sizeof(error)) == 0);
+    printf("[Backend %s] Test 2p P4 TAAU history blend, depth rejection, hand rejection and full-resolution resolve OK\n",
+           cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3");
+
+    cm_buffer_destroy(ctx, read);
+    for (int i = 0; i < 4; i++) cm_texture_destroy(ctx, textures[i]);
+    cm_texture_destroy(ctx, resolved); cm_texture_destroy(ctx, output);
+    for (int i = 0; i < 3; i++) cm_pipeline_destroy(ctx, pso[i]);
+    cm_function_destroy(vs);
+    cm_library_destroy(lib);
     cm_device_destroy(ctx);
 }
 
@@ -2221,6 +2541,10 @@ int main(int argc, char **argv) {
     verify_p3a_water([NSString stringWithUTF8String:argv[1]], 0);
     benchmark_p3a_water([NSString stringWithUTF8String:argv[1]], 1);
     benchmark_p3a_water([NSString stringWithUTF8String:argv[1]], 0);
+    verify_p3b_atmosphere([NSString stringWithUTF8String:argv[1]], 1);
+    verify_p3b_atmosphere([NSString stringWithUTF8String:argv[1]], 0);
+    verify_p4_taau([NSString stringWithUTF8String:argv[1]], 1);
+    verify_p4_taau([NSString stringWithUTF8String:argv[1]], 0);
     printf("ALL CELESTIA METAL NATIVE GPU TESTS PASSED.\n");
     return 0;
 }

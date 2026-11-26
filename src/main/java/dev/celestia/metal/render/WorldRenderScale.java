@@ -32,7 +32,7 @@ public final class WorldRenderScale {
     private static boolean active;
     private static int levelTargetsW = -1;
     private static int levelTargetsH = -1;
-    private static volatile int lastPathUsed = -1;   // -1 off, 0 bilinear, 1 MetalFX Spatial
+    private static volatile int lastPathUsed = -1;   // -1 native, 0 bilinear, 1 MetalFX Spatial, 2 TAAU
     private static volatile int lastWidth, lastHeight;
 
     private WorldRenderScale() {}
@@ -61,9 +61,11 @@ public final class WorldRenderScale {
      */
     public static RenderTarget[] begin(Minecraft mc, RenderTarget main, RenderTarget hud3D) {
         active = false;
-        int percent = CelestiaMetalDevice.current != null ? PerformanceEngine.get().effectiveRenderScalePercent() : 100;
+        CelestiaMetalDevice device = CelestiaMetalDevice.current;
+        int percent = device != null ? PerformanceEngine.get().effectiveRenderScalePercent() : 100;
         if (percent >= 100 || main == null || main.getColorTexture() == null) {
             lastPathUsed = -1;
+            if (device != null) device.temporalUpscaler().disable();
             restoreLevelTargets(mc, main);
             return null;
         }
@@ -81,6 +83,11 @@ public final class WorldRenderScale {
             RenderSystem.getDevice().createCommandEncoder().clearColorAndDepthTextures(
                 worldTarget.getColorTexture(), clearColor, worldTarget.getDepthTexture(), clearDepth);
         }
+        if (CelestiaConfig.get().appleSilicon.upscaler == CelestiaConfig.UpscalerMode.TAAU) {
+            device.temporalUpscaler().begin(worldTarget, main, mc.level);
+        } else {
+            device.temporalUpscaler().disable();
+        }
         lastWidth = w;
         lastHeight = h;
         active = true;
@@ -95,6 +102,10 @@ public final class WorldRenderScale {
         GpuTexture src = worldTarget.getColorTexture();
         GpuTexture dst = main.getColorTexture();
         if (dev == null || !(src instanceof CelestiaTexture s) || !(dst instanceof CelestiaTexture d)) return;
+        if (dev.temporalUpscaler().resolve(s, d)) {
+            lastPathUsed = 2;
+            return;
+        }
         int mode = CelestiaConfig.get().appleSilicon.upscaler == CelestiaConfig.UpscalerMode.BILINEAR ? 0 : 1;
         lastPathUsed = MetalNative.upscaleTo(dev.handle(), s.handle(), d.handle(), mode);
     }
@@ -121,6 +132,7 @@ public final class WorldRenderScale {
     /** F3 label for the upscale path of the last frame. */
     public static String statusLabel() {
         return switch (lastPathUsed) {
+            case 2 -> "TAAU " + lastWidth + "x" + lastHeight;
             case 1 -> "MetalFX Spatial " + lastWidth + "x" + lastHeight;
             case 0 -> "Bilinear " + lastWidth + "x" + lastHeight;
             default -> "native";

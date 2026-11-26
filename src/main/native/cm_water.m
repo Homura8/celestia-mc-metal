@@ -227,12 +227,21 @@ void cm_water_set_params(int64_t ctxPtr, int64_t paramsBufPtr, int64_t paramsOff
     }
 }
 
-void cm_water_generate_mipmaps(int64_t ctxPtr, int64_t texPtr) {
-    if (!ctxPtr || !texPtr) return;
+void cm_water_generate_mipmaps(int64_t ctxPtr, int64_t wavesPtr, int64_t detailPtr, int64_t swellPtr) {
+    if (!ctxPtr) return;
     @autoreleasepool {
         CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
-        id<MTLTexture> tex = (__bridge id<MTLTexture>)(void *)texPtr;
-        if (tex.mipmapLevelCount <= 1) return;
+        const int64_t handles[] = { wavesPtr, detailPtr, swellPtr };
+        id<MTLTexture> textures[3];
+        NSUInteger count = 0;
+        for (NSUInteger i = 0; i < 3; i++) {
+            // Each independent chain is generated once, so no intra-encoder barriers are needed.
+            id<MTLTexture> tex = (__bridge id<MTLTexture>)(void *)handles[i];
+            if (tex.mipmapLevelCount <= 1 || (i > 0 && handles[i] == wavesPtr)
+                || (i > 1 && handles[i] == detailPtr)) continue;
+            textures[count++] = tex;
+        }
+        if (count == 0) return;
         cm_ensure_cmd_begun(ctx);
         cm_flush_encoders(ctx);
         cm_commit_residency_if_dirty(ctx);
@@ -242,7 +251,7 @@ void cm_water_generate_mipmaps(int64_t ctxPtr, int64_t texPtr) {
                 id<MTL4ComputeCommandEncoder> ce = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf computeCommandEncoder];
                 if (!ce) return;
                 if (ctx.debugLabels) ce.label = @"CelestiaWater.Mipmaps";
-                [ce generateMipmapsForTexture:tex];
+                for (NSUInteger i = 0; i < count; i++) [ce generateMipmapsForTexture:textures[i]];
                 [ce barrierAfterStages:MTLStageBlit
                      beforeQueueStages:MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit
                      visibilityOptions:MTL4VisibilityOptionDevice];
@@ -252,7 +261,7 @@ void cm_water_generate_mipmaps(int64_t ctxPtr, int64_t texPtr) {
             id<MTLBlitCommandEncoder> be = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf blitCommandEncoder];
             if (!be) return;
             if (ctx.debugLabels) be.label = @"CelestiaWater.Mipmaps";
-            [be generateMipmapsForTexture:tex];
+            for (NSUInteger i = 0; i < count; i++) [be generateMipmapsForTexture:textures[i]];
             [be endEncoding];
         }
         ctx->_stats[CM_STAT_BLIT_ENCODERS]++;
