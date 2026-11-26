@@ -15,6 +15,7 @@ import dev.celestia.metal.backend.CelestiaTextureView;
 import dev.celestia.metal.backend.MetalConst;
 import dev.celestia.metal.backend.MetalNative;
 import dev.celestia.metal.shade.ShadeFrame;
+import dev.celestia.metal.shade.ShadeSettings;
 import dev.celestia.metal.shade.ShadeSky;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
@@ -58,7 +59,8 @@ public final class ShadowPass {
     private boolean disabled;
     private boolean active;
 
-    private int resolution;
+    private int resolution, failedResolution;
+    private double farDistance;
     private int depthBits;
     private double camX, camY, camZ;
     private long lightKey;
@@ -95,11 +97,11 @@ public final class ShadowPass {
         return lastFarQuads;
     }
 
-    private synchronized boolean ensureInitialized(long ctx) {
+    private synchronized boolean ensureInitialized(long ctx, int requestedResolution) {
         if (initialized) return !disabled;
         if (disabled || ctx == 0L) return false;
         try {
-            resolution = clampInt(Integer.getInteger("celestiametal.shade.shadowRes", 2048), 512, 4096);
+            resolution = requestedResolution;
             depthBits = Integer.getInteger("celestiametal.shade.shadowDepth", 16) == 32 ? 32 : 16;
             int depthFmt = depthBits == 32 ? MetalConst.FMT_D32_FLOAT : MetalConst.FMT_D16_UNORM;
 
@@ -137,19 +139,37 @@ public final class ShadowPass {
     /**
      * Fits cascade 0 (and cascade 1 when due) before {@link ShadeFrame} is packed and published.
      */
-    public void prepare(long ctx, CameraRenderState camera, SkyRenderState sky, ShadeFrame frame) {
+    public void prepare(long ctx, CameraRenderState camera, SkyRenderState sky, ShadeFrame frame, ShadeSettings.Shadows options) {
         active = false;
         draw[0] = false;
         draw[1] = false;
-        if (!isShadowsEnabled() || sky == null || sky.skybox != DimensionType.Skybox.OVERWORLD || camera == null) {
+        if (!options.enabled() || !isShadowsEnabled() || sky == null || sky.skybox != DimensionType.Skybox.OVERWORLD || camera == null) {
+            cascades[1].valid = false;
             frame.shadowsEnabled = false;
             frame.cascades = 0;
             return;
         }
-        if (!ensureInitialized(ctx)) {
+        int requestedResolution = clampInt(Integer.getInteger("celestiametal.shade.shadowRes", options.resolution()), 512, 4096);
+        if (!ensureInitialized(ctx, requestedResolution)) {
             frame.shadowsEnabled = false;
             frame.cascades = 0;
             return;
+        }
+
+        if (requestedResolution != resolution && requestedResolution != failedResolution) {
+            int depthFmt = depthBits == 32 ? MetalConst.FMT_D32_FLOAT : MetalConst.FMT_D16_UNORM;
+            long replacement = MetalNative.textureCreate(ctx, depthFmt, requestedResolution, requestedResolution, 2, 1,
+                false, true, true, false, "CelestiaShadow.Map");
+            if (replacement != 0L) {
+                MetalNative.textureDestroy(ctx, shadowTex);
+                shadowTex = replacement;
+                resolution = requestedResolution;
+                failedResolution = 0;
+                cascades[1].valid = false;
+            } else {
+                LOGGER.warn("Could not resize shadow maps to {}; keeping {}", requestedResolution, resolution);
+                failedResolution = requestedResolution;
+            }
         }
 
         chooseLight(sky.sunAngle, sky.moonAngle);
@@ -158,9 +178,9 @@ public final class ShadowPass {
         this.camY = y;
         this.camZ = z;
 
-        double dist = clampDouble(floatProp("celestiametal.shade.shadowDist", 128f), 16.0, 512.0);
+        double dist = clampDouble(floatProp("celestiametal.shade.shadowDist", options.distance()), 16.0, 512.0);
         double near = clampDouble(floatProp("celestiametal.shade.shadowNear", (float) (dist / 4.0)), 4.0, dist);
-        int farEvery = clampInt(Integer.getInteger("celestiametal.shade.shadowFarEvery", 4), 1, 64);
+        int farEvery = clampInt(Integer.getInteger("celestiametal.shade.shadowFarEvery", options.farInterval()), 1, 64);
 
         Vector3f fwd = camera.orientation.transform(viewFwdScratch.set(0f, 0f, -1f));
         double shift = 0.4 * near;
@@ -171,11 +191,12 @@ public final class ShadowPass {
         ShadowCascade far = cascades[1];
         double dx = x - far.cx, dy = y - far.cy, dz = z - far.cz;
         boolean moved = dx * dx + dy * dy + dz * dz > (dist / 8.0) * (dist / 8.0);
-        boolean farDue = !far.valid || moved || farLightKey != lightKey || framesSinceFar >= farEvery - 1;
+        boolean farDue = !far.valid || dist != farDistance || moved || farLightKey != lightKey || framesSinceFar >= farEvery - 1;
         if (farDue) {
             far.fit(light, x, y, z, dist, resolution, FAR_BACK, DEPTH_FRONT, CASTER_REACH);
             draw[1] = true;
             farLightKey = lightKey;
+            farDistance = dist;
             framesSinceFar = 0;
         } else {
             framesSinceFar++;
@@ -190,7 +211,7 @@ public final class ShadowPass {
         float split1 = (float) ((0.85 - 0.125) * dist);
         frame.cascadeTexel0 = (float) (2.0 * near / resolution);
         frame.cascadeTexel1 = (float) (2.0 * dist / resolution);
-        frame.setShadow(true, 2, mat0, mat1, split0, split1, resolution, 0f, 1.5f);
+        frame.setShadow(true, 2, mat0, mat1, split0, split1, resolution, 0f, options.softness());
         active = true;
     }
 

@@ -32,7 +32,10 @@ public final class ShadeLook {
     public static final int FEATURE_HDR = 1, FEATURE_BLOOM = 2, FEATURE_AUTO_EXPOSURE = 4,
         FEATURE_PCSS = 8, FEATURE_STARS = 16, FEATURE_HAZE = 32, FEATURE_LIGHT_V2 = 64;
 
-    public boolean cloudsEnabled, fancyClouds;
+    public boolean cloudsEnabled;
+    public int cloudSteps;
+    public float cloudPhase;
+    private ShadeSettings options;
     public float cloudBase, wetness, puddles, snow;
     public float flashX, flashY, flashZ, flashStrength;
 
@@ -123,6 +126,11 @@ public final class ShadeLook {
 
     public void setHasPrevScene(boolean hasPrevScene) {
         this.hasPrevScene = hasPrevScene;
+    }
+
+    public void setOptions(ShadeSettings options) {
+        this.options = options;
+        setLookPreset(options.post().look());
     }
 
     public void setLookPreset(int preset) {
@@ -227,6 +235,10 @@ public final class ShadeLook {
         this.toneBeta = (float) (ma / MID_OUT - mad * this.toneB);
 
         this.inset = PRESET_INSET[look];
+        if (options != null) {
+            this.saturation *= options.post().saturation();
+            this.bloomMix *= options.post().bloomStrength();
+        }
         float sIn = Math.max(0.05f, this.saturation * (1f - this.inset));
         float sOut = 1f / (1f - 0.6f * this.inset);
         satMatrix(sIn, this.gradeIn);
@@ -247,7 +259,10 @@ public final class ShadeLook {
         this.celestial.set(sx, sy, sz, 0, ex, ey, ez, 0, px, py, pz, 0, 0, 0, 0, 1);
 
         this.borderRadius = f.fogRenderStart < f.fogRenderEnd && f.fogRenderEnd < 1e5f ? Math.max(f.fogRenderEnd - 8f, 16f) : 0f;
-        this.features = FEATURE_HDR | FEATURE_BLOOM | FEATURE_AUTO_EXPOSURE | FEATURE_STARS | FEATURE_HAZE | FEATURE_LIGHT_V2;
+        this.features = FEATURE_HDR | FEATURE_AUTO_EXPOSURE | FEATURE_LIGHT_V2;
+        if (options == null || options.post().bloom()) this.features |= FEATURE_BLOOM;
+        if (options == null || options.sky().stars()) this.features |= FEATURE_STARS;
+        if (options == null || options.sky().haze()) this.features |= FEATURE_HAZE;
     }
 
     public void pack(ByteBuffer out, ShadeFrame f) {
@@ -265,7 +280,7 @@ public final class ShadeLook {
         put4(b, SUN_ART, l[0], l[1], l[2], 1f);
         put4(b, AMBIENT_ART, this.ambientTint[0], this.ambientTint[1], this.ambientTint[2], 0.06f * (1f - 0.7f * f.rain) * this.l2Bounce);
         put4(b, BOUNCE, 0.62f, 0.56f, 0.44f, 0f);
-        put4(b, GRADE0, 0f, this.saturation, this.lookPreset == 1 ? 0.18f : 0.10f, 1f);
+        put4(b, GRADE0, options == null ? 0f : options.post().exposureEv(), this.saturation, this.lookPreset == 1 ? 0.18f : 0.10f, 1f);
         put4(b, GRADE1, this.wbGain[0], this.wbGain[1], this.wbGain[2], 0.55f);
         put4(b, GRADE2, 0f, 0f, 0f, 0.0025f);
         put4(b, GRADE3, 1f, 1f, 1f, this.inset);
@@ -273,17 +288,21 @@ public final class ShadeLook {
         float inverseMax = Math.min(0.80f, 0.95f / (this.toneB * SHOULDER));
         put4(b, OUTPUT, 1f, 1f, 1f, inverseMax);
         put4(b, BLOOM, this.bloomMix, PRESET_SPECTRUM[this.lookPreset], 0.06f * (1f + f.rain), 1f);
-        float haze = 1f + this.rainFog;
+        float hazeScale = options == null ? 1f : options.sky().hazeStrength();
+        float haze = (1f + this.rainFog) * hazeScale;
         put4(b, FOG_R, HAZE_SIGMA[0] * haze, HAZE_SIGMA[1] * haze, HAZE_SIGMA[2] * haze, HAZE_H);
-        put4(b, FOG_M, this.mistSigma * 1e-3f * MIST_SCALE, MIST_H * (1f + 2f * this.rainFog), SEA + MIST_BASE, MIST_ALBEDO + (0.6f - MIST_ALBEDO) * f.rain);
+        put4(b, FOG_M, this.mistSigma * 1e-3f * MIST_SCALE * hazeScale, MIST_H * (1f + 2f * this.rainFog), SEA + MIST_BASE, MIST_ALBEDO + (0.6f - MIST_ALBEDO) * f.rain);
         double glow = 0.6 * (1f - f.rain) * Math.exp(-Math.pow((this.elevation + 1.0) / 2.5, 2.0));
         float borderFrac = this.rainFog > 0f ? 0.78f - 0.18f * this.rainFog : 0.78f;
         put4(b, FOG_MISC, SEA + HAZE_BASE, borderFrac, this.borderRadius, (float) glow);
-        put4(b, VL, 0f, 0f, 0f, 0f);
+        put4(b, VL, options == null ? 12f : options.atmosphere().lightSteps(),
+            options == null ? 1f : options.atmosphere().lightStrength(), 0f, 0f);
         put4(b, WET, wetness, puddles, snow, f.rain);
         put4(b, WIND, 0f, 0f, 0f, 0f);
-        put4(b, CLOUDS0, cloudBase, cloudBase + 32f, 0f, cloudsEnabled ? 1f : 0f);
-        put4(b, CLOUDS1, cloudsEnabled ? 1f : 0f, fancyClouds ? 1f : 0f, 0f, 0f);
+        put4(b, CLOUDS0, cloudBase, cloudBase + (options == null ? 32f : options.atmosphere().cloudThickness()),
+            0f, cloudsEnabled ? 1f : 0f);
+        put4(b, CLOUDS1, cloudsEnabled ? 1f : 0f, cloudSteps,
+            options == null ? 1f : options.atmosphere().cloudDensity(), cloudPhase);
         put4(b, EYE, 0.5f, 0.5f, 1f, this.eyeSky);
         put4(b, SKY_GOLD_H, this.skyGold[0], this.skyGold[1], this.skyGold[2], 1f);
         put4(b, SKY_GOLD_Z, this.skyGold[3], this.skyGold[4], this.skyGold[5], this.skyRose);
@@ -306,7 +325,7 @@ public final class ShadeLook {
         put4(b, EXPOSURE_REF, this.exposureRef, lambda, METER_KEY, this.snapExposure ? 1f : 0f);
         this.snapExposure = false;
         put4(b, USER0, SUN_RADIUS, 0.12f, 1f, 1f);
-        put4(b, USER1, 1f, 1f, 1f, 1f);
+        put4(b, USER1, 1f, 1f, options == null ? 1f : options.water().foam(), 1f);
         put4(b, USER2, 1f, 1f, 0f, 0.45f);
         put4(b, USER3, f.naturalLighting, 1f, 1f, 1f);
         put4(b, USER4, 2f, 0f, 3f, 1f);

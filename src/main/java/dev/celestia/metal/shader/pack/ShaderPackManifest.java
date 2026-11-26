@@ -8,6 +8,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,6 +22,7 @@ public final class ShaderPackManifest {
     public enum PackKind {
         OFF("Off"),
         NATIVE_MSL("✦ Native MSL"),
+        WORLD_MSL("✦ Native MSL"),
         IRIS_GLSL("Iris / GLSL");
 
         public final String badge;
@@ -157,7 +159,7 @@ public final class ShaderPackManifest {
             }
         }
 
-        return new ShaderPackManifest(id, name, author, version, desc, api, PackKind.NATIVE_MSL,
+        return new ShaderPackManifest(id, name, author, version, desc, api, builtin ? PackKind.WORLD_MSL : PackKind.NATIVE_MSL,
             builtin, sourcePath, resourceRoot, categories, opts, presets, passes);
     }
 

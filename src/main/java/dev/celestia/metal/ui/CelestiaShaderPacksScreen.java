@@ -149,7 +149,7 @@ public final class CelestiaShaderPacksScreen extends Screen {
                 }
 
                 int badgeColor = switch (pack.kind) {
-                    case NATIVE_MSL -> CelestiaTheme.ACCENT_BRIGHT;
+                    case WORLD_MSL, NATIVE_MSL -> CelestiaTheme.ACCENT_BRIGHT;
                     case IRIS_GLSL -> CelestiaTheme.ORB_GOLD;
                     case OFF -> CelestiaTheme.TEXT_MUTED;
                 };
@@ -175,7 +175,8 @@ public final class CelestiaShaderPacksScreen extends Screen {
             gui.text(font, font.plainSubstrByWidth(sel.name, infoW - 24), ix, iy, CelestiaTheme.ACCENT_BRIGHT, false);
             iy += 14;
             CelestiaTheme.drawBadge(gui, font, sel.kind.badge, ix, iy,
-                sel.kind == ShaderPackManifest.PackKind.NATIVE_MSL ? CelestiaTheme.ACCENT_LAVENDER : CelestiaTheme.TEXT_MUTED);
+                sel.kind == ShaderPackManifest.PackKind.NATIVE_MSL || sel.kind == ShaderPackManifest.PackKind.WORLD_MSL
+                    ? CelestiaTheme.ACCENT_LAVENDER : CelestiaTheme.TEXT_MUTED);
             iy += 20;
             gui.textWithWordWrap(font, Component.literal(sel.description), ix, iy, infoW - 24, CelestiaTheme.TEXT_MUTED);
             iy = presetStartY(sel) - 14;

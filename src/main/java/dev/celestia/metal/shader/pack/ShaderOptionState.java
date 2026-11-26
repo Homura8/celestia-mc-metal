@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.reflect.TypeToken;
 import java.io.IOException;
 import java.lang.reflect.Type;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -30,6 +31,13 @@ public final class ShaderOptionState {
         resetToDefaults();
     }
 
+    public ShaderOptionState copy() {
+        ShaderOptionState copy = new ShaderOptionState(manifest);
+        copy.values.putAll(values);
+        copy.activePreset = activePreset;
+        return copy;
+    }
+
     public ShaderPackManifest manifest() {
         return manifest;
     }
@@ -37,7 +45,7 @@ public final class ShaderOptionState {
     public void resetToDefaults() {
         values.clear();
         for (ShaderOptionDef def : manifest.options) {
-            values.put(def.id(), def.defaultValue());
+            values.put(def.id(), normalized(def, def.defaultValue()));
         }
         if (manifest.presets.containsKey("Balanced")) {
             applyPreset("Balanced");
@@ -52,12 +60,11 @@ public final class ShaderOptionState {
         Map<String, String> overrides = manifest.presets.get(presetName);
         if (overrides == null) return;
         for (ShaderOptionDef def : manifest.options) {
-            values.put(def.id(), def.defaultValue());
+            values.put(def.id(), normalized(def, def.defaultValue()));
         }
         for (var e : overrides.entrySet()) {
-            if (values.containsKey(e.getKey()) || findDef(e.getKey()) != null) {
-                values.put(e.getKey(), e.getValue());
-            }
+            ShaderOptionDef def = findDef(e.getKey());
+            if (def != null) values.put(e.getKey(), normalized(def, e.getValue()));
         }
         activePreset = presetName;
     }
@@ -95,7 +102,9 @@ public final class ShaderOptionState {
     }
 
     public void set(String optionId, String value) {
-        values.put(optionId, value);
+        ShaderOptionDef def = findDef(optionId);
+        if (def == null) return;
+        values.put(optionId, normalized(def, value));
         activePreset = detectMatchingPreset();
     }
 
@@ -104,7 +113,7 @@ public final class ShaderOptionState {
             boolean matches = true;
             for (ShaderOptionDef def : manifest.options) {
                 String expected = entry.getValue().getOrDefault(def.id(), def.defaultValue());
-                if (!expected.equals(get(def.id()))) {
+                if (!normalized(def, expected).equals(get(def.id()))) {
                     matches = false;
                     break;
                 }
@@ -112,6 +121,28 @@ public final class ShaderOptionState {
             if (matches) return entry.getKey();
         }
         return "Custom";
+    }
+
+    private String normalized(ShaderOptionDef def, String value) {
+        if (manifest.kind != ShaderPackManifest.PackKind.WORLD_MSL) return value;
+        return switch (def.kind()) {
+            case TOGGLE -> switch (value) {
+                case "true", "1" -> "true";
+                case "false", "0" -> "false";
+                default -> def.defaultValue();
+            };
+            case ENUM -> def.values().contains(value) ? value : def.defaultValue();
+            case INT_SLIDER, FLOAT_SLIDER -> {
+                try {
+                    double parsed = Double.parseDouble(value);
+                    if (!Double.isFinite(parsed)) parsed = Double.parseDouble(def.defaultValue());
+                    double clamped = Math.clamp(parsed, def.min(), def.max());
+                    yield BigDecimal.valueOf(clamped).stripTrailingZeros().toPlainString();
+                } catch (NumberFormatException e) {
+                    yield normalized(def, def.defaultValue());
+                }
+            }
+        };
     }
 
     private ShaderOptionDef findDef(String id) {
@@ -188,7 +219,8 @@ public final class ShaderOptionState {
         if (manifest.kind == ShaderPackManifest.PackKind.IRIS_GLSL && manifest.sourcePath != null) {
             return shaderpacksDir.resolve(manifest.sourcePath.getFileName().toString() + ".txt");
         }
-        return shaderpacksDir.resolve(safeName + ".celestia.json");
+        String suffix = manifest.kind == ShaderPackManifest.PackKind.WORLD_MSL ? ".celestia-v2.json" : ".celestia.json";
+        return shaderpacksDir.resolve(safeName + suffix);
     }
 
     public void loadFromDisk(Path shaderpacksDir) {
@@ -210,12 +242,13 @@ public final class ShaderOptionState {
                 Map<String, String> map = GSON.fromJson(Files.readString(p, StandardCharsets.UTF_8), MAP_TYPE);
                 if (map != null) {
                     for (var e : map.entrySet()) {
-                        if (values.containsKey(e.getKey())) values.put(e.getKey(), e.getValue());
+                        ShaderOptionDef def = findDef(e.getKey());
+                        if (def != null && e.getValue() != null) values.put(def.id(), normalized(def, e.getValue()));
                     }
                 }
             }
             activePreset = detectMatchingPreset();
-        } catch (IOException ignored) {
+        } catch (IOException | com.google.gson.JsonParseException ignored) {
         }
     }
 

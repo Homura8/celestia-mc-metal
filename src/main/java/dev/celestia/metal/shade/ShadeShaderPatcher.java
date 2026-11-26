@@ -137,10 +137,9 @@ public final class ShadeShaderPatcher {
     }
 
     public static String waterDefines() {
-        int budget = Math.clamp(Integer.getInteger("celestiametal.shade.water.ssrBudget", 24), 8, 32);
         String quad = !"false".equalsIgnoreCase(System.getProperty("celestiametal.shade.water.ssrQuad"))
             ? "#define SHADE_SSR_QUAD 1\n#define SHADE_SSRH_OWN 1\n" : "";
-        return quad + "#define SHADE_SSRH_BUDGET " + budget + "\n" + """
+        return quad + """
             #define SHADE_WATER 1
             #define SHADE_SSR 1
             #define SHADE_SSR_HIER 1

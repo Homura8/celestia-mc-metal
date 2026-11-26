@@ -5,6 +5,7 @@ import dev.celestia.metal.backend.CelestiaMetalDevice;
 import dev.celestia.metal.backend.MetalConst;
 import dev.celestia.metal.backend.MetalNative;
 import dev.celestia.metal.perf.CelestiaConfig;
+import dev.celestia.metal.shade.ShadeSettings;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -41,6 +42,7 @@ public final class ShaderPipelineManager {
 
     private ShaderPackManifest activePack = ShaderPackManifest.offPack();
     private boolean shadersEnabled = true;
+    private volatile ShadeSettings worldSettings;
     private String lastCompiledHash = "";
     private long uniformBufferHandle;
     private long lastCompileTimeMs;
@@ -58,21 +60,37 @@ public final class ShaderPipelineManager {
     public synchronized void refreshPacks() {
         discoveredPacks.clear();
         discoveredPacks.addAll(ShaderPackLoader.discoverAll(shaderpacksDir()));
-        String targetId = CelestiaConfig.get().shaders.activePackId;
+        var config = CelestiaConfig.get();
+        String targetId = config.shaders.activePackId;
+        boolean oldMinimal = "builtin:celestia-minimal".equals(targetId);
         ShaderPackManifest found = findPack(targetId);
-        if (found == null) {
-            found = findPack("builtin:celestia-native");
-        }
-        if (found == null) {
-            found = ShaderPackManifest.offPack();
-        }
+        if (found == null) found = findPack("builtin:celestia-native");
+        if (found == null) found = ShaderPackManifest.offPack();
         activePack = found;
-        ShaderOptionState state = optionState(activePack);
-        String preset = CelestiaConfig.get().shaders.activePreset;
-        if (preset != null && !preset.isEmpty() && activePack.presets.containsKey(preset)) {
-            state.applyPreset(preset);
-        }
+
+        String preset = oldMinimal ? "Performance" : config.shaders.activePreset;
+        if (found.kind == ShaderPackManifest.PackKind.WORLD_MSL && "Cinematic".equals(preset)) preset = "Ultra";
+        ShaderOptionState state = new ShaderOptionState(found);
+        if (preset != null && found.presets.containsKey(preset)) state.applyPreset(preset);
         state.loadFromDisk(shaderpacksDir());
+        if (oldMinimal) {
+            state.applyPreset("Performance");
+            state.saveToDisk(shaderpacksDir());
+            config.shaders.activePackId = found.id;
+            config.shaders.activePreset = "Performance";
+            config.save();
+        }
+        optionStates.put(found.id, state);
+        publishWorldSettings();
+    }
+
+    public ShadeSettings worldSettings() {
+        return worldSettings;
+    }
+
+    private void publishWorldSettings() {
+        worldSettings = shadersEnabled && activePack.kind == ShaderPackManifest.PackKind.WORLD_MSL
+            ? ShadeSettings.from(optionState(activePack)) : null;
     }
 
     public synchronized List<ShaderPackManifest> packs() {
@@ -98,6 +116,7 @@ public final class ShaderPipelineManager {
 
     public synchronized void toggleShaders() {
         shadersEnabled = !shadersEnabled;
+        publishWorldSettings();
         if (shadersEnabled) {
             compileActivePackIfNeeded(true);
         } else {
@@ -131,17 +150,28 @@ public final class ShaderPipelineManager {
         cfg.shaders.activePreset = st.activePreset();
         cfg.save();
 
+        publishWorldSettings();
         compileActivePackIfNeeded(true);
     }
 
     public synchronized void applyPreset(String presetName) {
-        ShaderOptionState st = optionState(activePack);
-        st.applyPreset(presetName);
-        st.saveToDisk(shaderpacksDir());
-        CelestiaConfig cfg = CelestiaConfig.get();
-        cfg.shaders.activePreset = st.activePreset();
-        cfg.save();
-        compileActivePackIfNeeded(true);
+        ShaderOptionState draft = optionState(activePack).copy();
+        draft.applyPreset(presetName);
+        applyOptions(draft);
+    }
+
+    public synchronized void applyOptions(ShaderOptionState draft) {
+        ShaderOptionState applied = draft.copy();
+        String id = applied.manifest().id;
+        applied.saveToDisk(shaderpacksDir());
+        optionStates.put(id, applied);
+        if (activePack.id.equals(id)) {
+            CelestiaConfig cfg = CelestiaConfig.get();
+            cfg.shaders.activePreset = applied.activePreset();
+            cfg.save();
+            publishWorldSettings();
+            compileActivePackIfNeeded(activePack.kind != ShaderPackManifest.PackKind.WORLD_MSL);
+        }
     }
 
     public synchronized void reloadActivePack() {
@@ -172,6 +202,13 @@ public final class ShaderPipelineManager {
             releaseCompiledPasses();
             lastDiagnostics.clear();
             lastCompiledHash = "";
+            return;
+        }
+        if (activePack.kind == ShaderPackManifest.PackKind.WORLD_MSL) {
+            releaseCompiledPasses();
+            lastDiagnostics.clear();
+            lastCompiledHash = "";
+            lastCompileTimeMs = 0L;
             return;
         }
         ShaderOptionState state = optionState(activePack);
@@ -254,7 +291,7 @@ public final class ShaderPipelineManager {
     }
 
     public synchronized void uploadFrameUniforms(CelestiaMetalDevice dev) {
-        if (dev == null) return;
+        if (dev == null || activePack.kind != ShaderPackManifest.PackKind.NATIVE_MSL || !shadersEnabled) return;
         if (uniformBufferHandle == 0L) {
             uniformBufferHandle = MetalNative.bufferCreate(dev.handle(), FrameUniforms.BYTE_SIZE, null, "CelestiaFrameUniforms");
         }

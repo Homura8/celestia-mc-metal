@@ -56,7 +56,7 @@ public final class ShadeFrame {
     public float sunsetAway = 1f;
     public float cascadeSplit0 = 32, cascadeSplit1 = 128, cascadeTexel0 = 1f / 32f, cascadeTexel1 = 1f / 8f;
     public int shadowResolution = 2048;
-    public float shadowDepthBias = 0.00015f, shadowNormalOffset = 1.5f;
+    public float shadowDepthBias = 0.00015f, shadowSoftness = 1f;
     public boolean shadowsEnabled;
     public int cascades = 2;
     public int width = 1, height = 1;
@@ -151,7 +151,7 @@ public final class ShadeFrame {
         put3(b, ZENITH_COLOR, this.sky.zenith, this.sunsetAway);
         for (int i = 0; i < 8; i++) put3(b, HORIZON + 16 * i, this.sky.horizon[i], 0);
         put4(b, CASCADE_SPLITS, this.cascadeSplit0, this.cascadeSplit1, this.cascadeTexel0, this.cascadeTexel1);
-        put4(b, SHADOW_PARAMS, 1f / this.shadowResolution, this.shadowResolution, this.shadowDepthBias, this.shadowNormalOffset);
+        put4(b, SHADOW_PARAMS, 1f / this.shadowResolution, this.shadowResolution, this.shadowDepthBias, this.shadowSoftness);
         put4(b, SCREEN, this.width, this.height, 1f / this.width, 1f / this.height);
         put4(b, TIME, this.dayTime, this.gameTimeSeconds, this.exposure, this.partialTick);
         put4(b, WEATHER, this.rain, this.thunder, this.nightVision, this.starBrightness);
@@ -166,7 +166,7 @@ public final class ShadeFrame {
     }
 
     public void setShadow(boolean enabled, int cascades, Matrix4fc cascade0, Matrix4fc cascade1, float split0, float split1, int resolution,
-                          float depthBias, float normalOffsetTexels) {
+                          float depthBias, float softness) {
         this.shadowsEnabled = enabled;
         this.cascades = cascades;
         this.shadowViewProj[0].set(cascade0);
@@ -175,7 +175,7 @@ public final class ShadeFrame {
         this.cascadeSplit1 = split1;
         this.shadowResolution = resolution;
         this.shadowDepthBias = depthBias;
-        this.shadowNormalOffset = normalOffsetTexels;
+        this.shadowSoftness = softness;
     }
 
     private static void putMat(Matrix4f m, ByteBuffer b, int at) {

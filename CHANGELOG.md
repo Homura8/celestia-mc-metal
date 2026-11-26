@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0-alpha.20
+
+### Added
+- **P5 live shader settings**. Celestia Native exposes 34 controls across lighting and shadows, sky, water, clouds and weather, and post-processing. The Performance, Balanced, Quality, and Ultra presets apply without restarting Minecraft.
+- Presets adjust shadow resolution, update interval and range, SSR budget and range, cloud and volumetric light sample counts, and other settings. Individual options and custom combinations persist locally.
+
+### Changed
+- The bundled Celestia Native entry now configures the active world shader suite. Existing Celestia Minimal selections migrate to the Performance preset. The legacy samples remain available as native test fixtures.
+- Disabling bloom preserves the luminance samples used for auto-exposure. Turning off animated waves skips the wave and ripple bakes.
+
 ## 0.1.0-alpha.19
 
 ### Added

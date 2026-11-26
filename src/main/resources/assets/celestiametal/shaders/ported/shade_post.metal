@@ -133,12 +133,12 @@ fragment float4 shade_final(ShadeFsOut in [[stage_in]],
 	float hazeNear = shadeAirSmooth(L) ? 0.0 : 4.0;
 	bool aoOn = false;
 #ifdef CELESTIA_SSAO
-	aoOn = P.v.y > 0.5;
+	aoOn = P.v.y > 0.0;
 #endif
 	if (d > 0.0 && (hazeOn || aoOn)) {
 		float3 wp = shadeWorldFromDepth(in.uv, d, f);
 #ifdef CELESTIA_SSAO
-		if (aoOn) c *= float(shadeAoSample(ambientOcclusion, in.uv, length(wp)));
+		if (aoOn) c *= saturate(mix(1.0, float(shadeAoSample(ambientOcclusion, in.uv, length(wp))), P.v.y));
 #endif
 		if (hazeOn && dot(wp, wp) > hazeNear) {
 			float3 S = shadeHazeInscatter(wp, f, L, 1.0, T);
@@ -236,7 +236,7 @@ kernel void shade_exposure(device ShadeGpu &g [[buffer(CM_SHADE_BUF_GPU)]], cons
 			acc += n;
 		}
 		if (wsum > 0.0) mean = sum / wsum;
-		float metered = log2(max(L.exposureRef.z, 1e-4)) - mean;
+		float metered = log2(max(L.exposureRef.z, 1e-4)) - mean + L.grade0.x;
 		float lambda = L.exposureRef.y;
 		target = lambda * metered + (1.0 - lambda) * logRef;
 		target = clamp(target, logRef - L.exposureCfg.x, logRef + L.exposureCfg.y);

@@ -2,6 +2,7 @@
 
 Celestia Metal allows shader authors to distribute **native Metal Shading Language (MSL)** shader packs as either a folder or a `.zip` inside Minecraft's `shaderpacks/` directory — independently of the renderer JAR.
 
+The bundled **Celestia Native** entry uses the same option schema. Its passes run in the world renderer, and its settings are applied per frame. The `passes` examples below describe the external MSL format.
 ---
 
 ## 1. Directory Layout

@@ -23,6 +23,7 @@ public final class CelestiaShaderOptionsScreen extends Screen {
     private final ShaderPackManifest pack;
     private final ShaderOptionState state;
     private final List<String> categories;
+    private final String[] presets;
     private String activeCategory;
     private EditBox searchBox;
     private String searchQuery = "";
@@ -38,9 +39,11 @@ public final class CelestiaShaderOptionsScreen extends Screen {
         super(Component.literal(pack.name + " Options"));
         this.parent = parent;
         this.pack = pack;
-        this.state = ShaderPipelineManager.get().optionState(pack);
+        this.state = ShaderPipelineManager.get().optionState(pack).copy();
         this.categories = pack.categories.isEmpty() ? List.of("General") : pack.categories;
         this.activeCategory = this.categories.get(0);
+        this.presets = pack.kind == ShaderPackManifest.PackKind.WORLD_MSL
+            ? pack.presets.keySet().toArray(String[]::new) : new String[0];
     }
 
     private int searchW() {
@@ -112,17 +115,25 @@ public final class CelestiaShaderOptionsScreen extends Screen {
         CelestiaTheme.drawBackdrop(gui, width, height);
 
         CelestiaTheme.drawGlassPanel(gui, 8, 6, width - 16, 30, false);
-        String title = "✦ " + pack.name;
-        gui.text(font, title, 18, 17, CelestiaTheme.ACCENT_BRIGHT, false);
         int sx = searchX();
         int sw = searchW();
+        String title = font.plainSubstrByWidth("✦ " + pack.name, Math.max(0, sx - 24));
+        gui.text(font, title, 18, 17, CelestiaTheme.ACCENT_BRIGHT, false);
         CelestiaTheme.drawSearchFieldChrome(gui, sx, 12, sw, 18, searchBox != null && searchBox.isFocused());
-        String presetText = state.activePreset().isEmpty() ? pack.kind.badge : ("Preset: " + state.activePreset());
-        int bx = 24 + font.width(title);
-        CelestiaTheme.drawBadgeClipped(gui, font, presetText, bx, 14, Math.max(40, sx - bx - 8), CelestiaTheme.ACCENT_LAVENDER);
+        if (presets.length > 0) {
+            int x = 8;
+            int[] widths = presetWidths();
+            for (int i = 0; i < presets.length; i++) {
+                int w = widths[i];
+                boolean hovered = CelestiaWidgets.inside(mouseX, mouseY, x, 42, w, 19);
+                CelestiaWidgets.drawButton(gui, font, x, 42, w, 19, presets[i], hovered,
+                    presets[i].equals(state.activePreset()), true);
+                x += w + 4;
+            }
+        }
 
         catX = 8;
-        catY = 44;
+        catY = presets.length == 0 ? 44 : 68;
         catW = Math.min(138, Math.max(100, width / 5));
         catH = height - catY - 38;
 
@@ -189,15 +200,17 @@ public final class CelestiaShaderOptionsScreen extends Screen {
                 iy += 14;
                 CelestiaTheme.drawBadge(gui, font, "Impact: " + hoveredOption.impact().label, ix, iy, hoveredOption.impact().color);
                 iy += 20;
-                gui.text(font, "Macro: " + hoveredOption.id(), ix, iy, CelestiaTheme.TEXT_MUTED, false);
-                iy += 14;
+                if (pack.kind != ShaderPackManifest.PackKind.WORLD_MSL) {
+                    gui.text(font, "Macro: " + hoveredOption.id(), ix, iy, CelestiaTheme.TEXT_MUTED, false);
+                    iy += 14;
+                }
                 gui.textWithWordWrap(font, Component.literal(hoveredOption.description().isEmpty()
                     ? "Modifies shader option " + hoveredOption.id() : hoveredOption.description()),
                     ix, iy, infoW - 24, CelestiaTheme.TEXT_MUTED);
             } else {
                 gui.text(font, "✦ Pack Options", ix, iy, CelestiaTheme.ACCENT_LAVENDER, false);
                 iy += 16;
-                gui.textWithWordWrap(font, Component.literal("Hover any option to view its GPU impact and shader macro."),
+                gui.textWithWordWrap(font, Component.literal("Hover an option for details and its GPU impact."),
                     ix, iy, infoW - 24, CelestiaTheme.TEXT_MUTED);
             }
         }
@@ -217,10 +230,26 @@ public final class CelestiaShaderOptionsScreen extends Screen {
         super.extractRenderState(gui, mouseX, mouseY, partialTick);
     }
 
+    private int[] presetWidths() {
+        return CelestiaWidgets.computeProportionalWidths(font, presets, width - 16, 4, 8, 12);
+    }
+
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
         if (super.mouseClicked(event, doubleClick)) return true;
         double mx = event.x(), my = event.y();
+
+        if (presets.length > 0 && my >= 42 && my < 61) {
+            int x = 8;
+            int[] widths = presetWidths();
+            for (int i = 0; i < presets.length; i++) {
+                if (CelestiaWidgets.inside(mx, my, x, 42, widths[i], 19)) {
+                    state.applyPreset(presets[i]);
+                    return true;
+                }
+                x += widths[i] + 4;
+            }
+        }
 
         // Categories
         int cy = catY + 8;
@@ -341,11 +370,7 @@ public final class CelestiaShaderOptionsScreen extends Screen {
     }
 
     private void applyOptions() {
-        ShaderPipelineManager spm = ShaderPipelineManager.get();
-        state.saveToDisk(spm.shaderpacksDir());
-        if (pack.id.equals(spm.activePack().id)) {
-            spm.compileActivePackIfNeeded(true);
-        }
+        ShaderPipelineManager.get().applyOptions(state);
     }
 
     @Override

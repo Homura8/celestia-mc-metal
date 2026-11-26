@@ -100,9 +100,10 @@ static half4 cloudMarch(float3 dir, int steps, constant ShadeFrame &f, constant 
 	if (end <= start) return half4(0.0h, 0.0h, 0.0h, 1.0h);
 
 	float3 camera = eye + f.cameraFract.xyz + fmod(f.cameraBlock.xyz, 5376.0);
-	camera.xz += float2(-1.4, 0.5) * L.clock2.x;
+	camera.xz += float2(-1.4, 0.5) * L.clouds1.w;
 	float interval = (end - start) / float(steps);
 	float rain = f.weather.x;
+	float densityScale = L.clouds1.z;
 	float3 light = f.lightDirWorld.xyz;
 	float mu = dot(dir, light);
 	float phase = 0.7 * shadeHG(mu, 0.72) + 0.3 * shadeHG(mu, -0.22);
@@ -114,9 +115,9 @@ static half4 cloudMarch(float3 dir, int steps, constant ShadeFrame &f, constant 
 		float t = start + (float(i) + 0.5) * interval;
 		float3 p = camera + dir * t;
 		float h = (altitude + dir.y * t - L.clouds0.x) / band;
-		float density = cloudDensity(noise, p, h, rain);
+		float density = cloudDensity(noise, p, h, rain) * densityScale;
 		if (density <= 0.001) continue;
-		float ahead = cloudDensity(noise, p + light * 17.0, h + light.y * 17.0 / band, rain);
+		float ahead = cloudDensity(noise, p + light * 17.0, h + light.y * 17.0 / band, rain) * densityScale;
 		float direct = exp2(-4.0 * ahead - 1.4 * density);
 		float stepT = exp2(-density * interval * 0.32);
 		color += transmission * (1.0 - stepT) * (ambient * mix(0.58, 1.3, h) + sun * (0.25 + 0.75 * direct));
@@ -137,7 +138,7 @@ fragment half4 shade_cloud_screen(ShadeFsOut in [[stage_in]],
                                   texture2d<half> lut [[texture(CM_SHADE_TEX_SKY_LUT)]],
                                   sampler lutSampler [[sampler(CM_SHADE_SAMP_LINEAR)]]) {
 	float3 dir = normalize(shadeViewRay(in.uv * 2.0 - 1.0 + f.jitter.xy, f.invViewProj));
-	return cloudMarch(dir, L.clouds1.y > 0.5 ? 14 : 8, f, L, noise, lut, lutSampler);
+	return cloudMarch(dir, clamp(int(L.clouds1.y), 4, 24), f, L, noise, lut, lutSampler);
 }
 
 fragment half4 shade_cloud_dome(ShadeFsOut in [[stage_in]],
@@ -149,5 +150,5 @@ fragment half4 shade_cloud_dome(ShadeFsOut in [[stage_in]],
 	float angle = (in.uv.x - 0.5) * 6.2831853;
 	float y = in.uv.y * in.uv.y;
 	float r = sqrt(1.0 - y * y);
-	return cloudMarch(float3(cos(angle) * r, y, sin(angle) * r), 8, f, L, noise, lut, lutSampler);
+	return cloudMarch(float3(cos(angle) * r, y, sin(angle) * r), clamp(int(L.clouds1.y), 4, 8), f, L, noise, lut, lutSampler);
 }

@@ -75,6 +75,7 @@ public final class CelestiaShade {
     private final ShadowPass shadowPass = new ShadowPass();
     private final ShadeWater water = new ShadeWater();
     private final ShadeAtmosphere atmosphere = new ShadeAtmosphere();
+    private ShadeSettings settings;
 
     private final Matrix4f pendingProjection = new Matrix4f();
     private boolean projectionSet;
@@ -141,10 +142,14 @@ public final class CelestiaShade {
     }
 
     public static boolean isEnabled() {
+        return appliedSettings() != null;
+    }
+
+    private static ShadeSettings appliedSettings() {
         if ("false".equalsIgnoreCase(System.getProperty("celestiametal.shade", "true"))) {
-            return false;
+            return null;
         }
-        return ShaderPipelineManager.get().isShadersEnabled();
+        return ShaderPipelineManager.get().worldSettings();
     }
 
     public boolean isReady() {
@@ -191,13 +196,13 @@ public final class CelestiaShade {
             ringSeg = MemorySegment.ofAddress(MetalNative.bufferContents(ringBuf))
                 .reinterpret((long) RING_SLOTS * RING_SLOT_STRIDE);
             gpuView = MemorySegment.ofAddress(MetalNative.bufferContents(gpuBuf))
-                .reinterpret(GPU_BUF_SIZE).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+                .reinterpret(GPU_BUF_SIZE).asByteBuffer().order(ByteOrder.nativeOrder());
             gpuView.putFloat(176, 1f).putFloat(180, 1f).putFloat(184, 1f).putFloat(188, 0f);
             for (int i = 0; i < RING_SLOTS; i++) {
                 ByteBuffer slotBb = ringSeg.asSlice((long) i * RING_SLOT_STRIDE, RING_SLOT_STRIDE)
-                    .asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+                    .asByteBuffer().order(ByteOrder.nativeOrder());
                 frame.pack(slotBb);
-                look.pack(slotBb.slice(LOOK_OFFSET, ShadeLook.SIZE).order(ByteOrder.LITTLE_ENDIAN), frame);
+                look.pack(slotBb.slice(LOOK_OFFSET, ShadeLook.SIZE).order(ByteOrder.nativeOrder()), frame);
             }
 
             dummyShadowTex = MetalNative.textureCreate(ctx, MetalConst.FMT_D32_FLOAT, 1, 1, 2, 1,
@@ -306,7 +311,10 @@ public final class CelestiaShade {
 
     /** Called at {@code LevelRenderer.render} HEAD to update uniforms, bake Sky LUT, and open HDR redirect. */
     public void beginWorld(CameraRenderState camera) {
-        if (!isEnabled()) {
+        ShadeSettings applied = appliedSettings();
+        if (applied == null) {
+            settings = null;
+            hasPrevHdrWorld = false;
             worldRedirectActive = false;
             handPassActive = false;
             MetalNative.shadeSetEnabled(device.handle(), false);
@@ -408,13 +416,14 @@ public final class CelestiaShade {
         var lightmap = game.lightmapRenderState;
         frame.nightVision = lightmap.nightVisionEffectIntensity;
         frame.minAmbient = 0.0025f + 0.02f * lightmap.brightness + 0.25f * frame.nightVision;
-        shadowPass.prepare(device.handle(), camera, sky, frame);
+        shadowPass.prepare(device.handle(), camera, sky, frame, applied.shadows());
 
         frame.frameIndex = ++frameCounter;
         long now = System.nanoTime();
         float dt = lastNanos == 0L ? 0f : (now - lastNanos) / 1e9f;
         lastNanos = now;
-        boolean snap = lastDimension != frame.dimension || dt > 1f;
+        boolean snap = lastDimension != frame.dimension || dt > 1f || !applied.equals(settings);
+        settings = applied;
         double clampedDt = Math.min(Math.max(dt, 0f), 0.25);
         waterClock = (waterClock + clampedDt) % 4096.0;
         skyClock = (skyClock + clampedDt) % 65536.0;
@@ -422,7 +431,7 @@ public final class CelestiaShade {
         frame.skyTime = (float) skyClock;
         lastDimension = frame.dimension;
 
-        syncLookPreset();
+        look.setOptions(settings);
         frame.updateAtmosphere((float) clampedDt, snap);
         if (snap) {
             hasPrevHdrWorld = false;
@@ -431,13 +440,13 @@ public final class CelestiaShade {
         look.setHasPrevScene(hasPrevHdrWorld && prevHdrWorldTex != 0L);
         look.update(frame, moonPhaseIndex, (float) clampedDt);
         atmosphere.prepare(device.handle(), level, camera, frame, look, mc.options.getCloudStatus(), state.cloudHeight,
-            (float) clampedDt, w, h);
+            (float) clampedDt, w, h, settings.atmosphere());
 
         ringSlot = (ringSlot + 1) % RING_SLOTS;
         ByteBuffer slotBb = ringSeg.asSlice((long) ringSlot * RING_SLOT_STRIDE, RING_SLOT_STRIDE)
-            .asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+            .asByteBuffer().order(ByteOrder.nativeOrder());
         frame.pack(slotBb);
-        look.pack(slotBb.slice(LOOK_OFFSET, ShadeLook.SIZE).order(ByteOrder.LITTLE_ENDIAN), frame);
+        look.pack(slotBb.slice(LOOK_OFFSET, ShadeLook.SIZE).order(ByteOrder.nativeOrder()), frame);
 
         publishGlobals(ringSlot);
         MetalNative.shadeSetEnabled(device.handle(), true);
@@ -448,8 +457,8 @@ public final class CelestiaShade {
 
         atmosphere.renderClouds(device.handle(), frameCounter, texArgSeg);
 
-        if (frame.dimension == ShadeFrame.DIM_OVERWORLD) {
-            water.beginFrame(device.handle(), ringSlot, frame, level, x, y, z);
+        if (frame.dimension == ShadeFrame.DIM_OVERWORLD && settings.water().enabled()) {
+            water.beginFrame(device.handle(), ringSlot, frame, level, x, y, z, settings.water(), settings.atmosphere().weather());
         } else {
             water.disableFrame(device.handle());
         }
@@ -468,7 +477,7 @@ public final class CelestiaShade {
 
     /** Captures opaque HDR color + depth and builds the SSR depth pyramid before translucent terrain draws. */
     public ShadeShaderPatcher.Variant onTranslucentTerrainBind() {
-        if (isWorldRedirectActive() && frame.dimension == ShadeFrame.DIM_OVERWORLD) {
+        if (isWorldRedirectActive() && frame.dimension == ShadeFrame.DIM_OVERWORLD && settings.water().enabled()) {
             water.captureIfNeeded(device.handle());
             if (!frame.underwater) return ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE;
         }
@@ -502,8 +511,10 @@ public final class CelestiaShade {
         float bloomShift = n > 0 ? Math.max(0f, (float) (Math.log(1964.0 / Math.max(bloomHeight, 1)) / Math.log(2.0))) : 0f;
         int levelsUsed = n > 4 ? Math.max(4, Math.min(n, n - Math.round(bloomShift))) : n;
 
+        boolean bloom = settings.post().bloom() && settings.post().bloomStrength() > 0f;
+        if (!bloom) levelsUsed = Math.min(levelsUsed, 3); // Retain the exposure meter input.
         if (levelsUsed > 0) {
-            ByteBuffer dp = pushSeg.asSlice(0, 16).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+            ByteBuffer dp = pushSeg.asSlice(0, 16).asByteBuffer().order(ByteOrder.nativeOrder());
             dp.putFloat(0, 1f).putFloat(4, 1f).putFloat(8, 0f).putFloat(12, 0f);
             texArgSeg.set(ValueLayout.JAVA_LONG, 0, hdrWorldTex);
             MetalNative.shadeFullscreenPass(ctx, psoBloomDown0, bloomDownTex[0],
@@ -514,7 +525,8 @@ public final class CelestiaShade {
                 MetalNative.shadeFullscreenPass(ctx, psoBloomDown, bloomDownTex[i],
                     texArgSeg, 1, MemorySegment.NULL, 0, MemorySegment.NULL, 0);
             }
-
+        }
+        if (bloom && levelsUsed > 0) {
             float spectrum = look.lookPreset() == 1 ? 0.9f : look.lookPreset() == 2 ? 0.3f : 0.6f;
             float sum = 0f;
             if (levelsUsed >= 3) {
@@ -523,7 +535,7 @@ public final class CelestiaShade {
                 for (int i = levelsUsed - 2; i >= 1; i--) {
                     float wi = (float) Math.pow(i + 1 + bloomShift, spectrum);
                     sum += wi;
-                    ByteBuffer upP = pushSeg.asSlice(0, 16).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+                    ByteBuffer upP = pushSeg.asSlice(0, 16).asByteBuffer().order(ByteOrder.nativeOrder());
                     upP.putFloat(0, wi).putFloat(4, i == levelsUsed - 2 ? wLast : 1f).putFloat(8, 0f).putFloat(12, 0f);
                     texArgSeg.set(ValueLayout.JAVA_LONG, 0, bloomDownTex[i]);
                     texArgSeg.set(ValueLayout.JAVA_LONG, 8, i == levelsUsed - 2 ? bloomDownTex[levelsUsed - 1] : bloomAccumTex[i + 1]);
@@ -534,7 +546,7 @@ public final class CelestiaShade {
                 for (int i = levelsUsed - 1; i >= 1; i--) {
                     float wi = (float) Math.pow(i + 1 + bloomShift, spectrum);
                     sum += wi;
-                    ByteBuffer upP = pushSeg.asSlice(0, 16).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+                    ByteBuffer upP = pushSeg.asSlice(0, 16).asByteBuffer().order(ByteOrder.nativeOrder());
                     upP.putFloat(0, wi).putFloat(4, i == levelsUsed - 1 ? 0f : 1f).putFloat(8, 0f).putFloat(12, 0f);
                     texArgSeg.set(ValueLayout.JAVA_LONG, 0, bloomDownTex[i]);
                     texArgSeg.set(ValueLayout.JAVA_LONG, 8, i == levelsUsed - 1 ? bloomDownTex[i] : bloomAccumTex[i + 1]);
@@ -553,16 +565,16 @@ public final class CelestiaShade {
         aoActive = ao != 0L;
 
         // ShadeFinalParams: 6 x float4 = 96 B
-        ByteBuffer fp = pushSeg.asSlice(0, 96).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
-        fp.putFloat(0, bloomNorm).putFloat(4, levelsUsed > 1 ? 1f : 0f).putFloat(8, frameCounter & 0xffff).putFloat(12, frame.debug);
+        ByteBuffer fp = pushSeg.asSlice(0, 96).asByteBuffer().order(ByteOrder.nativeOrder());
+        fp.putFloat(0, bloomNorm).putFloat(4, bloom && levelsUsed > 1 ? 1f : 0f).putFloat(8, frameCounter & 0xffff).putFloat(12, frame.debug);
         fp.putFloat(16, w0).putFloat(20, 1f).putFloat(24, 1.6f).putFloat(28, 0.4f);
-        fp.putFloat(32, volumeTex != 0L ? 1f : 0f).putFloat(36, ao != 0L ? 1f : 0f).putFloat(40, 1f).putFloat(44, 1f);
+        fp.putFloat(32, volumeTex != 0L ? 1f : 0f).putFloat(36, ao != 0L ? settings.shadows().ssaoStrength() : 0f).putFloat(40, 1f).putFloat(44, 1f);
         fp.putFloat(48, hdrWidth).putFloat(52, hdrHeight).putFloat(56, 0f).putFloat(60, 0f);
         fp.putFloat(64, 0f).putFloat(68, 1f).putFloat(72, 1f).putFloat(76, 1f);
         fp.putFloat(80, 0f).putFloat(84, 0f).putFloat(88, 0f).putFloat(92, 0f);
 
         texArgSeg.set(ValueLayout.JAVA_LONG, 0, hdrWorldTex);
-        texArgSeg.set(ValueLayout.JAVA_LONG, 8, levelsUsed > 1 ? bloomAccumTex[1] : hdrWorldTex);
+        texArgSeg.set(ValueLayout.JAVA_LONG, 8, bloom && levelsUsed > 1 ? bloomAccumTex[1] : hdrWorldTex);
         texArgSeg.set(ValueLayout.JAVA_LONG, 16, depthPtr);
         texArgSeg.set(ValueLayout.JAVA_LONG, 24, levelsUsed > 0 ? bloomDownTex[0] : hdrWorldTex);
         texArgSeg.set(ValueLayout.JAVA_LONG, 32, volumeTex != 0L ? volumeTex : hdrWorldTex);
@@ -589,7 +601,8 @@ public final class CelestiaShade {
     }
 
     private long renderAo(long ctx, long depth) {
-        if (psoAo == 0L || frame.dimension != ShadeFrame.DIM_OVERWORLD) return 0L;
+        if (psoAo == 0L || frame.dimension != ShadeFrame.DIM_OVERWORLD
+            || !settings.shadows().ssao() || settings.shadows().ssaoStrength() == 0f) return 0L;
         int w = (hdrWidth + 1) / 2, h = (hdrHeight + 1) / 2;
         if (aoTexture == 0L || aoW != w || aoH != h) {
             if (aoTexture != 0L) MetalNative.textureDestroy(ctx, aoTexture);
@@ -660,29 +673,19 @@ public final class CelestiaShade {
         if (failed) return "Fallback (init failed)";
         if (!initialized) return "Pending";
         float ex = gpuView != null ? gpuView.getFloat(176) : 1.0f;
-        String effects = (water.isActive() ? " | Water SSR" : "")
+        String waterMode = water.isActive() && settings != null
+            ? (settings.water().screenReflections() ? " | Water SSR" : " | Water") : "";
+        String effects = waterMode
             + (atmosphere.hasClouds() ? " | Clouds" : "") + (atmosphere.hasVolume() ? " | Volumetrics" : "")
             + (aoActive ? " | SSAO" : "");
         if (shadowPass.isActive()) {
             return String.format(java.util.Locale.ROOT,
-                "P4 HDR (%dx%d) | Shadows %d %s (%dk/%dk q)%s | ev x%.2f | elev %.0f deg",
+                "P5 HDR (%dx%d) | Shadows %d %s (%dk/%dk q)%s | ev x%.2f | elev %.0f deg",
                 hdrWidth, hdrHeight, shadowPass.resolution(), shadowPass.sourceName(),
                 shadowPass.lastNearQuads() / 1000, shadowPass.lastFarQuads() / 1000, effects, ex, look.elevation);
         }
-        return String.format(java.util.Locale.ROOT, "P4 HDR (%dx%d)%s | ev x%.2f | elev %.0f deg",
+        return String.format(java.util.Locale.ROOT, "P5 HDR (%dx%d)%s | ev x%.2f | elev %.0f deg",
             hdrWidth, hdrHeight, effects, ex, look.elevation);
-    }
-
-    private void syncLookPreset() {
-        var mgr = ShaderPipelineManager.get();
-        String preset = mgr.optionState(mgr.activePack()).activePreset();
-        if ("Performance".equalsIgnoreCase(preset)) {
-            look.setLookPreset(2); // Natural
-        } else if ("Quality".equalsIgnoreCase(preset) || "Ultra".equalsIgnoreCase(preset)) {
-            look.setLookPreset(1); // Storybook
-        } else {
-            look.setLookPreset(0); // Epic
-        }
     }
 
     private void ensureHdrTarget(int w, int h) {

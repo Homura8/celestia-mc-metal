@@ -4,6 +4,7 @@ import com.mojang.renderpearl.api.pipeline.BindGroupLayout;
 import dev.celestia.metal.backend.MetalConst;
 import dev.celestia.metal.backend.MetalNative;
 import dev.celestia.metal.shade.ShadeShaderPatcher;
+import dev.celestia.metal.shade.ShadeSettings;
 import dev.celestia.metal.shade.water.ShadeWater;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -21,16 +22,21 @@ class ShadeP3aTest {
 
     @Test
     void shadeWaterParamsLayoutAndTranslucentPipelineDetection() {
-        assertEquals(160, ShadeWater.PARAMS_BYTES);
+        assertEquals(176, ShadeWater.PARAMS_BYTES);
         ByteBuffer b = ByteBuffer.allocateDirect(ShadeWater.PARAMS_BYTES).order(ByteOrder.LITTLE_ENDIAN);
         ShadeWater.packParams(b, new float[] {0.1f, 0.2f, 0.3f, 0.4f}, new float[] {0.5f, 0.6f, 0.7f, 0.8f},
-            true, 3.5f, 0.75f, true, true);
+            true, 3.5f, 0.75f, true, true, new ShadeSettings.Water(
+                true, true, 1.2f, 0.9f, true, 0.8f, 16, 96, 0.4f, 1f));
         assertEquals(0.1f, b.getFloat(0), 1e-6f);
         assertEquals(0.8f, b.getFloat(28), 1e-6f);
         assertEquals(1.0f, b.getFloat(32), 1e-6f); // state.x
         assertEquals(3.5f, b.getFloat(36), 1e-6f); // surfaceAbove
         assertEquals(0.75f, b.getFloat(40), 1e-6f); // wetness
         assertEquals(1.0f, b.getFloat(44), 1e-6f); // baked waves valid
+        assertEquals(96f, b.getFloat(52));
+        assertEquals(0.8f, b.getFloat(56));
+        assertEquals(0.4f, b.getFloat(60));
+        assertEquals(16, b.getInt(160));
         assertEquals(1.0f, b.getFloat(156), 1e-6f); // baked swell valid
 
         assertTrue(ShadeShaderPatcher.isTranslucentTerrainPipelineName("minecraft:pipeline/translucent_terrain"));

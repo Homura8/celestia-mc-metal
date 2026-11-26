@@ -46,7 +46,8 @@ fragment half4 shade_vl_march(VlFsIn in [[stage_in]],
 	float3 dir = normalize(shadeViewRay(in.uv * 2.0 - 1.0, f.invViewProj));
 	float mu = dot(dir, f.lightDirWorld.xyz);
 	float phase = 0.75 * shadeHG(mu, 0.76) + 0.25 * shadeHG(mu, -0.15);
-	const int steps = 12;
+	int steps = L.vl.x > 0.0 ? clamp(int(L.vl.x), 4, 24) : 12;
+	float strength = L.vl.x > 0.0 ? L.vl.y : 1.0;
 	float dt = distance / float(steps);
 	// Stable spatial jitter removes bands without temporal history.
 	float jitter = 0.2 + 0.6 * shadeNoise(in.position.xy, 0);
@@ -62,7 +63,7 @@ fragment half4 shade_vl_march(VlFsIn in [[stage_in]],
 		sun += transmission * (1.0 - stepT) * lit;
 		transmission *= stepT;
 	}
-	float3 light = f.sunColor.rgb * (sun * min(phase * 0.4, 0.28) * (1.0 - 0.65 * f.weather.x));
+	float3 light = f.sunColor.rgb * (strength * sun * min(phase * 0.4, 0.28) * (1.0 - 0.65 * f.weather.x));
 	return half4(half3(light), half(distance));
 }
 #endif

@@ -36,7 +36,7 @@ struct ShadeFrame {
 	float4 zenithColor;         // 672
 	float4 horizon[8];          // 688
 	float4 cascadeSplits;       // 816
-	float4 shadowParams;        // 832
+	float4 shadowParams;        // 832: inverse resolution, resolution, depth bias, filter spread scale
 	float4 screen;              // 848
 	float4 time;                // 864
 	float4 weather;             // 880
@@ -350,10 +350,11 @@ static half shadeShadow(depth2d_array<float> map, sampler cmp, constant ShadeFra
 	float tanT = clamp(sqrt(max(1.0 - nl * nl, 0.0)) / max(nl, 0.02), 0.0, 12.0);
 	float3 dir = thin ? L * 1.5 : float3(n) * 0.75 + L * (0.5 + 0.75 * tanT);
 	float texelUv = f.shadowParams.x;
+	float softness = f.shadowParams.w > 0.0 ? f.shadowParams.w : 1.0;
 	float m0, m1;
-	float near = shadeShadowCascade(map, cmp, 0u, f.shadowViewProj[0], p, dir * f.cascadeSplits.z, texelUv, 0.75, m0);
+	float near = shadeShadowCascade(map, cmp, 0u, f.shadowViewProj[0], p, dir * f.cascadeSplits.z, texelUv, 0.75 * softness, m0);
 	if (m0 < 0.85) return half(near);
-	float far = shadeShadowCascade(map, cmp, 1u, f.shadowViewProj[1], p, dir * f.cascadeSplits.w, texelUv, 0.5, m1);
+	float far = shadeShadowCascade(map, cmp, 1u, f.shadowViewProj[1], p, dir * f.cascadeSplits.w, texelUv, 0.5 * softness, m1);
 	far = mix(far, 1.0, smoothstep(0.85, 1.0, m1));
 	return half(m0 >= 1.0 ? far : mix(near, far, smoothstep(0.85, 1.0, m0)));
 }

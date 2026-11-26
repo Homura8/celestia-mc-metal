@@ -2,7 +2,7 @@
 
 **An independent, single-JAR, Apple Silicon-first Metal 4 / Metal 3 rendering engine and native MSL shader ecosystem for Minecraft: Java Edition 26.3 (Fabric).**
 
-Celestia Metal replaces Minecraft's legacy OpenGL path with Apple's native **Metal 4** (`MTL4CommandQueue`, `MTL4ArgumentTable`, `MTL4Compiler`, `MTLResidencySet`) on macOS 26+ and **Metal 3** on macOS 15+, paired with an extensible **native Metal Shading Language (MSL) shader pack system**, **MetalFX Spatial & Temporal upscaling**, **HDR / EDR (Display P3)** support, **120 Hz ProMotion** awareness, and a **CelestiaGlow**-inspired frosted observatory UI.
+Celestia Metal replaces Minecraft's legacy OpenGL path with Apple's native **Metal 4** (`MTL4CommandQueue`, `MTL4ArgumentTable`, `MTL4Compiler`, `MTLResidencySet`) on macOS 26+ and **Metal 3** on macOS 15+, paired with an extensible **native Metal Shading Language (MSL) shader pack system**, **MetalFX Spatial upscaling and TAAU**, **HDR / EDR (Display P3)** support, **120 Hz ProMotion** awareness, and a **CelestiaGlow**-inspired frosted observatory UI.
 
 ---
 
@@ -15,14 +15,14 @@ Celestia Metal replaces Minecraft's legacy OpenGL path with Apple's native **Met
   - Native multi-draw batching, indirect draws, persistent `MTLBinaryArchive` pipeline caching, and deferred resource retirement tied to `MTLSharedEvent` completion.
   - Automatic SPIR-V → MSL 3.1 translation via LWJGL SPIRV-Cross for vanilla & modded RenderPearl pipelines, with selective relaxed IEEE math for terrain shaders.
 - **Apple Silicon Hardware Features**:
-  - **MetalFX Spatial & Temporal Upscaling** (`MTL4FXSpatialScaler` / `MTL4FXTemporalScaler` on Metal 4, `MTLFX*` on Metal 3) with optional **Auto Render Scale** (65%–100%).
+  - **MetalFX Spatial Upscaling and TAAU** with optional **Auto Render Scale** (65%–100%).
   - **HDR / EDR Highlights**: `RGBA16Float` Extended Linear Display P3 swapchain with configurable peak luminance.
   - **ProMotion & Thermal / Battery Awareness**: Detects 120 Hz ProMotion displays, macOS thermal state, and Low Power Mode.
   - **Startup Crash Guard**: Protects against crash loops without falsely locking the game into OpenGL if a crash wasn't caused by Metal.
 - **Extensible Native MSL Shader Pack Ecosystem (API v1)**:
-  - Bundled **`Celestia Native`** (Rayleigh/Mie sky LUT, 2-cascade hardware PCF shadows with cave early-out, SSAO, held-item dynamic lights, Fresnel/SSR water with Beer-Lambert absorption & caustics, half-res volumetric clouds, dual Kawase bloom, AgX/ACES/Filmic HDR tonemapping).
-  - Bundled **`Celestia Minimal`** (ultra-lightweight 120 Hz ProMotion & battery-friendly pack).
-  - Load third-party native MSL packs or **Iris / OptiFine GLSL packs** from `shaderpacks/` (with `shaders.properties`, `.lang` labels, and `.txt` config compatibility).
+  - **Celestia Native** includes an atmospheric sky, two-cascade sun and moon shadows, SSAO, water refraction and reflections, volumetric clouds and light, surface weather, bloom, and filmic tone mapping.
+  - Apply **Performance**, **Balanced**, **Quality**, or **Ultra** from Shader Packs, or tune individual effects in Shader Options. Changes take effect in the current world.
+  - Discover third-party MSL and Iris / OptiFine GLSL packages in `shaderpacks/`. The loader supports `shaders.properties`, `.lang` labels, and `.txt` options for Iris packs.
   - Hotkeys in-game: **`O`** (Shader Packs), **`K`** (Pause/Resume Shaders), **`R`** (Hot-Reload Shaders).
 - **CelestiaGlow Frosted Observatory UI**:
   - Replaces Vanilla Video Settings with a Reese's Sodium Options–inspired tabbed, searchable screen (`General`, `Quality`, `Performance`, `Apple Silicon`, `Shaders`, `Advanced`), integrates cleanly into Sodium 0.9+ / Reese's Sodium Options via Sodium's Config API when Sodium is installed, and includes dedicated Shader Packs and Shader Options screens plus a live Performance HUD pill.
@@ -52,14 +52,14 @@ Celestia Metal replaces Minecraft's legacy OpenGL path with Apple's native **Met
 
 Measured via `tools/test_metal_backend.m` (`./gradlew runNativeTests`) on an **Apple M1 Pro (macOS 27.2.1, 120 Hz ProMotion, 16.00x EDR headroom)** rendering full **3024 × 1752** offscreen frames (20 measured iterations after 4 warmup frames, averaging GPU timestamps from `MTL4CommitFeedback` / `MTLCommandBuffer`):
 
-| Shader Pack & Preset | Metal API | Resolution | Avg GPU Time | Post + Lighting Ceiling |
+| Legacy Shader Fixture | Metal API | Resolution | Avg GPU Time | Post + Lighting Ceiling |
 | --- | --- | --- | --- | --- |
-| **Celestia Native (Balanced)** | **Metal 4** | 3024 × 1752 | **3.363 ms** | **297.3 FPS** |
-| **Celestia Native (Balanced)** | Metal 3 | 3024 × 1752 | 3.486 ms | 286.9 FPS |
-| **Celestia Minimal (Crisp)** | **Metal 4** | 3024 × 1752 | **2.474 ms** | **404.2 FPS** |
-| **Celestia Minimal (Crisp)** | Metal 3 | 3024 × 1752 | 2.567 ms | 389.6 FPS |
+| **Full fixture** | **Metal 4** | 3024 × 1752 | **3.363 ms** | **297.3 FPS** |
+| **Full fixture** | Metal 3 | 3024 × 1752 | 3.486 ms | 286.9 FPS |
+| **Minimal fixture** | **Metal 4** | 3024 × 1752 | **2.474 ms** | **404.2 FPS** |
+| **Minimal fixture** | Metal 3 | 3024 × 1752 | 2.567 ms | 389.6 FPS |
 
-> **Benchmark Scope Note:** These measurements time the full multi-pass compute + fullscreen shader pipeline (sky LUT, deferred lighting with 2-cascade PCF + SSAO, water reflections/refraction, half-res volumetric clouds, bloom downsample, and HDR tonemap composite) on synthetic G-buffer targets. Full in-game frame rates also depend on CPU chunk meshing, terrain vertex throughput, entity count, and render distance.
+> These legacy fixtures live in `tools/fixtures/shaderpacks/`. The measurements time the full multi-pass compute + fullscreen shader pipeline (sky LUT, deferred lighting with 2-cascade PCF + SSAO, water reflections/refraction, half-res volumetric clouds, bloom downsample, and HDR tonemap composite) on synthetic G-buffer targets. Full in-game frame rates also depend on CPU chunk meshing, terrain vertex throughput, entity count, and render distance.
 
 ---
 

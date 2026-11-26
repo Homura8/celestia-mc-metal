@@ -1190,8 +1190,8 @@ static void benchmark_native_pipelines(NSString *assetsDir, int32_t preferMetal4
     assert(ctx != 0);
     const char *apiLabel = cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3";
     NSString *common = read_file_str([assetsDir stringByAppendingPathComponent:@"shaders/celestia_common.metal"]);
-    NSString *nativeDir = [assetsDir stringByAppendingPathComponent:@"shaderpacks/celestia-native"];
-    NSString *minimalDir = [assetsDir stringByAppendingPathComponent:@"shaderpacks/celestia-minimal"];
+    NSString *nativeDir = @"tools/fixtures/shaderpacks/celestia-native";
+    NSString *minimalDir = @"tools/fixtures/shaderpacks/celestia-minimal";
 
     // Verify compilation across all Celestia Native presets (only print once on Metal 4 pass)
     const char *presetDefines[] = {
@@ -1217,7 +1217,7 @@ static void benchmark_native_pipelines(NSString *assetsDir, int32_t preferMetal4
             int64_t l = compile_pack_shader(ctx, common, minDefines, [minimalDir stringByAppendingPathComponent:fn]);
             cm_library_destroy(l);
         }
-        printf("[Shaders] Compiled ALL Celestia Native (3 presets) and Celestia Minimal shaders on M1 Pro GPU with 0 errors!\n");
+        printf("[Shader fixtures] Compiled legacy pack fixtures on M1 Pro GPU with 0 errors!\n");
     }
 
     // End-to-end 3024x1752 Balanced pipeline GPU benchmark
@@ -2259,7 +2259,7 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
     }
     look[112] = 0.002f; look[113] = 128.0f; // fogM
     look[132] = 12.0f; look[133] = 44.0f; look[135] = 1.0f; // clouds0
-    look[137] = 1.0f; // fancy
+    look[136] = 1.0f; look[137] = 14.0f; look[138] = 1.0f; // reflection dome, steps, density
     look[92] = look[93] = look[94] = 1.0f; // grade3
     look[96] = 1.4f; look[97] = 0.92f; look[98] = 0.8f; look[99] = 0.05f; // tonemap
     look[100] = 1.0f; // output ceiling
@@ -2389,7 +2389,7 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
         // Interleave modes so each one sees the same GPU warmup and clock changes.
         for (int offset = 0; offset < 3; offset++) {
             int mode = (iteration + offset) % 3;
-            lookMapped[137] = mode == 2 ? 1.0f : 0.0f;
+            lookMapped[137] = mode == 2 ? 14.0f : 8.0f;
             finalParams[8] = mode != 0 ? 1.0f : 0.0f;
             cm_cmd_begin(ctx);
             if (mode != 0) {
