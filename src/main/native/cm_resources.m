@@ -220,6 +220,7 @@ MTLPrimitiveType cm_primitive_type(int32_t topo) {
         case CM_TOPO_LINE_STRIP: return MTLPrimitiveTypeLineStrip;
         case CM_TOPO_TRIANGLES: return MTLPrimitiveTypeTriangle;
         case CM_TOPO_TRIANGLE_STRIP: return MTLPrimitiveTypeTriangleStrip;
+        case CM_TOPO_TRIANGLE_FAN: return MTLPrimitiveTypeTriangle;
         default: return MTLPrimitiveTypeTriangle;
     }
 }

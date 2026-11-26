@@ -46,9 +46,9 @@ void cm_compute_dispatch(int64_t ctxPtr, int64_t computePipePtr,
                 }
                 [enc setArgumentTable:at];
                 [enc dispatchThreadgroups:groups threadsPerThreadgroup:threads];
-                [enc barrierAfterEncoderStages:MTLStageDispatch
-                           beforeEncoderStages:MTLStageVertex | MTLStageFragment | MTLStageDispatch
-                             visibilityOptions:MTL4VisibilityOptionDevice];
+                [enc barrierAfterStages:MTLStageDispatch
+                      beforeQueueStages:MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit
+                      visibilityOptions:MTL4VisibilityOptionDevice];
                 [enc endEncoding];
             }
         } else {

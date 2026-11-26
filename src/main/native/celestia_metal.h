@@ -125,6 +125,7 @@ typedef enum CMTopology {
     CM_TOPO_LINE_STRIP = 2,
     CM_TOPO_TRIANGLES = 3,
     CM_TOPO_TRIANGLE_STRIP = 4,
+    CM_TOPO_TRIANGLE_FAN = 5,
 } CMTopology;
 
 typedef struct CMProbeInfo {
@@ -335,6 +336,7 @@ void cm_compute_pipeline_destroy(int64_t ctxPtr, int64_t pipePtr);
 
 // Command encoding & submission
 void cm_cmd_begin(int64_t ctxPtr);
+int32_t cm_cmd_has_active(int64_t ctxPtr);
 uint64_t cm_cmd_submit(int64_t ctxPtr, int32_t maxInFlight);
 int32_t cm_wait_submit(int64_t ctxPtr, uint64_t serial, uint64_t timeoutNs);
 

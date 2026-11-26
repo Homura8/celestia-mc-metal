@@ -258,7 +258,7 @@ int64_t cm_device_create(int32_t preferMetal4, int32_t debugLabels, const char *
                     }
 
                     MTL4ArgumentTableDescriptor *atDesc = [MTL4ArgumentTableDescriptor new];
-                    atDesc.maxBufferBindCount = 32;
+                    atDesc.maxBufferBindCount = 31;
                     atDesc.maxTextureBindCount = 32;
                     atDesc.maxSamplerStateBindCount = 16;
                     atDesc.initializeBindings = YES;
@@ -310,6 +310,8 @@ void cm_device_destroy(int64_t ctxPtr) {
             }
         }
         ctx.residencySet = nil;
+        ctx.fanIndexBuffer = nil;
+        ctx.fanIndexCapacity = 0;
         ctx.m4Allocators = nil;
         ctx.m4Compiler = nil;
         ctx.m4Queue = nil;

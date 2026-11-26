@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0-alpha.8
+
+### Fixed
+- **In-Game Sky Flickering & Metal 4 Encoder Barriers**: Added explicit Metal 4 producer barriers (`barrierAfterStages:beforeQueueStages:visibilityOptions:MTL4VisibilityOptionDevice`) before `endEncoding` in `cm_blit_clear_color`, `cm_blit_clear_depth`, and `cm_blit_clear_color_depth` so subsequent `MTLLoadActionLoad` render passes (such as the sky pass following `clearColorAndDepthTextures`) never race the preceding clear on Apple Silicon.
+- **Ring Buffer Fence Synchronization**: Updated `CelestiaCommandEncoder.createFence()` and `CelestiaFence.awaitCompletion` using `cm_cmd_has_active` so fences created while commands are recording track the upcoming submission serial rather than the previously submitted serial, preventing `MappableRingBuffer` (`Dynamic Transforms UBO`) slot reuse while GPU draws are still in flight.
+- **Persistent Native `TRIANGLE_FAN` Index Buffer**: Moved `TRIANGLE_FAN` triangulation (`CM_TOPO_TRIANGLE_FAN`) into native `cm_pass_draw` backed by a grow-only shared `fanIndexBuffer` with `baseVertex` offsetting, eliminating per-frame sky index buffer churn and preventing fan draws from overwriting the caller's bound index buffer.
+- **Metal 4 Argument Table & Blit/Compute Barrier Hardening**: Clamped `MTL4ArgumentTableDescriptor.maxBufferBindCount` to the documented max of `31`, switched `cm_compute_dispatch` post-dispatch barrier to `barrierAfterStages:beforeQueueStages:`, added intra-blit `MTLStageBlit` barriers before texture read/copy commands on Metal 4, and cleared stale `pendingUniforms` on `CelestiaRenderPass.setPipeline`.
+
+### Added
+- Native Metal 4 & Metal 3 GPU stress test (`Test 2e` in `tools/test_metal_backend.m`) and Java FFM smoke assertions covering `cm_cmd_has_active`, clear-to-load barriers across 16 back-to-back iterations, and `CM_TOPO_TRIANGLE_FAN` index-buffer preservation.
+
 ## 0.1.0-alpha.7
 
 ### Fixed

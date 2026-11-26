@@ -94,6 +94,7 @@ public final class MetalNative {
     private static MethodHandle mhComputePipelineDestroy;
 
     private static MethodHandle mhCmdBegin;
+    private static MethodHandle mhCmdHasActive;
     private static MethodHandle mhCmdSubmit;
     private static MethodHandle mhWaitSubmit;
     private static MethodHandle mhBlitClearColor;
@@ -225,6 +226,7 @@ public final class MetalNative {
         mhComputePipelineDestroy = downcall("cm_compute_pipeline_destroy", FunctionDescriptor.ofVoid(L, L));
 
         mhCmdBegin = downcall("cm_cmd_begin", FunctionDescriptor.ofVoid(L));
+        mhCmdHasActive = downcall("cm_cmd_has_active", FunctionDescriptor.of(I, L));
         mhCmdSubmit = downcall("cm_cmd_submit", FunctionDescriptor.of(L, L, I));
         mhWaitSubmit = downcall("cm_wait_submit", FunctionDescriptor.of(I, L, L, L));
 
@@ -482,6 +484,10 @@ public final class MetalNative {
 
     public static void cmdBegin(long ctx) {
         try { mhCmdBegin.invokeExact(ctx); } catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    public static boolean cmdHasActive(long ctx) {
+        try { return ((int) mhCmdHasActive.invokeExact(ctx)) != 0; } catch (Throwable t) { return false; }
     }
 
     public static long cmdSubmit(long ctx, int maxInFlight) {

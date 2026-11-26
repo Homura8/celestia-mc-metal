@@ -164,6 +164,7 @@ class NativeFfmSmokeTest {
             texs.set(ValueLayout.JAVA_LONG, 0, dstTex);
 
             MetalNative.cmdBegin(ctx);
+            assertTrue(MetalNative.cmdHasActive(ctx));
             MetalNative.blitClearColor(ctx, ctex, 0f, 0f, 0f, 1f);
             MetalNative.blitClearDepth(ctx, dtex, 0.0);
             MetalNative.blitClearColorDepth(ctx, ctex, 0f, 0f, 0f, 1f, dtex, 0.0);
@@ -182,6 +183,7 @@ class NativeFfmSmokeTest {
             MetalNative.passSetVertexBuffer(ctx, 0, vbo, 0, 12);
             MetalNative.passSetIndexBuffer(ctx, ibo, true);
             MetalNative.passDraw(ctx, 3, 3, 1, 0, 0);
+            MetalNative.passDraw(ctx, MetalConst.TOPO_TRIANGLE_FAN, 3, 1, 0, 0);
             MetalNative.passDrawIndexed(ctx, 3, 0, 3, 1, 0, 0, 0);
             MetalNative.passMultiDraw(ctx, 3, firsts, counts, 1, 1, 0);
             MetalNative.passMultiDrawIndexed(ctx, 3, idxOffs, counts, null, 1, 1, 0);
@@ -201,6 +203,7 @@ class NativeFfmSmokeTest {
             }
 
             long serial = MetalNative.cmdSubmit(ctx, 2);
+            assertFalse(MetalNative.cmdHasActive(ctx));
             assertTrue(MetalNative.waitSubmit(ctx, serial, 5_000_000_000L));
             assertEquals("", MetalNative.deviceDrainErrors(ctx));
             assertFalse(MetalNative.deviceIsLost(ctx));

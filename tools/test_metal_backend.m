@@ -248,6 +248,95 @@ static void verify_backend_ops(int32_t preferMetal4) {
     cm_texture_destroy(ctx, cubeTex);
     cm_texture_destroy(ctx, r8Tex);
 
+    // 2e. Metal 4 clear->load barrier, cmd_has_active, and persistent TRIANGLE_FAN index buffer preservation
+    assert(cm_cmd_has_active(ctx) == 0);
+    cm_cmd_begin(ctx);
+    assert(cm_cmd_has_active(ctx) == 1);
+    uint64_t s2eIdle = cm_cmd_submit(ctx, 2);
+    assert(cm_cmd_has_active(ctx) == 0);
+    assert(cm_wait_submit(ctx, s2eIdle, 5000000000ULL) == 1);
+
+    const char *fanMsl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VIn { float4 pos [[attribute(0)]]; };\n"
+        "struct VOut { float4 pos [[position]]; };\n"
+        "vertex VOut vs_fan(VIn in [[stage_in]]) { VOut o; o.pos = in.pos; return o; }\n"
+        "fragment half4 fs_sky() { return half4(0.40h, 0.70h, 1.00h, 1.00h); }\n"
+        "fragment half4 fs_mark() { return half4(0.00h, 1.00h, 0.25h, 1.00h); }\n";
+    int64_t libFan = cm_compile_msl_library(ctx, fanMsl, "fan_test", 0, err, sizeof(err));
+    assert(libFan != 0);
+    int64_t vsFan = cm_compile_function(libFan, "vs_fan", 0, 0, 0, err, sizeof(err));
+    int64_t fsSky = cm_compile_function(libFan, "fs_sky", 0, 0, 0, err, sizeof(err));
+    int64_t fsMark = cm_compile_function(libFan, "fs_mark", 0, 0, 0, err, sizeof(err));
+    CMVertexBufferDesc fanVbDesc = { 0, 16, 0 };
+    CMAttribBindingDesc fanAttr = { 0, 0, 0, CM_FMT_RGBA32_FLOAT };
+    int64_t psoFanSky = cm_render_pipeline_create(ctx, vsFan, fsSky, &fanVbDesc, 1, &fanAttr, 1, &colDesc, 1,
+                                                  CM_FMT_D32_FLOAT, CM_TOPO_TRIANGLE_FAN, 0, 0, 1,
+                                                  CM_CMP_GREATER_EQUAL, 0, 0.0f, 0.0f, "FanSkyPSO", err, sizeof(err));
+    int64_t psoAfterFan = cm_render_pipeline_create(ctx, vsFan, fsMark, &fanVbDesc, 1, &fanAttr, 1, &colDesc, 1,
+                                                    CM_FMT_D32_FLOAT, CM_TOPO_TRIANGLES, 0, 0, 1,
+                                                    CM_CMP_GREATER_EQUAL, 0, 0.0f, 0.0f, "AfterFanPSO", err, sizeof(err));
+    assert(psoFanSky && psoAfterFan);
+
+    // Offset slot 0 unused so firstVertex = 1 is also verified for TRIANGLE_FAN
+    float fanVerts[5 * 4] = {
+        9.0f,  9.0f, 0.5f, 1.0f,
+       -1.0f, -1.0f, 0.5f, 1.0f,
+       -1.0f,  1.0f, 0.5f, 1.0f,
+        1.0f,  1.0f, 0.5f, 1.0f,
+        1.0f, -1.0f, 0.5f, 1.0f,
+    };
+    float markVerts[3 * 4] = {
+       -1.0f, 1.0f, 0.5f, 1.0f,
+       -0.5f, 1.0f, 0.5f, 1.0f,
+       -1.0f, 0.5f, 0.5f, 1.0f,
+    };
+    uint32_t markIdx[3] = { 0, 1, 2 };
+    int64_t fanVbo = cm_buffer_create(ctx, sizeof(fanVerts), fanVerts, "FanVbo");
+    int64_t markVbo = cm_buffer_create(ctx, sizeof(markVerts), markVerts, "MarkVbo");
+    int64_t markIbo = cm_buffer_create(ctx, sizeof(markIdx), markIdx, "MarkIbo");
+    assert(fanVbo && markVbo && markIbo);
+
+    int32_t loadFlag = 0;
+    for (int iter = 0; iter < 16; iter++) {
+        cm_cmd_begin(ctx);
+        if ((iter & 1) == 0) {
+            cm_blit_clear_color_depth(ctx, ctex, 1.0f, 0.0f, 0.0f, 1.0f, dtex, 0.0);
+        } else {
+            cm_blit_clear_color(ctx, ctex, 1.0f, 0.0f, 0.0f, 1.0f);
+            cm_blit_clear_depth(ctx, dtex, 0.0);
+        }
+        assert(cm_pass_begin(ctx, &cview, &loadFlag, clearCol, 1, dview, 0, 0.0, 0, 0, 64, 64, "SkyLoadPass") == 1);
+        cm_pass_set_index_buffer(ctx, markIbo, 1);
+        cm_pass_set_pipeline(ctx, psoFanSky);
+        cm_pass_set_vertex_buffer(ctx, 0, fanVbo, 0, 16);
+        cm_pass_draw(ctx, CM_TOPO_TRIANGLE_FAN, 4, 1, 1, 0);
+        cm_pass_set_pipeline(ctx, psoAfterFan);
+        cm_pass_set_vertex_buffer(ctx, 0, markVbo, 0, 16);
+        cm_pass_draw_indexed(ctx, CM_TOPO_TRIANGLES, 0, 3, 1, 0, 0, 0);
+        cm_pass_end(ctx);
+        cm_blit_copy_texture_to_buffer(ctx, ctex, 0, 0, 0, 0, 64, 64, readBuf, 0, 64 * 4);
+        uint64_t s2e = cm_cmd_submit(ctx, 2);
+        assert(cm_wait_submit(ctx, s2e, 5000000000ULL) == 1);
+
+        // Center pixel (32, 32) must be sky-blue, never red from a racing clear
+        size_t center = ((size_t)32 * 64u + 32u) * 4u;
+        assert(abs((int)px[center + 0] - 102) <= 3 && abs((int)px[center + 1] - 179) <= 3 && px[center + 2] >= 252);
+        // Top-left pixel (0, 0) must be green mark from markIbo, proving TRIANGLE_FAN didn't clobber boundIndexBuffer
+        assert(px[0] <= 3 && px[1] >= 252 && abs((int)px[2] - 64) <= 3);
+    }
+
+    cm_buffer_destroy(ctx, markIbo);
+    cm_buffer_destroy(ctx, markVbo);
+    cm_buffer_destroy(ctx, fanVbo);
+    cm_pipeline_destroy(ctx, psoAfterFan);
+    cm_pipeline_destroy(ctx, psoFanSky);
+    cm_function_destroy(fsMark);
+    cm_function_destroy(fsSky);
+    cm_function_destroy(vsFan);
+    cm_library_destroy(libFan);
+
     // 3. MetalFX Spatial & Temporal scaler creation + execution
     int64_t mfxOut = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 128, 128, 1, 1, 0, 1, 1, 1, "MFXOut");
     int64_t mfxIn = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 64, 64, 1, 1, 0, 1, 1, 0, "MFXIn");

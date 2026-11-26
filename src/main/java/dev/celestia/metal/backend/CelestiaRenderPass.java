@@ -83,6 +83,7 @@ public final class CelestiaRenderPass implements RenderPassBackend {
         }
         long pso = this.pipeline.getOrCreatePso(depthFormat);
         MetalNative.passSetPipeline(device.handle(), pso);
+        Arrays.fill(pendingUniforms, null);
         this.uniformsDirty = true;
     }
 
@@ -195,28 +196,7 @@ public final class CelestiaRenderPass implements RenderPassBackend {
     public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
         if (closed || vertexCount <= 0 || instanceCount <= 0) return;
         flushUniforms();
-        if (pipeline != null && pipeline.topology() == PrimitiveTopology.TRIANGLE_FAN && vertexCount >= 3) {
-            drawTriangleFan(vertexCount, instanceCount, firstVertex, firstInstance);
-            return;
-        }
         MetalNative.passDraw(device.handle(), nativeTopology(), vertexCount, instanceCount, firstVertex, firstInstance);
-    }
-
-    private void drawTriangleFan(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
-        int triCount = vertexCount - 2;
-        int idxCount = triCount * 3;
-        long bytes = idxCount * 4L;
-        CelestiaBuffer fanBuf = device.createBufferInternal("TriangleFanIdx", GpuBuffer.USAGE_INDEX, bytes);
-        IntBuffer ib = fanBuf.mappedSegment().asByteBuffer().order(java.nio.ByteOrder.nativeOrder()).asIntBuffer();
-        for (int i = 0; i < triCount; i++) {
-            ib.put(firstVertex);
-            ib.put(firstVertex + i + 1);
-            ib.put(firstVertex + i + 2);
-        }
-        MetalNative.passSetIndexBuffer(device.handle(), fanBuf.handle(), true);
-        MetalNative.passDrawIndexed(device.handle(), MetalConst.toNativeTopology(PrimitiveTopology.TRIANGLES),
-            0L, idxCount, instanceCount, 0, 0, firstInstance);
-        encoder.runWhenSubmitDone(fanBuf::close);
     }
 
     @Override

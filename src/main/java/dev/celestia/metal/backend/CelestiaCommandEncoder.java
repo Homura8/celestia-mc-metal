@@ -277,8 +277,11 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
 
     @Override
     public GpuFence createFence() {
-        long latest = MetalNative.deviceNextSubmit(device.handle());
-        return new CelestiaFence(device, latest);
+        long serial = MetalNative.deviceNextSubmit(device.handle());
+        if (MetalNative.cmdHasActive(device.handle())) {
+            serial += 1L;
+        }
+        return new CelestiaFence(device, this, serial);
     }
 
     @Override

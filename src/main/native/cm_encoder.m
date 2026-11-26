@@ -74,12 +74,26 @@ static id ensure_blit_encoder(CMContext *ctx) {
     return ctx.activeBlitEnc;
 }
 
+static void emit_m4_render_producer_barrier(id<MTL4RenderCommandEncoder> enc) {
+    if (@available(macOS 26.0, *)) {
+        [enc barrierAfterStages:MTLStageVertex | MTLStageFragment
+              beforeQueueStages:MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit
+              visibilityOptions:MTL4VisibilityOptionDevice];
+    }
+}
+
 void cm_cmd_begin(int64_t ctxPtr) {
     if (!ctxPtr) return;
     @autoreleasepool {
         CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
         ensure_cmd_begun(ctx);
     }
+}
+
+int32_t cm_cmd_has_active(int64_t ctxPtr) {
+    if (!ctxPtr) return 0;
+    CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
+    return (ctx.activeM4CmdBuf != nil || ctx.activeM3CmdBuf != nil) ? 1 : 0;
 }
 
 uint64_t cm_cmd_submit(int64_t ctxPtr, int32_t maxInFlight) {
@@ -190,6 +204,7 @@ void cm_blit_clear_color(int64_t ctxPtr, int64_t texPtr, float r, float g, float
                 rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
                 rpd.colorAttachments[0].clearColor = MTLClearColorMake(r, g, b, a);
                 id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
+                emit_m4_render_producer_barrier(enc);
                 [enc endEncoding];
             }
         } else {
@@ -233,6 +248,7 @@ void cm_blit_clear_depth(int64_t ctxPtr, int64_t texPtr, double depth) {
                 MTL4RenderPassDescriptor *rpd = [MTL4RenderPassDescriptor new];
                 configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment, tex, YES, depth);
                 id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
+                emit_m4_render_producer_barrier(enc);
                 [enc endEncoding];
             }
         } else {
@@ -264,6 +280,7 @@ void cm_blit_clear_color_depth(int64_t ctxPtr, int64_t colorTexPtr, float r, flo
                 rpd.colorAttachments[0].clearColor = MTLClearColorMake(r, g, b, a);
                 configure_depth_stencil_attachments(rpd.depthAttachment, rpd.stencilAttachment, dtex, YES, depth);
                 id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
+                emit_m4_render_producer_barrier(enc);
                 [enc endEncoding];
             }
         } else {
@@ -357,6 +374,9 @@ void cm_blit_copy_texture_to_buffer(int64_t ctxPtr, int64_t srcTex, int32_t mip,
         NSUInteger bpr = dstRowBytes > 0 ? (NSUInteger)dstRowBytes : ((NSUInteger)w * cm_bytes_per_pixel(t.pixelFormat));
         if (ctx.metal4Active) {
             if (@available(macOS 26.0, *)) {
+                [(id<MTL4ComputeCommandEncoder>)enc barrierAfterEncoderStages:MTLStageBlit
+                                                          beforeEncoderStages:MTLStageBlit
+                                                            visibilityOptions:MTL4VisibilityOptionDevice];
                 [(id<MTL4ComputeCommandEncoder>)enc copyFromTexture:t sourceSlice:(NSUInteger)slice
                                                        sourceLevel:(NSUInteger)mip
                                                       sourceOrigin:MTLOriginMake((NSUInteger)srcX, (NSUInteger)srcY, 0)
@@ -386,6 +406,9 @@ void cm_blit_copy_texture(int64_t ctxPtr, int64_t srcTex, int32_t srcMip, int32_
         id<MTLTexture> d = (__bridge id<MTLTexture>)(void *)dstTex;
         if (ctx.metal4Active) {
             if (@available(macOS 26.0, *)) {
+                [(id<MTL4ComputeCommandEncoder>)enc barrierAfterEncoderStages:MTLStageBlit
+                                                          beforeEncoderStages:MTLStageBlit
+                                                            visibilityOptions:MTL4VisibilityOptionDevice];
                 [(id<MTL4ComputeCommandEncoder>)enc copyFromTexture:s sourceSlice:(NSUInteger)srcSlice
                                                        sourceLevel:(NSUInteger)srcMip
                                                       sourceOrigin:MTLOriginMake((NSUInteger)srcX, (NSUInteger)srcY, 0)
@@ -539,9 +562,7 @@ void cm_pass_end(int64_t ctxPtr) {
     if (ctx.metal4Active) {
         if (@available(macOS 26.0, *)) {
             id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc;
-            [enc barrierAfterStages:MTLStageVertex | MTLStageFragment
-                  beforeQueueStages:MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit
-                  visibilityOptions:MTL4VisibilityOptionDevice];
+            emit_m4_render_producer_barrier(enc);
             [enc endEncoding];
         }
     } else {
@@ -732,11 +753,67 @@ void cm_pass_set_index_buffer(int64_t ctxPtr, int64_t bufPtr, int32_t isInt32) {
     ctx.boundIndexType = isInt32 ? MTLIndexTypeUInt32 : MTLIndexTypeUInt16;
 }
 
+static id<MTLBuffer> ensure_fan_index_buffer(CMContext *ctx, NSUInteger neededIndices) {
+    if (ctx.fanIndexBuffer && ctx.fanIndexCapacity >= neededIndices) {
+        return ctx.fanIndexBuffer;
+    }
+    NSUInteger neededTris = (neededIndices + 2UL) / 3UL;
+    NSUInteger existingTris = ctx.fanIndexCapacity / 3UL;
+    NSUInteger triCap = MAX(MAX(neededTris, 256UL), existingTris * 2UL);
+    NSUInteger idxCap = triCap * 3UL;
+    id<MTLBuffer> buf = [ctx.device newBufferWithLength:idxCap * sizeof(uint32_t) options:MTLResourceStorageModeShared];
+    if (!buf) return nil;
+    if (ctx.debugLabels) {
+        buf.label = @"CelestiaMetal.FanIndices";
+    }
+    uint32_t *idx = (uint32_t *)buf.contents;
+    for (NSUInteger i = 0; i < triCap; i++) {
+        idx[i * 3 + 0] = 0;
+        idx[i * 3 + 1] = (uint32_t)(i + 1);
+        idx[i * 3 + 2] = (uint32_t)(i + 2);
+    }
+    cm_track_allocation(ctx, buf);
+    if (ctx.fanIndexBuffer) {
+        cm_retire_object(ctx, ctx.fanIndexBuffer, atomic_load(&ctx->_nextSubmitSerial) + 1);
+    }
+    ctx.fanIndexBuffer = buf;
+    ctx.fanIndexCapacity = idxCap;
+    return buf;
+}
+
 void cm_pass_draw(int64_t ctxPtr, int32_t topology, int32_t vertexCount, int32_t instanceCount,
                   int32_t firstVertex, int32_t firstInstance) {
     if (!ctxPtr || vertexCount <= 0 || instanceCount <= 0) return;
     CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
     if (!ctx.activeRenderEnc) return;
+    if (topology == CM_TOPO_TRIANGLE_FAN) {
+        if (vertexCount < 3) return;
+        NSUInteger idxCount = (NSUInteger)(vertexCount - 2) * 3UL;
+        id<MTLBuffer> fbuf = ensure_fan_index_buffer(ctx, idxCount);
+        if (!fbuf) return;
+        if (ctx.metal4Active) {
+            if (@available(macOS 26.0, *)) {
+                [(id<MTL4RenderCommandEncoder>)ctx.activeRenderEnc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                                                              indexCount:idxCount
+                                                                               indexType:MTLIndexTypeUInt32
+                                                                             indexBuffer:fbuf.gpuAddress
+                                                                       indexBufferLength:fbuf.length
+                                                                           instanceCount:(NSUInteger)instanceCount
+                                                                              baseVertex:(NSInteger)firstVertex
+                                                                            baseInstance:(NSUInteger)firstInstance];
+            }
+        } else {
+            [(id<MTLRenderCommandEncoder>)ctx.activeRenderEnc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                                                         indexCount:idxCount
+                                                                          indexType:MTLIndexTypeUInt32
+                                                                        indexBuffer:fbuf
+                                                                  indexBufferOffset:0
+                                                                      instanceCount:(NSUInteger)instanceCount
+                                                                         baseVertex:(NSInteger)firstVertex
+                                                                       baseInstance:(NSUInteger)firstInstance];
+        }
+        return;
+    }
     MTLPrimitiveType pt = cm_primitive_type(topology);
     if (ctx.metal4Active) {
         if (@available(macOS 26.0, *)) {

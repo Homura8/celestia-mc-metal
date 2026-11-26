@@ -72,6 +72,13 @@ public final class MetalConst {
     public static final int FMT_RGB16_FLOAT = 56;
     public static final int FMT_RGB32_FLOAT = 57;
 
+    public static final int TOPO_POINTS = 0;
+    public static final int TOPO_LINES = 1;
+    public static final int TOPO_LINE_STRIP = 2;
+    public static final int TOPO_TRIANGLES = 3;
+    public static final int TOPO_TRIANGLE_STRIP = 4;
+    public static final int TOPO_TRIANGLE_FAN = 5;
+
     private MetalConst() {}
 
     public static int toNativeFormat(GpuFormat format) {
@@ -230,11 +237,12 @@ public final class MetalConst {
 
     public static int toNativeTopology(PrimitiveTopology topo) {
         return switch (topo) {
-            case POINTS -> 0;
-            case LINES, DEBUG_LINES -> 1;
-            case DEBUG_LINE_STRIP -> 2;
-            case TRIANGLES, QUADS, TRIANGLE_FAN -> 3;
-            case TRIANGLE_STRIP -> 4;
+            case POINTS -> TOPO_POINTS;
+            case LINES, DEBUG_LINES -> TOPO_LINES;
+            case DEBUG_LINE_STRIP -> TOPO_LINE_STRIP;
+            case TRIANGLES, QUADS -> TOPO_TRIANGLES;
+            case TRIANGLE_STRIP -> TOPO_TRIANGLE_STRIP;
+            case TRIANGLE_FAN -> TOPO_TRIANGLE_FAN;
         };
     }
 }
