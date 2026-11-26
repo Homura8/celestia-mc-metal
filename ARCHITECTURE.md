@@ -13,14 +13,15 @@ Compiled at build time into `natives/macos-arm64/libcelestiametal.dylib` (`-fobj
 | `celestia_metal.h` | Shared C ABI enums (`CMFormat`, `CMCompareFunc`, `CMBlendFactor`, `CMBlendOp`, `CMTopology`), `CMContext` state, and exported symbols. |
 | `cm_device.m` | Apple7+ GPU probe, ProMotion refresh rate / EDR headroom / macOS thermal & Low Power Mode telemetry, Metal 4 (`MTL4CommandQueue`, `MTL4Compiler`, `MTLResidencySet`, 4-slot `MTL4CommandAllocator` ring, `MTL4ArgumentTable`) + Metal 3 fallback, `MTLBinaryArchive` disk persistence, and deferred object retirement. |
 | `cm_resources.m` | Unified-memory `MTLStorageModeShared` buffers, private GPU textures/views, comparison & anisotropic samplers, `MTL4Compiler` / `MTLDevice` MSL compilation, and `MTLRenderPipelineState` / `MTLComputePipelineState` creation with binary archive caching. |
-| `cm_encoder.m` | Unified command encoding for Metal 4 (`MTL4CommandBuffer`, `MTL4RenderCommandEncoder`, `MTL4ComputeCommandEncoder` blits/barriers) and Metal 3 (`MTLCommandBuffer`, `MTLRenderCommandEncoder`, `MTLBlitCommandEncoder`), native state-cache deduplication, push-constant ring buffer, and batched `multiDraw` / `multiDrawIndexed` / indirect draws. |
+| `cm_encoder.m` | Unified command encoding for Metal 4 (`MTL4CommandBuffer`, `MTL4RenderCommandEncoder`, `MTL4ComputeCommandEncoder` blits/barriers) and Metal 3 (`MTLCommandBuffer`, `MTLRenderCommandEncoder`, `MTLBlitCommandEncoder`), explicit producer/intra-blit barriers, `cm_cmd_has_active` fence tracking, native state-cache deduplication, push-constant ring buffer, grow-only native `CM_TOPO_TRIANGLE_FAN` index buffer, and batched `multiDraw` / `multiDrawIndexed` / indirect draws. |
 | `cm_surface.m` | `CAMetalLayer` swapchain setup (SDR `BGRA8Unorm` and HDR/EDR `RGBA16Float` Extended Linear Display P3), `displaySyncEnabled` VSync toggle, Y-flip present shader, and Metal 4 `waitForDrawable` / `signalDrawable` synchronization. |
 | `cm_upscaler.m` | `MTL4FXSpatialScaler` / `MTL4FXTemporalScaler` (Metal 4) and `MTLFXSpatialScaler` / `MTLFXTemporalScaler` (Metal 3) wrappers. |
-| `cm_shader_runtime.m` | Compute dispatch & pass-graph helpers for native MSL shader packs. |
+| `cm_shader_runtime.m` | Compute dispatch (`MTLStageDispatch` producer barrier) & pass-graph helpers for native MSL shader packs. |
 
-### Metal 4 Lifetime & Residency Discipline
-- Every buffer, texture, and view created while `metal4Active == YES` is immediately registered with the queue's `MTLResidencySet` under an `os_unfair_lock`, and `residencySet` is committed before command submission whenever dirty.
-- Destroyed GPU resources are never freed while in flight; they are appended to a retirement queue tagged with `nextSubmitSerial + 1` and released/untracked only once `MTLSharedEvent.signaledValue` reaches that serial.
+### Metal 4 Lifetime, Barriers & Residency Discipline
+- Every buffer, texture, view, and shared `fanIndexBuffer` created while `metal4Active == YES` is immediately registered with the queue's `MTLResidencySet` under an `os_unfair_lock`, and `residencySet` is committed before command submission whenever dirty.
+- Explicit Metal 4 producer barriers (`barrierAfterStages:beforeQueueStages:visibilityOptions:MTL4VisibilityOptionDevice`) are emitted before `endEncoding` across render passes (`cm_pass_end`), clear encoders (`cm_blit_clear_color`, `cm_blit_clear_depth`, `cm_blit_clear_color_depth`), blit passes (`cm_end_blit_if_active`), and compute dispatches (`cm_compute_dispatch`), alongside intra-blit `MTLStageBlit` barriers before texture read/copy commands.
+- Destroyed GPU resources are never freed while in flight; they are appended to a retirement queue tagged with `nextSubmitSerial + 1` and released/untracked only once `MTLSharedEvent.signaledValue` reaches that serial. Fences created via `createFence()` track `nextSubmitSerial + 1` when `cm_cmd_has_active` reports an open command buffer and flush before waiting.
 
 ---
 
