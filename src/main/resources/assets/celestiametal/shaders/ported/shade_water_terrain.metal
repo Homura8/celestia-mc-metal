@@ -47,7 +47,7 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
                                      texture2d<half> sceneCopy, depth2d<float> depthCopy,
                                      constant ShadeWaterParams &wp,
                                      texture2d<half> waterWaves, texture2d<float> waterCoarse,
-                                     texture2d<half> waterDetail CEL_DL_PARAMS) {
+                                     texture2d<half> waterDetail CEL_DL_PARAMS CEL_CL_PARAMS) {
 	// Always compute screen-space derivatives across the full 2x2 quad before any non-uniform early return.
 	float3 dpx = dfdx(p), dpy = dfdy(p);
 	float2 du = dfdx(uv), dv = dfdy(uv);
@@ -131,6 +131,9 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
 		wi.lit = underBelow ? float3(0.0) : shadeLit2(half3(1.0h), up, sky, block, shadow, false, false, f, L, shadeLook2Near(p, L));
 #ifdef SHADE_DYNLIGHT
 		if (!underBelow) wi.lit += f.ambientBlock.xyz * shadeDynamicLightsVol(dl, dlIrr, dlDir, p, float3(n), false, block);
+#endif
+#ifdef SHADE_COLORLIGHT
+		if (!underBelow) wi.lit += f.ambientBlock.xyz * shadeColorLightFrag(cl, clFine, clCoarse, f, p, float(block));
 #endif
 		wi.exposure = ex;
 #ifdef SHADE_SSR_PREV

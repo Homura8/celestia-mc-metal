@@ -19,7 +19,7 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
                                 texture2d<half> skyLut, sampler skyLutSmplr,
                                 depth2d_array<float> shadowMap, sampler shadowCmp,
                                 constant ShadeFrame &f, constant ShadeLook &L, constant ShadeGpu &g,
-                                constant ShadeResources &sr CEL_DL_PARAMS) {
+                                constant ShadeResources &sr CEL_DL_PARAMS CEL_CL_PARAMS) {
 	// Always compute derivatives across the full 2x2 quad before any non-uniform early return.
 	float3 dpx = dfdx(p), dpy = dfdy(p);
 	if (f.flags.x != SHADE_DIM_OVERWORLD || shadeDev(f, SHADE_DEV_FLAT_LIGHT)) {
@@ -55,6 +55,9 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
 #ifdef SHADE_DYNLIGHT
 	// Dynamic lights (P6a): the irradiance volume, two trilinear fetches half a block in front of the face.
 	radiance += float3(albedo) * f.ambientBlock.xyz * shadeDynamicLightsVol(dl, dlIrr, dlDir, p, n, thin, block);
+#endif
+#ifdef SHADE_COLORLIGHT
+	radiance += float3(albedo) * f.ambientBlock.xyz * shadeColorLightFrag(cl, clFine, clCoarse, f, p, float(block));
 #endif
 	float vanillaFog = shadeVanillaFog(p, fogRanges.xy, fogRanges.zw);
 	float chunkFade = saturate(1.0 - chunkVis);

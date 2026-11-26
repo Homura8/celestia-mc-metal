@@ -162,6 +162,10 @@ class ShadeP1Test {
         assertTrue(vanRes.patched());
         assertTrue(vanRes.vsSource().contains("float2(in.UV2) * (1.0 / 240.0)"));
         assertTrue(vanRes.fsSource().contains("shadeTerrainShade("));
+        // P6a / P6b: the dynamic-light and coloured-light bindings reach the terrain fragment main.
+        assertTrue(vanRes.fsSource().contains("celDL [[buffer(29)]]"));
+        assertTrue(vanRes.fsSource().contains("celCL [[buffer(30)]]"));
+        assertTrue(vanRes.fsSource().contains("shadeColorLightFrag("));
 
         // Sodium 0.9.x terrain patching (no Sodium classes touched)
         String sodiumTerrainVs = """

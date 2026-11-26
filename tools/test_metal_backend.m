@@ -2676,6 +2676,125 @@ static void verify_p6a_dynlights(NSString *assetsDir, int32_t preferMetal4) {
     cm_device_destroy(ctx);
 }
 
+// P6b coloured block light: the flood kernels (clear + spread per colour channel, blocked by opaque cells) and the shading's
+// read through the render-encoder bindings (buffer 30, textures 26 / 27), with the zeroed fallback bound before the module.
+// A soul-fire light (class 1, level 15) at (8, 8, 8) in a 2 x 2 x 2-section window with an opaque wall at x = 12: blue in
+// front, nothing behind.
+static void verify_p6b_colorlights(NSString *assetsDir, int32_t preferMetal4) {
+    int64_t ctx = cm_device_create(preferMetal4, 0, "");
+    assert(ctx);
+    const char *api = cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3";
+    NSString *cl = read_file_str([[assetsDir stringByAppendingPathComponent:@"shaders/ported"] stringByAppendingPathComponent:@"colorlight.metal"]);
+    NSString *kernels = [NSString stringWithFormat:@"#define SHADE_CL_KERNELS\n%@", cl];
+    NSString *probeSrc = [NSString stringWithFormat:@"%@\n"
+        "struct ClProbeOut { float4 position [[position]]; float2 uv; };\n"
+        "vertex ClProbeOut cl_probe_vs(uint vid [[vertex_id]]) {\n"
+        "  float2 p = float2(vid == 1 ? 3.0 : -1.0, vid == 2 ? 3.0 : -1.0);\n"
+        "  ClProbeOut o; o.position = float4(p, 0.0, 1.0); o.uv = float2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5); return o; }\n"
+        "fragment half4 cl_probe_fs(ClProbeOut in [[stage_in]], constant ShadeColorLights &H [[buffer(30)]],\n"
+        "    texture3d<float> fine [[texture(26)]], texture3d<float> coarse [[texture(27)]]) {\n"
+        "  int3 qi = in.uv.x < 0.5 ? int3(5, 8, 8) : int3(14, 8, 8);\n"
+        "  return half4(half3(shadeColorLightAt(H, fine, coarse, qi, float3(0.5), 12.0 / 15.0)), 1.0h); }\n", cl];
+    char err[4096] = {0};
+    int64_t lib = cm_compile_msl_library(ctx, probeSrc.UTF8String, "P6b probe", 1, err, sizeof(err));
+    if (!lib) { fprintf(stderr, "FAIL 2r compiling coloured-light probe: %s\n", err); exit(1); }
+    int64_t vs = cm_compile_function(lib, "cl_probe_vs", 0, 0, 0, err, sizeof(err));
+    int64_t fs = cm_compile_function(lib, "cl_probe_fs", 0, 0, 0, err, sizeof(err));
+    assert(vs && fs);
+    CMColorAttachmentDesc color = { CM_FMT_RGBA16_FLOAT, 0, 1, 0, 0, 1, 0, 0, 15 };
+    int64_t pso = cm_render_pipeline_create(ctx, vs, fs, NULL, 0, NULL, 0, &color, 1, -1, CM_TOPO_TRIANGLES,
+                                            0, 0, 0, 0, 0, 0, 0, "cl probe", err, sizeof(err));
+    if (!pso) { fprintf(stderr, "FAIL 2r coloured-light probe PSO: %s\n", err); exit(1); }
+    int64_t target = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 2, 1, 1, 1, 0, 1, 1, 0, "cl probe target");
+    int64_t read = cm_buffer_create(ctx, 256, NULL, "cl probe read");
+    assert(target && read);
+    const __fp16 *px = (const __fp16 *)(void *)cm_buffer_contents(read);
+    #define CL_PROBE() do { \
+        cm_cmd_begin(ctx); \
+        cm_shade_fullscreen_pass(ctx, pso, target, NULL, 0, NULL, 0, NULL, 0); \
+        cm_blit_copy_texture_to_buffer(ctx, target, 0, 0, 0, 0, 2, 1, read, 0, 16); \
+        assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1); \
+    } while (0)
+
+    // 1. Module off: the zeroed fallback header (fineMin.w = 0) means no colour anywhere.
+    assert(cm_cl_fallback(ctx) == 1);
+    CL_PROBE();
+    assert(px[0] == 0.0f && px[2] == 0.0f && px[4] == 0.0f && px[6] == 0.0f);
+
+    enum { FINE_SLOTS = 8, COARSE_SLOTS = 1, CELLS = 4096 };
+    int64_t state = cm_cl_new(ctx, kernels.UTF8String, 32, 32, 32, 16, 16, 16, (int64_t)(FINE_SLOTS + COARSE_SLOTS) * CELLS,
+                              64, 3, err, sizeof(err));
+    if (!state) { fprintf(stderr, "FAIL 2r cm_cl_new: %s\n", err); exit(1); }
+    uint8_t *ids = (uint8_t *)(uintptr_t)cm_cl_ids(state);
+    assert(ids);
+    // Fine slot of world section (sx, sy, sz) in a 2 x 2 x 2 window at the origin: (y * 2 + z) * 2 + x; cells in (y, z, x) order.
+    #define CL_ID(x, y, z) ids[((((y) >> 4) * 2 + ((z) >> 4)) * 2 + ((x) >> 4)) * CELLS + ((((y) & 15) * 16 + ((z) & 15)) * 16 + ((x) & 15))]
+    CL_ID(8, 8, 8) = 16 + 1 * 16 + 15;                                        // soul fire, level 15
+    for (int y = 0; y < 32; y++) for (int z = 0; z < 32; z++) CL_ID(12, y, z) = 15; // opaque wall
+    int32_t header[20] = {0};
+    header[0] = 0; header[1] = 0; header[2] = 0; header[3] = 1;               // fineMin, on
+    header[4] = 2; header[5] = 2; header[6] = 2; header[7] = 1;               // fineDim, fine active
+    header[8] = 0; header[9] = 0; header[10] = 0; header[11] = FINE_SLOTS * CELLS; // coarseMin, coarse ids base
+    header[12] = 1; header[13] = 1; header[14] = 1; header[15] = 0;           // coarseDim, coarse idle
+    float *tune = (float *)&header[16];
+    tune[0] = 1.0f; tune[1] = 1.0f; tune[2] = 2.0f; tune[3] = 0.0f;           // strength, glow, edge band
+    cm_cl_header(state, 0, header);
+    uint32_t *list = (uint32_t *)(uintptr_t)cm_cl_list(state, 0);
+    int n = 0;
+    for (int i = 0; i < FINE_SLOTS; i++) list[n++] = (uint32_t)i;             // clears (the textures start undefined)
+    list[n++] = 0x80000000u;
+    for (int i = 0; i < FINE_SLOTS; i++) list[n++] = (uint32_t)i;             // spread
+
+    // 2. Clear + 24 spread steps converge the light (15 levels at one per block).
+    double t0 = CFAbsoluteTimeGetCurrent();
+    cm_cmd_begin(ctx);
+    cm_cl_frame(ctx, state, 0, FINE_SLOTS + COARSE_SLOTS, FINE_SLOTS, 0, 24);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    double floodMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0;
+    CL_PROBE();
+    float fr = px[0], fg = px[1], fb = px[2], br = px[4], bg = px[5], bb = px[6];
+    if (!(fb > 0.02f && fr < 0.0f && fb > fg)) {
+        fprintf(stderr, "FAIL 2r soul light in front of the wall: add = (%g, %g, %g)\n", (double)fr, (double)fg, (double)fb);
+        exit(1);
+    }
+    if (!(fabsf(br) < 1e-4f && fabsf(bg) < 1e-4f && fabsf(bb) < 1e-4f)) {
+        fprintf(stderr, "FAIL 2r light through the wall: add = (%g, %g, %g)\n", (double)br, (double)bg, (double)bb);
+        exit(1);
+    }
+
+    // 3. Strength 0 in the header: the shading adds nothing (the live option off).
+    tune[0] = 0.0f;
+    cm_cl_header(state, 1, header);
+    CL_PROBE();
+    assert(px[0] == 0.0f && px[2] == 0.0f);
+    // Warm cost of the in-game step (one spread step a frame over the slots near coloured lights): 8 sections, best of 10.
+    double stepMs = 1e9;
+    for (int it = 0; it < 12; it++) {
+        uint32_t *l2 = (uint32_t *)(uintptr_t)cm_cl_list(state, 2);
+        for (int i = 0; i < FINE_SLOTS; i++) l2[i] = (uint32_t)i;
+        double s0 = CFAbsoluteTimeGetCurrent();
+        cm_cmd_begin(ctx);
+        cm_cl_frame(ctx, state, 2, 0, FINE_SLOTS, 0, 1);
+        assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+        double ms = (CFAbsoluteTimeGetCurrent() - s0) * 1000.0;
+        if (it >= 2 && ms < stepMs) stepMs = ms;
+    }
+    assert(cm_device_drain_errors(ctx, err, sizeof(err)) == 0);
+    printf("[Backend %s] Test 2r P6b coloured block light (fallback, soul-fire spread %.3f %.3f %.3f in front, 0 behind the wall, "
+           "strength 0; cold clear + 24 steps %.3f ms, warm step over 8 sections %.3f ms incl. submit) OK\n",
+           api, (double)fr, (double)fg, (double)fb, floodMs, stepMs);
+    #undef CL_ID
+    #undef CL_PROBE
+
+    cm_cl_free(ctx, state);
+    cm_buffer_destroy(ctx, read);
+    cm_texture_destroy(ctx, target);
+    cm_pipeline_destroy(ctx, pso);
+    cm_function_destroy(vs); cm_function_destroy(fs);
+    cm_library_destroy(lib);
+    cm_device_destroy(ctx);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <assetsDir>\n", argv[0]);
@@ -2713,6 +2832,8 @@ int main(int argc, char **argv) {
     verify_p4_taau([NSString stringWithUTF8String:argv[1]], 0);
     verify_p6a_dynlights([NSString stringWithUTF8String:argv[1]], 1);
     verify_p6a_dynlights([NSString stringWithUTF8String:argv[1]], 0);
+    verify_p6b_colorlights([NSString stringWithUTF8String:argv[1]], 1);
+    verify_p6b_colorlights([NSString stringWithUTF8String:argv[1]], 0);
     printf("ALL CELESTIA METAL NATIVE GPU TESTS PASSED.\n");
     return 0;
 }

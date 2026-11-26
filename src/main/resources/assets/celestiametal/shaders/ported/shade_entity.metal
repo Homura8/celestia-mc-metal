@@ -25,7 +25,7 @@ static inline float4 shadeEntityOut(float3 preExposed, float alpha, constant Sha
 
 static float4 shadeEntityShade(float4 vanilla, float4 albedoSrgb, float4 overlay, float3 p, float3 nv, float2 light, bool front, float4 frag,
                                int kind, float4 fog, texture2d<half> lut, sampler lutS, depth2d_array<float> shadowMap, sampler cmp,
-                               constant ShadeFrame &f, constant ShadeLook &L, constant ShadeGpu &g, constant ShadeResources &R CEL_DL_PARAMS) {
+                               constant ShadeFrame &f, constant ShadeLook &L, constant ShadeGpu &g, constant ShadeResources &R CEL_DL_PARAMS CEL_CL_PARAMS) {
 	float3 dpx = dfdx(p), dpy = dfdy(p);
 #ifdef MCOPT_HAND
 	if (f.flags.x != SHADE_DIM_OVERWORLD || shadeDev(f, SHADE_DEV_FLAT_LIGHT)) return vanilla;
@@ -78,6 +78,9 @@ static float4 shadeEntityShade(float4 vanilla, float4 albedoSrgb, float4 overlay
 	// Dynamic lights as the terrain takes them. Not the hand: its p is hand space, and DynLightEntityRendererMixin already
 	// raised the local player's packed light (block light here) to the dynamic level at the player.
 	if (kind != SHADE_ENT_HAND) radiance += float3(albedo) * f.ambientBlock.xyz * shadeDynamicLightsVol(dl, dlIrr, dlDir, p, n, thin, block);
+#endif
+#ifdef SHADE_COLORLIGHT
+	if (kind != SHADE_ENT_HAND) radiance += float3(albedo) * f.ambientBlock.xyz * shadeColorLightFrag(cl, clFine, clCoarse, f, p, float(block));
 #endif
 #ifdef MCOPT_HAND
 	float vanillaFog = 0.0;

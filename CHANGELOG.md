@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0-alpha.22
+
+### Added
+- **P6b coloured block light**. Placed lights tint their surroundings in their own colour: soul fire and soul lanterns blue, redstone red, copper torches and lanterns green, nether portals, crying obsidian and amethyst purple, froglights green and pink, and sea lanterns and conduits cyan. Light spreads block by block through a 256×128×256-block volume around the camera, with a coarser volume beyond it out to the render distance. Opaque blocks stop it, and where two colours meet they mix.
+- Terrain, water seen from above, and entities take the colour. Each pixel reads the volume at its exact world block, so the colour stays stable far from the world origin.
+- New Lighting & Shadows options: Coloured Block Lights, Coloured Light Strength, and Coloured Light Glow, which gives dim coloured lights such as redstone more reach. They apply live. Turning the module off frees its roughly 50 MB of volumes.
+- F3 shows how many volume sections are still spreading as `Colour N` in the Celestia shader status line.
+- Native Test 2r checks the fallback bindings, the soul-fire colour in front of a wall, no light behind it, and strength 0 on Metal 4 and Metal 3.
+
+### Changed
+- Native ABI 9 adds the `cm_cl_*` entry points. Buffer slot 30 and texture slots 26–27 now carry the coloured light.
+
 ## 0.1.0-alpha.21
 
 ### Added
