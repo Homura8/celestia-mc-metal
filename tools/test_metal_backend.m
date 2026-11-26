@@ -1,0 +1,469 @@
+#import "celestia_metal.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <assert.h>
+
+typedef struct CelestiaFrameUniformsC {
+    float viewProj[16];
+    float invViewProj[16];
+    float prevViewProj[16];
+    float shadowViewProjNear[16];
+    float shadowViewProjFar[16];
+    float cameraPosTime[4];
+    float sunDirDaylight[4];
+    float weatherState[4];
+    float skyColorFrame[4];
+    float fogColorElevation[4];
+    float fogRanges[4];
+    float resolutionParams[4];
+    float qualityFlags[4];
+} CelestiaFrameUniformsC;
+
+static void set_identity(float m[16]) {
+    memset(m, 0, 16 * sizeof(float));
+    m[0] = m[5] = m[10] = m[15] = 1.0f;
+}
+
+static NSString *read_file_str(NSString *path) {
+    NSError *err = nil;
+    NSString *s = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:&err];
+    if (!s) {
+        fprintf(stderr, "FAIL: could not read %s: %s\n", path.UTF8String, err.localizedDescription.UTF8String);
+        exit(1);
+    }
+    return s;
+}
+
+static void verify_backend_ops(int32_t preferMetal4) {
+    int64_t ctx = cm_device_create(preferMetal4, 1, "");
+    assert(ctx != 0);
+    int isM4 = cm_device_is_metal4(ctx);
+    printf("[Backend %s] initialized (metal4=%d)\n", preferMetal4 ? "Metal 4" : "Metal 3", isM4);
+
+    // 1. Buffer write & blit copy verification
+    uint32_t srcPattern[16];
+    for (int i = 0; i < 16; i++) srcPattern[i] = 0xCAFE0000u + (uint32_t)i;
+    int64_t srcBuf = cm_buffer_create(ctx, sizeof(srcPattern), srcPattern, "SrcBuf");
+    int64_t dstBuf = cm_buffer_create(ctx, sizeof(srcPattern), NULL, "DstBuf");
+    assert(srcBuf && dstBuf);
+
+    cm_cmd_begin(ctx);
+    cm_blit_copy_buffer(ctx, srcBuf, 0, dstBuf, 0, sizeof(srcPattern));
+    uint64_t s1 = cm_cmd_submit(ctx, 2);
+    assert(cm_wait_submit(ctx, s1, 5000000000ULL) == 1);
+
+    uint32_t *dstPtr = (uint32_t *)(uintptr_t)cm_buffer_contents(dstBuf);
+    for (int i = 0; i < 16; i++) {
+        assert(dstPtr[i] == srcPattern[i]);
+    }
+
+    // 2. Render pass + depth reversed-Z + readback verification
+    int64_t ctex = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, 64, 64, 1, 1, 0, 1, 1, 0, "TestRT");
+    int64_t cview = cm_texture_view_create(ctx, ctex, 0, 1);
+    int64_t dtex = cm_texture_create(ctx, CM_FMT_D32_FLOAT, 64, 64, 1, 1, 0, 1, 1, 0, "TestDepth");
+    int64_t dview = cm_texture_view_create(ctx, dtex, 0, 1);
+    int64_t readBuf = cm_buffer_create(ctx, 64 * 64 * 4, NULL, "ReadbackBuf");
+
+    const char *simpleMsl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VOut { float4 pos [[position]]; };\n"
+        "vertex VOut vs_main(uint vid [[vertex_id]]) {\n"
+        "  VOut o; float2 p = float2((vid==1)?3.0f:-1.0f, (vid==2)?3.0f:-1.0f);\n"
+        "  o.pos = float4(p, 0.5f, 1.0f); return o;\n"
+        "}\n"
+        "fragment half4 fs_main() { return half4(0.75h, 0.50h, 0.90h, 1.0h); }\n";
+    char err[2048] = {0};
+    int64_t lib = cm_compile_msl_library(ctx, simpleMsl, "smoke", 0, err, sizeof(err));
+    assert(lib != 0);
+    int64_t vs = cm_compile_function(lib, "vs_main", 0, 0, 0, err, sizeof(err));
+    int64_t fs = cm_compile_function(lib, "fs_main", 0, 0, 0, err, sizeof(err));
+    CMColorAttachmentDesc colDesc = { CM_FMT_RGBA8_UNORM, 0, 1, 0, 0, 1, 0, 0, 15 };
+    int64_t pso = cm_render_pipeline_create(ctx, vs, fs, NULL, 0, NULL, 0, &colDesc, 1,
+                                            CM_FMT_D32_FLOAT, CM_TOPO_TRIANGLES, 0, 0, 1,
+                                            CM_CMP_GREATER_EQUAL, 1, 0.0f, 0.0f, "SmokePSO", err, sizeof(err));
+    assert(pso != 0);
+
+    int32_t clearFlag = 1;
+    float clearCol[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    cm_cmd_begin(ctx);
+    assert(cm_pass_begin(ctx, &cview, &clearFlag, clearCol, 1, dview, 1, 0.0, 0, 0, 64, 64, "SmokePass") == 1);
+    cm_pass_set_pipeline(ctx, pso);
+    cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+    cm_pass_end(ctx);
+    cm_blit_copy_texture_to_buffer(ctx, ctex, 0, 0, 0, 0, 64, 64, readBuf, 0, 64 * 4);
+    uint64_t s2 = cm_cmd_submit(ctx, 2);
+    assert(cm_wait_submit(ctx, s2, 5000000000ULL) == 1);
+
+    uint8_t *px = (uint8_t *)(uintptr_t)cm_buffer_contents(readBuf);
+    assert(px[0] > 180 && px[1] > 120 && px[2] > 220 && px[3] == 255);
+
+    // 3. MetalFX Spatial & Temporal scaler creation + execution
+    int64_t mfxOut = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 128, 128, 1, 1, 0, 1, 1, 1, "MFXOut");
+    int64_t mfxIn = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 64, 64, 1, 1, 0, 1, 1, 0, "MFXIn");
+    int64_t mfxMotion = cm_texture_create(ctx, CM_FMT_RG16_FLOAT, 64, 64, 1, 1, 0, 1, 1, 0, "MFXMotion");
+    int64_t spatial = cm_upscaler_create(ctx, 0, CM_FMT_RGBA16_FLOAT, CM_FMT_RGBA16_FLOAT, 64, 64, 128, 128, 0);
+    int64_t temporal = cm_upscaler_create(ctx, 1, CM_FMT_RGBA16_FLOAT, CM_FMT_RGBA16_FLOAT, 64, 64, 128, 128, 0);
+    assert(spatial != 0);
+    assert(temporal != 0);
+    cm_cmd_begin(ctx);
+    cm_upscaler_encode(ctx, spatial, mfxIn, 0, 0, mfxOut, 0.0f, 0.0f, 0);
+    cm_upscaler_encode(ctx, temporal, mfxIn, dtex, mfxMotion, mfxOut, 0.25f, -0.25f, 1);
+    uint64_t s3 = cm_cmd_submit(ctx, 2);
+    assert(cm_wait_submit(ctx, s3, 5000000000ULL) == 1);
+
+    char drained[1024] = {0};
+    int errCnt = cm_device_drain_errors(ctx, drained, sizeof(drained));
+    if (errCnt > 0) {
+        fprintf(stderr, "FAIL: GPU reported errors: %s\n", drained);
+        exit(1);
+    }
+
+    cm_upscaler_destroy(ctx, spatial);
+    cm_upscaler_destroy(ctx, temporal);
+    cm_texture_destroy(ctx, mfxOut);
+    cm_texture_destroy(ctx, mfxIn);
+    cm_texture_destroy(ctx, mfxMotion);
+    cm_pipeline_destroy(ctx, pso);
+    cm_function_destroy(fs);
+    cm_function_destroy(vs);
+    cm_library_destroy(lib);
+    cm_buffer_destroy(ctx, readBuf);
+    cm_texture_view_destroy(ctx, dview);
+    cm_texture_destroy(ctx, dtex);
+    cm_texture_view_destroy(ctx, cview);
+    cm_texture_destroy(ctx, ctex);
+    cm_buffer_destroy(ctx, dstBuf);
+    cm_buffer_destroy(ctx, srcBuf);
+    cm_device_destroy(ctx);
+    printf("[Backend %s] ALL CHECKS PASSED\n", preferMetal4 ? "Metal 4" : "Metal 3");
+}
+
+static int64_t compile_pack_shader(int64_t ctx, NSString *commonSrc, NSString *defines, NSString *path) {
+    NSString *body = read_file_str(path);
+    NSString *full = [NSString stringWithFormat:@"%@\n%@\n%@", defines, commonSrc, body];
+    char err[4096] = {0};
+    int64_t lib = cm_compile_msl_library(ctx, full.UTF8String, path.lastPathComponent.UTF8String, 1, err, sizeof(err));
+    if (!lib) {
+        fprintf(stderr, "FAIL compiling %s:\n%s\n", path.UTF8String, err);
+        exit(1);
+    }
+    return lib;
+}
+
+static void benchmark_native_pipelines(NSString *assetsDir, int32_t preferMetal4) {
+    int64_t ctx = cm_device_create(preferMetal4, 0, "");
+    assert(ctx != 0);
+    const char *apiLabel = cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3";
+    NSString *common = read_file_str([assetsDir stringByAppendingPathComponent:@"shaders/celestia_common.metal"]);
+    NSString *nativeDir = [assetsDir stringByAppendingPathComponent:@"shaderpacks/celestia-native"];
+    NSString *minimalDir = [assetsDir stringByAppendingPathComponent:@"shaderpacks/celestia-minimal"];
+
+    // Verify compilation across all Celestia Native presets (only print once on Metal 4 pass)
+    const char *presetDefines[] = {
+        "#define SHADOWS_ENABLED 1\n#define SHADOW_RES 1024\n#define SHADOW_PCF_TAPS 4\n#define SSAO_ENABLED 0\n#define DYNAMIC_LIGHTS 1\n#define SKY_SCATTERING_STEPS 4\n#define STARFIELD_ENABLED 1\n#define AERIAL_FOG 1\n#define WATER_WAVES 1\n#define WATER_REFLECTIONS 1\n#define WATER_CAUSTICS 0\n#define CLOUDS_ENABLED 1\n#define CLOUD_STEPS 8\n#define GOD_RAYS 0\n#define BLOOM_ENABLED 1\n#define BLOOM_STRENGTH 0.18f\n#define TONEMAP_CURVE 2\n#define EXPOSURE 1.0f\n#define SATURATION 1.06f\n#define HDR_EDR_BOOST 1.2f\n",
+        "#define SHADOWS_ENABLED 1\n#define SHADOW_RES 2048\n#define SHADOW_PCF_TAPS 9\n#define SSAO_ENABLED 1\n#define DYNAMIC_LIGHTS 1\n#define SKY_SCATTERING_STEPS 8\n#define STARFIELD_ENABLED 1\n#define AERIAL_FOG 1\n#define WATER_WAVES 1\n#define WATER_REFLECTIONS 2\n#define WATER_CAUSTICS 1\n#define CLOUDS_ENABLED 1\n#define CLOUD_STEPS 14\n#define GOD_RAYS 1\n#define BLOOM_ENABLED 1\n#define BLOOM_STRENGTH 0.24f\n#define TONEMAP_CURVE 0\n#define EXPOSURE 1.05f\n#define SATURATION 1.08f\n#define HDR_EDR_BOOST 1.35f\n",
+        "#define SHADOWS_ENABLED 1\n#define SHADOW_RES 4096\n#define SHADOW_PCF_TAPS 16\n#define SSAO_ENABLED 1\n#define DYNAMIC_LIGHTS 1\n#define SKY_SCATTERING_STEPS 16\n#define STARFIELD_ENABLED 1\n#define AERIAL_FOG 1\n#define WATER_WAVES 1\n#define WATER_REFLECTIONS 2\n#define WATER_CAUSTICS 1\n#define CLOUDS_ENABLED 1\n#define CLOUD_STEPS 28\n#define GOD_RAYS 1\n#define BLOOM_ENABLED 1\n#define BLOOM_STRENGTH 0.32f\n#define TONEMAP_CURVE 1\n#define EXPOSURE 1.10f\n#define SATURATION 1.12f\n#define HDR_EDR_BOOST 1.60f\n"
+    };
+    NSArray<NSString *> *nativeFiles = @[@"sky_lut.metal", @"shadow_pass.metal", @"deferred_lighting.metal",
+                                         @"water_surface.metal", @"volumetric_clouds.metal", @"bloom.metal", @"tonemap_composite.metal"];
+    if (preferMetal4) {
+        for (int p = 0; p < 3; p++) {
+            for (NSString *fn in nativeFiles) {
+                int64_t l = compile_pack_shader(ctx, common, [NSString stringWithUTF8String:presetDefines[p]],
+                                                [nativeDir stringByAppendingPathComponent:fn]);
+                cm_library_destroy(l);
+            }
+        }
+    }
+
+    NSString *minDefines = @"#define WARM_TORCHLIGHT 1\n#define AERIAL_FOG 1\n#define WATER_SPECULAR 1\n#define EXPOSURE 1.05f\n#define SATURATION 1.08f\n";
+    if (preferMetal4) {
+        for (NSString *fn in @[@"sky_lut.metal", @"fast_lighting.metal", @"water_minimal.metal", @"tonemap_minimal.metal"]) {
+            int64_t l = compile_pack_shader(ctx, common, minDefines, [minimalDir stringByAppendingPathComponent:fn]);
+            cm_library_destroy(l);
+        }
+        printf("[Shaders] Compiled ALL Celestia Native (3 presets) and Celestia Minimal shaders on M1 Pro GPU with 0 errors!\n");
+    }
+
+    // End-to-end 3024x1752 Balanced pipeline GPU benchmark
+    const int W = 3024, H = 1752;
+    NSString *balDef = [NSString stringWithUTF8String:presetDefines[1]];
+    int64_t lSky = compile_pack_shader(ctx, common, balDef, [nativeDir stringByAppendingPathComponent:@"sky_lut.metal"]);
+    int64_t lDef = compile_pack_shader(ctx, common, balDef, [nativeDir stringByAppendingPathComponent:@"deferred_lighting.metal"]);
+    int64_t lWat = compile_pack_shader(ctx, common, balDef, [nativeDir stringByAppendingPathComponent:@"water_surface.metal"]);
+    int64_t lCld = compile_pack_shader(ctx, common, balDef, [nativeDir stringByAppendingPathComponent:@"volumetric_clouds.metal"]);
+    int64_t lBlm = compile_pack_shader(ctx, common, balDef, [nativeDir stringByAppendingPathComponent:@"bloom.metal"]);
+    int64_t lTon = compile_pack_shader(ctx, common, balDef, [nativeDir stringByAppendingPathComponent:@"tonemap_composite.metal"]);
+
+    char err[2048] = {0};
+    int64_t fnSky = cm_compile_function(lSky, "celestia_sky_lut_cs", 0, 0, 0, err, sizeof(err));
+    int64_t fnCld = cm_compile_function(lCld, "celestia_clouds_cs", 0, 0, 0, err, sizeof(err));
+    int64_t fnBlm = cm_compile_function(lBlm, "celestia_bloom_down_cs", 0, 0, 0, err, sizeof(err));
+    int64_t pSky = cm_compute_pipeline_create(ctx, fnSky, "sky_lut", err, sizeof(err));
+    int64_t pCld = cm_compute_pipeline_create(ctx, fnCld, "clouds", err, sizeof(err));
+    int64_t pBlm = cm_compute_pipeline_create(ctx, fnBlm, "bloom", err, sizeof(err));
+
+    CMColorAttachmentDesc f16Desc = { CM_FMT_RGBA16_FLOAT, 0, 1, 0, 0, 1, 0, 0, 15 };
+    int64_t vsDef = cm_compile_function(lDef, "celestia_fullscreen_vs", 0, 0, 0, err, sizeof(err));
+    int64_t fsDef = cm_compile_function(lDef, "celestia_deferred_fs", 0, 0, 0, err, sizeof(err));
+    int64_t pDef = cm_render_pipeline_create(ctx, vsDef, fsDef, NULL, 0, NULL, 0, &f16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "def", err, sizeof(err));
+
+    int64_t vsWat = cm_compile_function(lWat, "celestia_fullscreen_vs", 0, 0, 0, err, sizeof(err));
+    int64_t fsWat = cm_compile_function(lWat, "celestia_water_fs", 0, 0, 0, err, sizeof(err));
+    int64_t pWat = cm_render_pipeline_create(ctx, vsWat, fsWat, NULL, 0, NULL, 0, &f16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "wat", err, sizeof(err));
+
+    int64_t vsTon = cm_compile_function(lTon, "celestia_fullscreen_vs", 0, 0, 0, err, sizeof(err));
+    int64_t fsTon = cm_compile_function(lTon, "celestia_tonemap_fs", 0, 0, 0, err, sizeof(err));
+    int64_t pTon = cm_render_pipeline_create(ctx, vsTon, fsTon, NULL, 0, NULL, 0, &f16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "ton", err, sizeof(err));
+
+    assert(pSky && pCld && pBlm && pDef && pWat && pTon);
+
+    int64_t skyLut = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 64, 32, 1, 1, 0, 0, 1, 1, "SkyLUT");
+    int64_t gAlbedo = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "gAlbedo");
+    int64_t gData = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "gData");
+    int64_t depthTex = cm_texture_create(ctx, CM_FMT_D32_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "Depth");
+    int64_t shadowTex = cm_texture_create(ctx, CM_FMT_D32_FLOAT, 2048, 2048, 2, 1, 0, 1, 1, 0, "Shadow");
+    int64_t waterMask = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "WaterMask");
+    int64_t sceneA = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "SceneA");
+    int64_t sceneB = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "SceneB");
+    int64_t finalTex = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "Final");
+    int64_t cloudTex = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W / 2, H / 2, 1, 1, 0, 0, 1, 1, "Clouds");
+    int64_t bloomTex = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W / 2, H / 2, 1, 1, 0, 0, 1, 1, "Bloom");
+    int64_t vSceneA = cm_texture_view_create(ctx, sceneA, 0, 1);
+    int64_t vSceneB = cm_texture_view_create(ctx, sceneB, 0, 1);
+    int64_t vFinal = cm_texture_view_create(ctx, finalTex, 0, 1);
+
+    int64_t linSamp = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 0, 0);
+    int64_t shdSamp = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 1, CM_CMP_GREATER_EQUAL);
+
+    CelestiaFrameUniformsC fu;
+    memset(&fu, 0, sizeof(fu));
+    set_identity(fu.viewProj);
+    set_identity(fu.invViewProj);
+    set_identity(fu.prevViewProj);
+    set_identity(fu.shadowViewProjNear);
+    set_identity(fu.shadowViewProjFar);
+    fu.sunDirDaylight[0] = 0.4f; fu.sunDirDaylight[1] = 0.8f; fu.sunDirDaylight[2] = 0.4f; fu.sunDirDaylight[3] = 1.0f;
+    fu.fogRanges[0] = 64.0f; fu.fogRanges[1] = 192.0f; fu.fogRanges[2] = 160.0f; fu.fogRanges[3] = 256.0f;
+    fu.resolutionParams[0] = (float)W; fu.resolutionParams[1] = (float)H;
+    fu.resolutionParams[2] = 1000.0f; fu.resolutionParams[3] = 1.2f;
+    int64_t ubo = cm_buffer_create(ctx, 512, &fu, "BenchUBO");
+
+    // Clear G-buffers once before timing loop (simulating terrain render result: non-zero sky depth 0, albedo 0.4,0.6,0.8)
+    cm_cmd_begin(ctx);
+    cm_blit_clear_color(ctx, gAlbedo, 0.35f, 0.55f, 0.25f, 1.0f);
+    cm_blit_clear_color(ctx, gData, 0.5f, 0.5f, 0.2f, 1.0f);
+    cm_blit_clear_depth(ctx, depthTex, 0.5);
+    cm_blit_clear_depth(ctx, shadowTex, 0.0);
+    cm_blit_clear_color(ctx, waterMask, 0.0f, 1.0f, 0.0f, 0.0f);
+    uint64_t sInit = cm_cmd_submit(ctx, 2);
+    cm_wait_submit(ctx, sInit, 5000000000ULL);
+
+    const int WARMUP = 4;
+    const int ITERS = 20;
+    double totalGpuMs = 0.0;
+    for (int it = 0; it < WARMUP + ITERS; it++) {
+        cm_cmd_begin(ctx);
+        int64_t bufs14[15] = {0};
+        bufs14[14] = ubo;
+        int64_t offs14[15] = {0};
+
+        // 1. Sky LUT compute
+        int64_t skyTexs[1] = { skyLut };
+        cm_compute_dispatch(ctx, pSky, bufs14, offs14, 15, skyTexs, 1, NULL, 0, 8, 4, 1, 8, 8, 1);
+
+        // 2. Deferred lighting pass
+        int32_t noClear = 0; float clrZero[4] = {0};
+        cm_pass_begin(ctx, &vSceneA, &noClear, clrZero, 1, 0, 0, 0.0, 0, 0, W, H, "Deferred");
+        cm_pass_set_pipeline(ctx, pDef);
+        cm_pass_set_uniform_buffer(ctx, 14, ubo, 0);
+        cm_pass_set_texture_sampler(ctx, 0, gAlbedo, 0, linSamp);
+        cm_pass_set_texture_sampler(ctx, 1, gData, 1, shdSamp);
+        cm_pass_set_texture_sampler(ctx, 2, depthTex, -1, 0);
+        cm_pass_set_texture_sampler(ctx, 3, skyLut, -1, 0);
+        cm_pass_set_texture_sampler(ctx, 4, shadowTex, -1, 0);
+        cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+        cm_pass_end(ctx);
+
+        // 3. Water pass
+        cm_pass_begin(ctx, &vSceneB, &noClear, clrZero, 1, 0, 0, 0.0, 0, 0, W, H, "Water");
+        cm_pass_set_pipeline(ctx, pWat);
+        cm_pass_set_uniform_buffer(ctx, 14, ubo, 0);
+        cm_pass_set_texture_sampler(ctx, 0, sceneA, 0, linSamp);
+        cm_pass_set_texture_sampler(ctx, 1, waterMask, -1, 0);
+        cm_pass_set_texture_sampler(ctx, 2, depthTex, -1, 0);
+        cm_pass_set_texture_sampler(ctx, 3, skyLut, -1, 0);
+        cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+        cm_pass_end(ctx);
+
+        // 4. Half-res Volumetric Clouds compute
+        int64_t cldTexs[3] = { cloudTex, depthTex, skyLut };
+        int64_t cldSamps[1] = { linSamp };
+        cm_compute_dispatch(ctx, pCld, bufs14, offs14, 15, cldTexs, 3, cldSamps, 1,
+                            ((W / 2) + 7) / 8, ((H / 2) + 7) / 8, 1, 8, 8, 1);
+
+        // 5. Half-res Bloom compute
+        int64_t blmTexs[2] = { bloomTex, sceneB };
+        cm_compute_dispatch(ctx, pBlm, NULL, NULL, 0, blmTexs, 2, cldSamps, 1,
+                            ((W / 2) + 7) / 8, ((H / 2) + 7) / 8, 1, 8, 8, 1);
+
+        // 6. Final Composite & Tonemap
+        cm_pass_begin(ctx, &vFinal, &noClear, clrZero, 1, 0, 0, 0.0, 0, 0, W, H, "Tonemap");
+        cm_pass_set_pipeline(ctx, pTon);
+        cm_pass_set_uniform_buffer(ctx, 14, ubo, 0);
+        cm_pass_set_texture_sampler(ctx, 0, sceneB, 0, linSamp);
+        cm_pass_set_texture_sampler(ctx, 1, cloudTex, -1, 0);
+        cm_pass_set_texture_sampler(ctx, 2, bloomTex, -1, 0);
+        cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+        cm_pass_end(ctx);
+
+        uint64_t serial = cm_cmd_submit(ctx, 2);
+        cm_wait_submit(ctx, serial, 5000000000ULL);
+        uint64_t ns = cm_device_last_gpu_ns(ctx);
+        if (it >= WARMUP && ns > 0) {
+            totalGpuMs += (double)ns / 1e6;
+        }
+    }
+
+    double avgMs = totalGpuMs / ITERS;
+    printf("[Benchmark M1 Pro %s @ %dx%d] Celestia Native (Balanced) post+lighting GPU avg: %.3f ms (%.1f FPS ceiling)\n",
+           apiLabel, W, H, avgMs, avgMs > 0.0 ? (1000.0 / avgMs) : 0.0);
+
+    // Benchmark Celestia Minimal (Crisp) on the same context
+    int64_t lMinSky = compile_pack_shader(ctx, common, minDefines, [minimalDir stringByAppendingPathComponent:@"sky_lut.metal"]);
+    int64_t lMinLit = compile_pack_shader(ctx, common, minDefines, [minimalDir stringByAppendingPathComponent:@"fast_lighting.metal"]);
+    int64_t lMinWat = compile_pack_shader(ctx, common, minDefines, [minimalDir stringByAppendingPathComponent:@"water_minimal.metal"]);
+    int64_t lMinTon = compile_pack_shader(ctx, common, minDefines, [minimalDir stringByAppendingPathComponent:@"tonemap_minimal.metal"]);
+
+    int64_t fnMinSky = cm_compile_function(lMinSky, "celestia_min_sky_lut_cs", 0, 0, 0, err, sizeof(err));
+    int64_t pMinSky = cm_compute_pipeline_create(ctx, fnMinSky, "min_sky", err, sizeof(err));
+    int64_t vsMinLit = cm_compile_function(lMinLit, "celestia_fullscreen_vs", 0, 0, 0, err, sizeof(err));
+    int64_t fsMinLit = cm_compile_function(lMinLit, "celestia_min_lighting_fs", 0, 0, 0, err, sizeof(err));
+    int64_t pMinLit = cm_render_pipeline_create(ctx, vsMinLit, fsMinLit, NULL, 0, NULL, 0, &f16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "min_lit", err, sizeof(err));
+    int64_t vsMinWat = cm_compile_function(lMinWat, "celestia_fullscreen_vs", 0, 0, 0, err, sizeof(err));
+    int64_t fsMinWat = cm_compile_function(lMinWat, "celestia_min_water_fs", 0, 0, 0, err, sizeof(err));
+    int64_t pMinWat = cm_render_pipeline_create(ctx, vsMinWat, fsMinWat, NULL, 0, NULL, 0, &f16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "min_wat", err, sizeof(err));
+    int64_t vsMinTon = cm_compile_function(lMinTon, "celestia_fullscreen_vs", 0, 0, 0, err, sizeof(err));
+    int64_t fsMinTon = cm_compile_function(lMinTon, "celestia_min_tonemap_fs", 0, 0, 0, err, sizeof(err));
+    int64_t pMinTon = cm_render_pipeline_create(ctx, vsMinTon, fsMinTon, NULL, 0, NULL, 0, &f16Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "min_ton", err, sizeof(err));
+
+    double minGpuMs = 0.0;
+    for (int it = 0; it < WARMUP + ITERS; it++) {
+        cm_cmd_begin(ctx);
+        int64_t bufs14[15] = {0}; bufs14[14] = ubo;
+        int64_t offs14[15] = {0};
+        int64_t skyTexs[1] = { skyLut };
+        cm_compute_dispatch(ctx, pMinSky, bufs14, offs14, 15, skyTexs, 1, NULL, 0, 8, 4, 1, 8, 8, 1);
+
+        int32_t noClear = 0; float clrZero[4] = {0};
+        cm_pass_begin(ctx, &vSceneA, &noClear, clrZero, 1, 0, 0, 0.0, 0, 0, W, H, "MinLit");
+        cm_pass_set_pipeline(ctx, pMinLit);
+        cm_pass_set_uniform_buffer(ctx, 14, ubo, 0);
+        cm_pass_set_texture_sampler(ctx, 0, gAlbedo, 0, linSamp);
+        cm_pass_set_texture_sampler(ctx, 1, gData, -1, 0);
+        cm_pass_set_texture_sampler(ctx, 2, depthTex, -1, 0);
+        cm_pass_set_texture_sampler(ctx, 3, skyLut, -1, 0);
+        cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+        cm_pass_end(ctx);
+
+        cm_pass_begin(ctx, &vSceneB, &noClear, clrZero, 1, 0, 0, 0.0, 0, 0, W, H, "MinWat");
+        cm_pass_set_pipeline(ctx, pMinWat);
+        cm_pass_set_uniform_buffer(ctx, 14, ubo, 0);
+        cm_pass_set_texture_sampler(ctx, 0, sceneA, 0, linSamp);
+        cm_pass_set_texture_sampler(ctx, 1, waterMask, -1, 0);
+        cm_pass_set_texture_sampler(ctx, 2, depthTex, -1, 0);
+        cm_pass_set_texture_sampler(ctx, 3, skyLut, -1, 0);
+        cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+        cm_pass_end(ctx);
+
+        cm_pass_begin(ctx, &vFinal, &noClear, clrZero, 1, 0, 0, 0.0, 0, 0, W, H, "MinTon");
+        cm_pass_set_pipeline(ctx, pMinTon);
+        cm_pass_set_uniform_buffer(ctx, 14, ubo, 0);
+        cm_pass_set_texture_sampler(ctx, 0, sceneB, 0, linSamp);
+        cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+        cm_pass_end(ctx);
+
+        uint64_t serial = cm_cmd_submit(ctx, 2);
+        cm_wait_submit(ctx, serial, 5000000000ULL);
+        uint64_t ns = cm_device_last_gpu_ns(ctx);
+        if (it >= WARMUP && ns > 0) minGpuMs += (double)ns / 1e6;
+    }
+    double avgMinMs = minGpuMs / ITERS;
+    printf("[Benchmark M1 Pro %s @ %dx%d] Celestia Minimal (Crisp) post+lighting GPU avg: %.3f ms (%.1f FPS ceiling)\n",
+           apiLabel, W, H, avgMinMs, avgMinMs > 0.0 ? (1000.0 / avgMinMs) : 0.0);
+
+    cm_pipeline_destroy(ctx, pMinTon); cm_pipeline_destroy(ctx, pMinWat); cm_pipeline_destroy(ctx, pMinLit);
+    cm_compute_pipeline_destroy(ctx, pMinSky);
+    cm_function_destroy(vsMinTon); cm_function_destroy(fsMinTon);
+    cm_function_destroy(vsMinWat); cm_function_destroy(fsMinWat);
+    cm_function_destroy(vsMinLit); cm_function_destroy(fsMinLit);
+    cm_function_destroy(fnMinSky);
+    cm_library_destroy(lMinTon); cm_library_destroy(lMinWat); cm_library_destroy(lMinLit); cm_library_destroy(lMinSky);
+
+    // Readback check: verify output pixels are valid finite numbers > 0
+    int64_t rb = cm_buffer_create(ctx, 16 * 8, NULL, "FinalReadback");
+    cm_cmd_begin(ctx);
+    cm_blit_copy_texture_to_buffer(ctx, finalTex, 0, 0, 0, 0, 4, 4, rb, 0, 4 * 8);
+    uint64_t sRb = cm_cmd_submit(ctx, 2);
+    cm_wait_submit(ctx, sRb, 5000000000ULL);
+    uint16_t *halfPx = (uint16_t *)(uintptr_t)cm_buffer_contents(rb);
+    // Verify alpha == 1.0h (0x3C00 in IEEE 754 binary16)
+    assert(halfPx[3] == 0x3C00);
+
+    cm_buffer_destroy(ctx, rb);
+    cm_buffer_destroy(ctx, ubo);
+    cm_sampler_destroy(ctx, shdSamp);
+    cm_sampler_destroy(ctx, linSamp);
+    cm_texture_view_destroy(ctx, vFinal);
+    cm_texture_view_destroy(ctx, vSceneB);
+    cm_texture_view_destroy(ctx, vSceneA);
+    cm_texture_destroy(ctx, bloomTex);
+    cm_texture_destroy(ctx, cloudTex);
+    cm_texture_destroy(ctx, finalTex);
+    cm_texture_destroy(ctx, sceneB);
+    cm_texture_destroy(ctx, sceneA);
+    cm_texture_destroy(ctx, waterMask);
+    cm_texture_destroy(ctx, shadowTex);
+    cm_texture_destroy(ctx, depthTex);
+    cm_texture_destroy(ctx, gData);
+    cm_texture_destroy(ctx, gAlbedo);
+    cm_texture_destroy(ctx, skyLut);
+
+    cm_pipeline_destroy(ctx, pTon);
+    cm_pipeline_destroy(ctx, pWat);
+    cm_pipeline_destroy(ctx, pDef);
+    cm_compute_pipeline_destroy(ctx, pBlm);
+    cm_compute_pipeline_destroy(ctx, pCld);
+    cm_compute_pipeline_destroy(ctx, pSky);
+    cm_function_destroy(vsTon); cm_function_destroy(fsTon);
+    cm_function_destroy(vsWat); cm_function_destroy(fsWat);
+    cm_function_destroy(vsDef); cm_function_destroy(fsDef);
+    cm_function_destroy(fnBlm); cm_function_destroy(fnCld); cm_function_destroy(fnSky);
+    cm_library_destroy(lTon); cm_library_destroy(lBlm); cm_library_destroy(lCld);
+    cm_library_destroy(lWat); cm_library_destroy(lDef); cm_library_destroy(lSky);
+    cm_device_destroy(ctx);
+}
+
+int main(int argc, char **argv) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <assetsDir>\n", argv[0]);
+        return 2;
+    }
+    CMProbeInfo probe;
+    cm_probe_device(&probe);
+    printf("Probed GPU: %s | Apple%d | Metal 4=%d | %d Hz | EDR=%.2fx | WorkingSet=%.2f GB\n",
+           probe.gpuName, probe.appleGpuFamily, probe.metal4Supported,
+           probe.maxRefreshRateHz, probe.edrHeadroom,
+           (double)probe.recommendedMaxWorkingSetBytes / (1024.0 * 1024.0 * 1024.0));
+    assert(probe.supported == 1);
+
+    verify_backend_ops(1);
+    verify_backend_ops(0);
+    benchmark_native_pipelines([NSString stringWithUTF8String:argv[1]], 1);
+    benchmark_native_pipelines([NSString stringWithUTF8String:argv[1]], 0);
+    printf("ALL CELESTIA METAL NATIVE GPU TESTS PASSED.\n");
+    return 0;
+}
