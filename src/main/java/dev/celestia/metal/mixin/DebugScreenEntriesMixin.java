@@ -52,6 +52,10 @@ public abstract class DebugScreenEntriesMixin {
                     st[MetalConst.STAT_BLIT_ENCODERS], st[MetalConst.STAT_CLEARS_FOLDED], st[MetalConst.STAT_CLEARS_FLUSHED],
                     st[MetalConst.STAT_DRAWS]
                 ));
+                long[] pr = dev.presentRates();
+                displayer.addLine(String.format(
+                    "Celestia Present: %d frames/s rendered | %d/s shown | %d/s dropped (newer frame ready)",
+                    pr[0], pr[1], pr[2]));
             }
         });
     }

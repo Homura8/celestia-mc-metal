@@ -39,6 +39,10 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
     private final MemorySegment statsScratch = scratchArena.allocate(8L * MetalConst.STAT_COUNT, 8);
     private final long[] prevStats = new long[MetalConst.STAT_COUNT];
     private volatile long[] lastFrameStats = new long[MetalConst.STAT_COUNT];
+    // Rolling one-second window of frames submitted / shown on screen / dropped, for the F3 line.
+    private long windowStartNs = System.nanoTime();
+    private final long[] windowStart = new long[MetalConst.STAT_COUNT];
+    private volatile long[] presentRates = new long[3];
     private CelestiaRenderPass currentRenderPass;
     private boolean closed;
 
@@ -108,6 +112,22 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
             prevStats[i] = cur;
         }
         lastFrameStats = delta;
+        long now = System.nanoTime();
+        if (now - windowStartNs >= 1_000_000_000L) {
+            double secs = (now - windowStartNs) / 1e9;
+            presentRates = new long[] {
+                Math.round((prevStats[MetalConst.STAT_FRAMES_SUBMITTED] - windowStart[MetalConst.STAT_FRAMES_SUBMITTED]) / secs),
+                Math.round((prevStats[MetalConst.STAT_PRESENTS_SHOWN] - windowStart[MetalConst.STAT_PRESENTS_SHOWN]) / secs),
+                Math.round((prevStats[MetalConst.STAT_FRAMES_DROPPED] - windowStart[MetalConst.STAT_FRAMES_DROPPED]) / secs),
+            };
+            System.arraycopy(prevStats, 0, windowStart, 0, MetalConst.STAT_COUNT);
+            windowStartNs = now;
+        }
+    }
+
+    /** {frames submitted, frames shown on screen, frames dropped} per second over the last full second. */
+    public long[] presentRates() {
+        return presentRates;
     }
 
     /** Native encoder counters for the most recently presented frame, indexed by {@code MetalConst.STAT_*}. */

@@ -84,10 +84,13 @@ ls "$(xcrun --show-sdk-path)/System/Library/Frameworks/Metal.framework/Headers/"
 6. **FFM Hot Path (`MetalNative.Hot`)**:
    - Per-frame downcalls live in the `static final` `MetalNative.Hot` holder so C2 can inline `invokeExact`. Short, non-blocking calls use `Linker.Option.critical(false)`: they must never block on the GPU, upcall into Java, or receive heap segments (use `CelestiaCommandEncoder.Scratch` / direct buffers). Calls that can wait (`cm_pass_begin`, clears, submit, present) stay non-critical.
 
-7. **Buffer Map Synchronization (`CelestiaBuffer.map`)**:
+7. **Presentation (`cm_surface.m`)**:
+   - With VSync off and `nonBlocking` on, the render thread must never call `nextDrawable`: frames go into present slots and the serial `presentQueue` owns drawables. Any change to `CAMetalLayer` properties must run on `presentQueue` (`cm_surface_configure` uses `dispatch_sync`) so the layer never changes while that queue is inside `nextDrawable`. Never `dispatch_sync` onto `presentQueue` from code already running on it.
+
+8. **Buffer Map Synchronization (`CelestiaBuffer.map`)**:
    - Mods are often written against OpenGL, where mapping a buffer for read implicitly waits for GPU writes. Every GPU write into a `CelestiaBuffer` (`copyTextureToBuffer`, `copyToBuffer`, `writeToBuffer`, and any new blit/compute path that writes buffers) must call `markGpuWrite(recordingSerial())` so `map(read = true)` can submit and wait. Keep write-only maps unsynchronized (Minecraft's ring buffers rely on fences instead).
 
-8. **Privacy Check (`checkPrivacy`) & Workspace Boundaries**:
+9. **Privacy Check (`checkPrivacy`) & Workspace Boundaries**:
    - `./gradlew check` scans tracked files and non-native resources to ensure no machine-specific home directory paths or local OS usernames are committed. Always use `~/` or environment variables in docs and scripts.
    - Do not modify external user launcher instances (e.g., PrismLauncher `mods/` or `options.txt`); only inspect logs/crash reports read-only when debugging user reports.
 

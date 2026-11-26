@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 
-#define CM_ABI_VERSION 2
+#define CM_ABI_VERSION 3
 #define CM_MAX_COLOR_ATTACHMENTS 8
 #define CM_MAX_VERTEX_BUFFERS 8
 #define CM_MAX_UNIFORM_BUFFERS 15
@@ -144,7 +144,10 @@ typedef enum CMStatIndex {
     CM_STAT_CLEARS_FLUSHED = 4,    // clear requests emitted as standalone clear encoders
     CM_STAT_DRAWS = 5,             // individual GPU draw calls encoded
     CM_STAT_BLIT_ENCODERS = 6,     // blit (Metal 4 compute) encoders opened
-    CM_STAT_COUNT = 8,
+    CM_STAT_FRAMES_SUBMITTED = 7,  // frames handed to the surface (blitFromTexture)
+    CM_STAT_PRESENTS_SHOWN = 8,    // presents macOS reported on screen (non-blocking present path)
+    CM_STAT_FRAMES_DROPPED = 9,    // finished frames superseded by a newer one before reaching the screen
+    CM_STAT_COUNT = 10,
 } CMStatIndex;
 
 typedef struct CMProbeInfo {
@@ -224,8 +227,11 @@ typedef struct CMAttribBindingDesc {
     double _pendingClearDepth[CM_MAX_PENDING_CLEARS];
     BOOL _pendingClearIsDepth[CM_MAX_PENDING_CLEARS];
     int32_t _pendingClearCount;
-    // Cumulative statistics (render thread only)
+    // Cumulative statistics (render thread only, except the atomics below)
     int64_t _stats[CM_STAT_COUNT];
+    // Written by the surface present queue / presented handlers
+    _Atomic int64_t _presentsShown;
+    _Atomic int64_t _framesDropped;
 }
 @property (nonatomic, strong) id<MTLDevice> device;
 @property (nonatomic) BOOL metal4Active;
@@ -453,6 +459,9 @@ void cm_surface_destroy(int64_t ctxPtr, int64_t surfPtr);
 void cm_surface_configure(int64_t surfPtr, int32_t width, int32_t height, int32_t vsync, int32_t hdrEnabled);
 int32_t cm_surface_acquire(int64_t surfPtr);
 void cm_surface_blit_and_present(int64_t ctxPtr, int64_t surfPtr, int64_t srcTexViewPtr, int32_t maxInFlight);
+// Non-blocking presentation with VSync off (default on). The render thread never waits for a drawable: each frame is
+// rendered into a present slot and a present queue shows the newest finished frame (MAILBOX semantics, no tearing).
+void cm_surface_set_nonblocking(int64_t surfPtr, int32_t enabled);
 
 // MetalFX Upscaling
 int64_t cm_upscaler_create(int64_t ctxPtr, int32_t temporal, int32_t colorFmt, int32_t outputFmt,

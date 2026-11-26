@@ -55,6 +55,11 @@ public final class CelestiaConfig {
         public float hdrPeakNits = 1000.0f;
         public ThermalMode thermalMode = ThermalMode.BALANCED;
         public boolean lowLatencyQueue = true;
+        /**
+         * With VSync off, never block the render thread waiting for a drawable: present the newest finished frame
+         * (MAILBOX semantics, no tearing) so the frame rate is not capped near twice the display refresh rate.
+         */
+        public boolean nonBlockingPresent = true;
         public boolean promotionFramePacing = true;
         public HudMode performanceHud = HudMode.COMPACT;
     }
