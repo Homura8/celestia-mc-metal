@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.0-alpha.12
+
+### Performance
+- **Non-blocking presentation with VSync off** (`cm_surface_set_nonblocking`, on by default): profiling showed the render thread spending about half of every frame blocked in `CAMetalLayer.nextDrawable`, capping the frame rate near twice the display refresh rate (~237 FPS on a 120 Hz panel) while the GPU sat 35% idle. Each frame is now rendered into one of four present slots in its own command buffer, and a serial present queue, woken by an `MTLSharedEventListener` when the GPU finishes, copies the newest finished frame into a drawable. At most two presents wait to be shown; until one is, a newer finished frame replaces the waiting one (MAILBOX semantics, no tearing). VSync-on presentation is unchanged. Approach adapted from Pure Metal's present credits / present queue.
+
+### Added
+- **Non-Blocking Present** toggle (Advanced tab and Sodium's Celestia Metal page, `appleSilicon.nonBlockingPresent`), applied live; `-Dcelestiametal.blockingPresent=true` forces the previous behaviour.
+- F3 `Celestia Present` line: frames rendered, shown on screen, and dropped per second.
+- Native Test 2i (non-blocking present: acquire never blocks, frames flow without on-screen feedback, reconfigure / mode switch / teardown).
+
+### Changed
+- Native ABI bumped to `CM_ABI_VERSION 3`; `CAMetalLayer.framebufferOnly` is now `NO` so the present queue can blit into drawables.
+
 ## 0.1.0-alpha.11
 
 ### Performance

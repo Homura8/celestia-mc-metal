@@ -7,7 +7,7 @@ We gratefully acknowledge and preserve attribution for the following projects an
 ## Metal Rendering & Apple Silicon Architecture
 
 - **[Pure Metal](https://github.com/imCinq/pure-metal)** by **imCinq** (`Apache-2.0`)
-  - Clean `com.mojang.renderpearl` backend architecture, SPIRV-Cross MSL vertex Y-flip + slot-binding model, deferred resource retirement across in-flight submits, selective relaxed math for terrain shaders, MetalFX scaling architecture, and StartupGuard crash-loop isolation.
+  - Clean `com.mojang.renderpearl` backend architecture, SPIRV-Cross MSL vertex Y-flip + slot-binding model, deferred resource retirement across in-flight submits, selective relaxed math for terrain shaders, MetalFX scaling architecture, StartupGuard crash-loop isolation, and the non-blocking MAILBOX-style present queue with present credits (adapted in `cm_surface.m`).
 - **[mcopt](https://github.com/noahdunnagan/mcopt)** by **Noah Dunnagan** (`Apache-2.0`)
   - Pioneering Apple Silicon Metal rendering patterns, buffer pooling, native draw batching, chunk upload pacing, and macOS QoS/thermal tuning.
 - **[Cadence](https://github.com/BattledGamerCF/Cadence)** by **BattledGamerCF** (`Apache-2.0`)

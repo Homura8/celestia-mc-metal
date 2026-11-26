@@ -341,6 +341,12 @@ public final class CelestiaVideoSettingsScreen extends Screen {
                         case OPENGL -> "OpenGL";
                         case VULKAN -> "Vulkan";
                     }));
+                list.add(new OptionEntry.Toggle("Non-Blocking Present",
+                    "With VSync off, the game never waits for the display: the newest finished frame is shown each refresh "
+                        + "without tearing, lifting the cap near twice the refresh rate. Turn off to present every frame in order.",
+                    ShaderOptionDef.Impact.HIGH,
+                    () -> workingConfig.appleSilicon.nonBlockingPresent,
+                    v -> { workingConfig.appleSilicon.nonBlockingPresent = v; dirty = true; }));
                 list.add(new OptionEntry.Toggle("Render Pass Merging",
                     "Continues the open Metal render encoder for consecutive passes drawing to the same targets, "
                         + "saving a full-resolution tile store/load per pass. Turn off if a mod renders incorrectly.",

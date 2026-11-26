@@ -573,6 +573,61 @@ static void verify_backend_ops(int32_t preferMetal4) {
             printf("[Backend %s] Test 2h staging reuse buffer->texture ordering OK\n", preferMetal4 ? "Metal 4" : "Metal 3");
         }
 
+        // 2i. Non-blocking (MAILBOX-style) presentation with VSync off: acquire never blocks, frames keep flowing even
+        //     when presented handlers never report "shown" (offscreen layer = worst case), and teardown is safe.
+        {
+            CAMetalLayer *layer = [CAMetalLayer layer];
+            int64_t surf = cm_surface_create(ctx, (int64_t)(__bridge void *)layer, 0);
+            assert(surf != 0);
+            cm_surface_set_nonblocking(surf, 1);
+            cm_surface_configure(surf, 256, 128, 0, 0);
+            int64_t st0[CM_STAT_COUNT] = {0}, st1[CM_STAT_COUNT] = {0};
+            cm_device_stats(ctx, st0, CM_STAT_COUNT);
+            double worstAcquireMs = 0.0, worstFrameMs = 0.0;
+            CFTimeInterval t0 = CACurrentMediaTime();
+            const int FRAMES = 120;
+            for (int f = 0; f < FRAMES; f++) {
+                CFTimeInterval fs = CACurrentMediaTime();
+                assert(cm_surface_acquire(surf) == 1);
+                worstAcquireMs = MAX(worstAcquireMs, (CACurrentMediaTime() - fs) * 1000.0);
+                cm_cmd_begin(ctx);
+                assert(cm_pass_begin(ctx, &cview, &clearFlag, clearCol, 1, 0, 0, 0.0, 0, 0, 64, 64, "PresentSrc") == 1);
+                cm_pass_end(ctx);
+                cm_surface_blit_and_present(ctx, surf, cview, 2);
+                worstFrameMs = MAX(worstFrameMs, (CACurrentMediaTime() - fs) * 1000.0);
+            }
+            double totalMs = (CACurrentMediaTime() - t0) * 1000.0;
+            cm_device_wait_idle(ctx);
+            cm_device_stats(ctx, st1, CM_STAT_COUNT);
+            assert(st1[CM_STAT_FRAMES_SUBMITTED] - st0[CM_STAT_FRAMES_SUBMITTED] == FRAMES);
+            // acquire must not touch drawables on this path
+            assert(worstAcquireMs < 2.0);
+            // The render thread may only wait on GPU in-flight throttling or a briefly busy slot, never ~1 s nextDrawable timeouts
+            if (worstFrameMs > 120.0) {
+                fprintf(stderr, "FAIL 2i: a frame blocked for %.1f ms\n", worstFrameMs);
+                exit(1);
+            }
+            // Mode switches and reconfiguration while presents may be in flight
+            cm_surface_configure(surf, 320, 160, 0, 0);
+            for (int f = 0; f < 8; f++) {
+                cm_cmd_begin(ctx);
+                cm_surface_blit_and_present(ctx, surf, cview, 2);
+            }
+            cm_surface_set_nonblocking(surf, 0);
+            cm_surface_set_nonblocking(surf, 1);
+            cm_surface_destroy(ctx, surf);
+            cm_device_wait_idle(ctx);
+            char drained2[512] = {0};
+            if (cm_device_drain_errors(ctx, drained2, sizeof(drained2)) > 0) {
+                fprintf(stderr, "FAIL 2i: GPU errors: %s\n", drained2);
+                exit(1);
+            }
+            printf("[Backend %s] Test 2i non-blocking present OK (%d frames in %.1f ms, worst frame %.2f ms, worst acquire %.3f ms, shown %lld, dropped %lld)\n",
+                   preferMetal4 ? "Metal 4" : "Metal 3", FRAMES, totalMs, worstFrameMs, worstAcquireMs,
+                   (long long)(st1[CM_STAT_PRESENTS_SHOWN] - st0[CM_STAT_PRESENTS_SHOWN]),
+                   (long long)(st1[CM_STAT_FRAMES_DROPPED] - st0[CM_STAT_FRAMES_DROPPED]));
+        }
+
         cm_buffer_destroy(ctx, readBuf2);
         cm_texture_destroy(ctx, ctex2);
         cm_buffer_destroy(ctx, fullVbo);

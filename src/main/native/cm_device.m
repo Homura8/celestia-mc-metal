@@ -205,6 +205,8 @@ int64_t cm_device_create(int32_t preferMetal4, int32_t debugLabels, const char *
         atomic_init(&ctx->_lastGpuFrameNs, 0);
         atomic_init(&ctx->_deviceLost, 0);
         atomic_init(&ctx->_errorCount, 0);
+        atomic_init(&ctx->_presentsShown, 0);
+        atomic_init(&ctx->_framesDropped, 0);
         ctx.inflightSem = dispatch_semaphore_create(CM_INFLIGHT_SLOTS);
         ctx.passMergeEnabled = YES;
         ctx.deferClearsEnabled = YES;
@@ -404,4 +406,6 @@ void cm_device_stats(int64_t ctxPtr, int64_t *out, int32_t count) {
     CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
     int32_t n = MIN(count, (int32_t)CM_STAT_COUNT);
     for (int32_t i = 0; i < n; i++) out[i] = ctx->_stats[i];
+    if (n > CM_STAT_PRESENTS_SHOWN) out[CM_STAT_PRESENTS_SHOWN] = atomic_load(&ctx->_presentsShown);
+    if (n > CM_STAT_FRAMES_DROPPED) out[CM_STAT_FRAMES_DROPPED] = atomic_load(&ctx->_framesDropped);
 }

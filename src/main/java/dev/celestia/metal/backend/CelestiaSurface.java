@@ -29,6 +29,8 @@ public final class CelestiaSurface implements GpuSurfaceBackend {
     private boolean vsync = true;
     private boolean hdrEnabled;
     private boolean closed;
+    private int appliedNonBlocking = -1;
+    private static final boolean FORCE_BLOCKING_PRESENT = Boolean.getBoolean("celestiametal.blockingPresent");
 
     CelestiaSurface(CelestiaMetalDevice device, long windowHandle, BooleanSupplier windowClosed) {
         this.device = device;
@@ -59,7 +61,17 @@ public final class CelestiaSurface implements GpuSurfaceBackend {
         this.vsync = config.presentMode() == GpuSurface.PresentMode.FIFO
             || config.presentMode() == GpuSurface.PresentMode.FIFO_RELAXED;
         this.hdrEnabled = CelestiaConfig.get().appleSilicon.hdrEnabled;
+        applyPresentMode();
         MetalNative.surfaceConfigure(surfaceHandle, width, height, vsync, hdrEnabled);
+    }
+
+    /** Pushes the non-blocking present setting to the native surface when it changes (checked once per frame). */
+    private void applyPresentMode() {
+        int nonBlocking = CelestiaConfig.get().appleSilicon.nonBlockingPresent && !FORCE_BLOCKING_PRESENT ? 1 : 0;
+        if (nonBlocking != appliedNonBlocking && surfaceHandle != 0L) {
+            MetalNative.surfaceSetNonblocking(surfaceHandle, nonBlocking != 0);
+            appliedNonBlocking = nonBlocking;
+        }
     }
 
     @Override
@@ -80,6 +92,7 @@ public final class CelestiaSurface implements GpuSurfaceBackend {
     public void blitFromTexture(CommandEncoderBackend encoder, GpuTextureView view) {
         if (closed || !(view instanceof CelestiaTextureView ctv)) return;
         int maxInFlight = CelestiaConfig.get().appleSilicon.lowLatencyQueue ? 2 : 3;
+        applyPresentMode();
         MetalNative.surfaceBlitAndPresent(device.handle(), surfaceHandle, ctv.handle(), maxInFlight);
         if (encoder instanceof CelestiaCommandEncoder cce) {
             cce.onPresentedBySurface();

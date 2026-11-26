@@ -181,6 +181,14 @@ public final class CelestiaSodiumConfigEntrypoint implements ConfigEntryPoint {
                 .setStorageHandler(saveHandler)
                 .setBinding(v -> CelestiaConfig.get().performance.maxChunkUploadsPerFrame = v,
                     () -> CelestiaConfig.get().performance.maxChunkUploadsPerFrame))
+            .addOption(boolOpt(builder, "non_blocking_present",
+                "Non-Blocking Present",
+                "With VSync off, never wait for the display: show the newest finished frame each refresh without tearing.",
+                true,
+                OptionImpact.HIGH,
+                saveHandler,
+                () -> CelestiaConfig.get().appleSilicon.nonBlockingPresent,
+                v -> CelestiaConfig.get().appleSilicon.nonBlockingPresent = v))
             .addOption(boolOpt(builder, "render_pass_merging",
                 "Render Pass Merging",
                 "Continue the open Metal render encoder for consecutive passes on the same targets. Turn off if a mod renders incorrectly.",

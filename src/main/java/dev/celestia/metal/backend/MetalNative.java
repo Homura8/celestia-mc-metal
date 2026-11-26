@@ -158,6 +158,7 @@ public final class MetalNative {
         static final MethodHandle mhPassMultiDrawIndexedPacked = downcallCritical("cm_pass_multi_draw_indexed_packed", FunctionDescriptor.ofVoid(L, I, P, I, L, I, I));
         static final MethodHandle mhDeviceStats = downcallCritical("cm_device_stats", FunctionDescriptor.ofVoid(L, P, I));
         static final MethodHandle mhDeviceSetOption = downcall("cm_device_set_option", FunctionDescriptor.ofVoid(L, I, I));
+        static final MethodHandle mhSurfaceSetNonblocking = downcall("cm_surface_set_nonblocking", FunctionDescriptor.ofVoid(L, I));
 
         private Hot() {}
     }
@@ -673,6 +674,12 @@ public final class MetalNative {
 
     public static void surfaceBlitAndPresent(long ctx, long surf, long srcView, int maxInFlight) {
         try { Hot.mhSurfaceBlitAndPresent.invokeExact(ctx, surf, srcView, maxInFlight); }
+        catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    /** Non-blocking (MAILBOX-style) presentation while VSync is off; see cm_surface_set_nonblocking. */
+    public static void surfaceSetNonblocking(long surf, boolean enabled) {
+        try { Hot.mhSurfaceSetNonblocking.invokeExact(surf, enabled ? 1 : 0); }
         catch (Throwable t) { throw new RuntimeException(t); }
     }
 
