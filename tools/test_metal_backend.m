@@ -1010,7 +1010,7 @@ static void verify_backend_ops(int32_t preferMetal4) {
              "    out[3] = shadeChunkEdgeFade(float3(-48.0, 100.0, 0.0), f, l);\n"
              "    out[4] = shadeChunkEdgeDepthFade(out[1]);\n"
              "    out[5] = shadeChunkEdgeDepthFade(shadeChunkEdgeFade(float3(46.0, 0.0, 0.0), f, l));\n"
-             "    out[6] = shadeChunkEdgeDiscard(out[3], float2(12.0, 18.0)) ? 1.0 : 0.0;\n"
+             "    out[6] = shadeChunkEdgeDepthFade(out[3]);\n"
              "}\n", prelude];
         int64_t edgeLib = cm_compile_msl_library(ctx, edgeSrc.UTF8String, "chunk edge probe", 1, serr, sizeof(serr));
         assert(edgeLib);
@@ -1043,7 +1043,7 @@ static void verify_backend_ops(int32_t preferMetal4) {
         cm_compute_pipeline_destroy(ctx, edgePso);
         cm_function_destroy(edgeFn);
         cm_library_destroy(edgeLib);
-        printf("[Backend %s] Chunk edge radial fade, depth coverage, and fog bypass OK\n",
+        printf("[Backend %s] Chunk edge radial fade, reflection weight, and fog bypass OK\n",
                preferMetal4 ? "Metal 4" : "Metal 3");
 
         cm_shade_set_globals(ctx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
