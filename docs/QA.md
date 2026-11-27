@@ -20,7 +20,7 @@ The runner prints a compact summary and saves it to `summary.txt`. Set `QA_VERBO
 
 | Mode | Coverage | Output |
 | --- | --- | --- |
-| `shots` | Nine fixed views of the pond and landscape across time of day, underwater and rain. Rain runs last. | One PNG per scene, with the wait and GPU time in the log. |
+| `shots` | Ten fixed views of the pond and landscape across time of day, underwater and rain. Rain runs last. | One PNG per scene, with the wait and GPU time in the log. |
 | `profile` | Metal 4 per-encoder timing for each scene and debug token. The runner disables pass merging for these measurements. | `profile.tsv` with the last full `[GPU]` report from each marker window. |
 | `perf` | Ultra versus 12 feature overrides, the other three presets and pack off. Each option change settles for 70 ticks, followed by 100 GPU samples. | `perf.txt` with the comparison median, the average of the surrounding Ultra medians and the signed delta, plus an Ultra PNG per scene. |
 | `lights` | Six coloured block emitters, a held torch, blaze and dropped glowstone, light toggles, debug views and preset comparisons in sealed rooms. | `lights-*.png` and FPS, average GPU time and active light counts in the log. |
@@ -38,7 +38,7 @@ QA_LABEL=light-rooms tools/qa/run.sh lights
 QA_LABEL=descent tools/qa/run.sh frames -PqaJvm=celestiaqa.frames=180
 ```
 
-Use `celestiaqa.scenes` to select comma-separated scene names in their declared order. The nine names are `pond-morning`, `pond-noon`, `pond-sunset`, `underwater`, `vista-noon`, `vista-sunset`, `vista-up`, `vista-night` and `vista-rain`. Other JVM properties include `celestiaqa.preset` (default Ultra), `celestiaqa.pack=off`, `celestiaqa.debug=<view>` and `celestiaqa.prefix=<name>`. Pass shader overrides with a dedicated Gradle property, for example `-PqaOptions=GOD_RAYS=false,BLOOM_ENABLED=false`.
+Use `celestiaqa.repeat=N` (and `celestiaqa.repeatTicks`, default 10) for a burst of N shots per scene, for animated effects such as waves, caustics and underwater shafts. Use `celestiaqa.scenes` to select comma-separated scene names in their declared order. The ten names are `pond-morning`, `pond-noon`, `pond-sunset`, `underwater`, `underwater-noon`, `vista-noon`, `vista-sunset`, `vista-up`, `vista-night` and `vista-rain`. Other JVM properties include `celestiaqa.preset` (default Ultra), `celestiaqa.pack=off`, `celestiaqa.debug=<view>` and `celestiaqa.prefix=<name>`. Pass shader overrides with a dedicated Gradle property, for example `-PqaOptions=GOD_RAYS=false,BLOOM_ENABLED=false`.
 
 The profile tokens are `N` for `celestiametal.shade.water.devSsr`, `bN` for `celestiametal.shade.water.ssrBudget`, `sN` for `celestiametal.shade.dev`, and `cN` for `celestiametal.shade.cloudDev`. The default is `0`. Each token applies one override to the launch settings. Use `s32,s0` to compare the previous chunk-border fog with the directional fade.
 

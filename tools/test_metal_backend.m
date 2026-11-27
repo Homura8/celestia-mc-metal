@@ -2469,7 +2469,8 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
         cm_cmd_begin(ctx);
         cm_blit_clear_depth(ctx, depth, test == 2 ? 0.1 : 0.0);
         cm_blit_clear_depth(ctx, shadow, test == 1 ? 1.0 : 0.0);
-        cm_shade_fullscreen_pass(ctx, pso[VOLUME], tex[VOLUME], &depth, 1, NULL, 0, NULL, 0);
+        int64_t vlInputs[2] = { depth, n2d }; // (the 2D noise bands the underwater light)
+        cm_shade_fullscreen_pass(ctx, pso[VOLUME], tex[VOLUME], vlInputs, 2, NULL, 0, NULL, 0);
         cm_blit_copy_texture_to_buffer(ctx, tex[VOLUME], 0, 0, 0, 0, 96, 64, cloudRead, 0, 96 * 8);
         assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
         float peak = 0.0f;

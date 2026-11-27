@@ -340,6 +340,7 @@ static inline float3 shadeUnderwaterFog(float3 radiance, float3 p, constant Shad
 	float hg = iso * (1.0 - gg) / (den * sqrt(den));
 	// the light has crossed ~3 blocks of water to reach the volume around the eye
 	float3 sun = f.sunColor.rgb * M_PI_F * exp(-sigmaT * 3.0) * smoothstep(0.0, 0.25, sky) * (0.7 * hg + 0.3 * iso);
+	if (L.vl.z > 0.0) sun = float3(0.0); // (alpha.26) the underwater sunlight pass (vl.metal vlWaterShafts) carries it, with shadows
 	float3 amb = (f.ambientSky.rgb * M_PI_F * sky + f.ambientBlock.rgb * 0.25) * iso;
 	float3 scatter = (sun + amb) * (1.0 - T) * albedo * (1.0 + ms / (1.0 - ms));
 	return radiance * T + scatter;

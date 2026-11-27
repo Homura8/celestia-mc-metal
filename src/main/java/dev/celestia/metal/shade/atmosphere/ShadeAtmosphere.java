@@ -192,7 +192,11 @@ public final class ShadeAtmosphere {
 
     public long renderVolume(long ctx, long depth, MemorySegment texArgs) {
         if (!volume || depth == 0L) return 0L;
-        draw(ctx, VOLUME, depth, texArgs);
+        // inputs: the depth copy, and Photon's 2D noise for the underwater light bands (vl.metal vlWaterShafts)
+        texArgs.set(ValueLayout.JAVA_LONG, 0, depth);
+        texArgs.set(ValueLayout.JAVA_LONG, 8, cloudNoise != null ? cloudNoise.noise2d : 0L);
+        MetalNative.shadeFullscreenPass(ctx, pipelines[VOLUME], textures[VOLUME], texArgs, 2, MemorySegment.NULL, 0,
+            MemorySegment.NULL, 0);
         return textures[VOLUME];
     }
 
