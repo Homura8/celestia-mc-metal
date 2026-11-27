@@ -399,7 +399,8 @@ public final class ShadeLook {
         this.whiteBalance += 22f * day * (1f - rain) * this.outdoor;
         if (day > 0f) {
             float amb = 1f + (0.55f - 1f) * day;
-            float[] warm = {1.05f, 1f, 0.84f};
+            // (alpha.26: the sky light keeps the sky's blue, like Photon's; was a warm {1.05, 1, 0.84})
+            float[] warm = {0.86f, 1f, 1.14f};
             for (int i = 0; i < 3; i++) this.ambientTint[i] *= amb * (1f + (warm[i] - 1f) * day);
             this.l2Bounce = 1f + (0.6f - 1f) * day;
             this.l2Face = 0.12f * day;

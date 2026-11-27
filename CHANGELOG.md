@@ -4,6 +4,10 @@
 
 - Add underwater sunlight shafts with wave focusing and shadow occlusion. Looking up through water uses physical refraction
   and Fresnel reflection, with a directional sky fallback when the refracted view leaves the screen.
+- **Daytime sky light on blocks is cooler, closer to Photon's.**
+  - **Change:** the daytime ambient tint keeps the sky's blue, `{0.86, 1, 1.14}` (was a warm `{1.05, 1, 0.84}`), and the sky irradiance is no longer desaturated (was 0.2).
+  - **Effect:** shaded faces now read cool against warm sunlit faces. On the test pond's sandstone pillars at noon, the shaded faces go from (120, 128, 109) to (111, 128, 125), where Photon gives (85, 126, 137).
+  - **Unchanged:** sunlit surfaces and the Pastel grade. There is no GPU cost.
 - **Underwater sunlight is now Photon's volumetric light.** It's adapted from Photon's MIT-licensed `water_fog_vl.glsl` (commit 26c2906e).
   - **Shafts:** they converge toward the sun and run from the surface to the floor, brightest near the surface, and they drift with the water.
   - **Shadows:** the shadow map shadows them, so pillars and walls cut dark shafts through the water.

@@ -296,6 +296,7 @@ Next, in order:
       `celestiaqa.repeat` bursts in `underwater` and `underwater-noon`. Open question: the shafts take the warm low sun and the
       Pastel grade's rose (lilac at morning), where Photon's read cyan-white.
 - [ ] A real cumulus congestus layer (days 2 and 4 currently stand in a thicker cumulus).
-- [ ] Terrain ambient: Photon's cooler sky light.
+- [x] Terrain ambient: cooler daytime sky light, shaded faces now cool against warm sunlit faces. Photon is still cooler and darker, at (85, 126, 137); a further step would fight the Pastel grade's rose.
+- [ ] Distant haze: ours reads pink-lavender against Photon's neutral grey-blue (vista views).
 - [ ] Nether and End looks, aurora, motion blur, labPBR (carried over from P6b).
 - [ ] Multiple native MSL shader packs: keep engine code pack-agnostic.
