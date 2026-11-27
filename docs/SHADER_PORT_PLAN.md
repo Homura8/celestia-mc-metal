@@ -295,8 +295,15 @@ Next, in order:
       surface to floor, about 0.8-1.0 ms. The material fog drops its sun term while the pass runs. Check animated effects with
       `celestiaqa.repeat` bursts in `underwater` and `underwater-noon`. Open question: the shafts take the warm low sun and the
       Pastel grade's rose (lilac at morning), where Photon's read cyan-white.
+Owner priorities (2026-11-28), in order:
+- [ ] Multiple native MSL shader packs. Each pack ships its own MSL in its folder or zip, behind a stable engine interface:
+      the ShadeFrame / ShadeLook / ShadeGpu / ShadeResources structs, slot numbers and entry points, documented in
+      `SHADER_PACK_SPEC.md`. Celestia Native moves its shaders into its pack folder; the engine stays pack-agnostic. Hide
+      Iris/OptiFine packs from the pack list until the pipeline is mature (owner: MSL only for now).
+- [ ] Nether and End looks.
+- [ ] Aurora.
+- [ ] Motion blur.
 - [ ] A real cumulus congestus layer (days 2 and 4 currently stand in a thicker cumulus).
-- [x] Terrain ambient: cooler daytime sky light, shaded faces now cool against warm sunlit faces. Photon is still cooler and darker, at (85, 126, 137); a further step would fight the Pastel grade's rose.
-- [ ] Distant haze: ours reads pink-lavender against Photon's neutral grey-blue (vista views).
-- [ ] Nether and End looks, aurora, motion blur, labPBR (carried over from P6b).
-- [ ] Multiple native MSL shader packs: keep engine code pack-agnostic.
+- [ ] labPBR (carried over from P6b).
+
+Settled: the pink-lavender distant haze stays, as part of the Pastel look (owner).
