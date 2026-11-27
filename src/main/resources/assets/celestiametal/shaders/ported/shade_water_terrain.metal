@@ -166,7 +166,8 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
 #endif
 		wi.look = &L;
 		wi.res = &sr;
-		wi.fog = SHADE_CAMERA_UNDERWATER(f) ? f.fogColorHdr.rgb / max(ex, 1e-6) : float3(0.0);
+		// (alpha.25) the water's own colour seen through deep water (shadeUnderwaterFog's limit), for the underside's mirror
+		wi.fog = SHADE_CAMERA_UNDERWATER(f) ? shadeUnderwaterFog(float3(0.0), normalize(p) * 512.0, f, L) : float3(0.0);
 
 		radiance = shadeWaterSurface(wi, f, wp, skyLut, skyLutSmplr, sceneCopy, depthCopy, sr.prevScene, waterWaves, waterCoarse);
 		alpha = 1.0;
