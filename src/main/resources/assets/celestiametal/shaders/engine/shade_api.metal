@@ -91,6 +91,8 @@ static_assert(sizeof(ShadeLook) == 1136, "ShadeLook size must be 1136 bytes");
 #define SHADE_FEATURE_MEDIA (1 << 21)
 #define SHADE_FEATURE_SHIMMER (1 << 22)
 #define SHADE_FLAG_DIMS_LIT (1 << 23)
+#define SHADE_FEATURE_PBR_NORMAL (1 << 24)
+#define SHADE_FEATURE_PBR_SPECULAR (1 << 25)
 
 struct ShadeGpu {
 	float4 sh[9];          //   0

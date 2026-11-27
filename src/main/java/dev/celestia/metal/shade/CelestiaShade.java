@@ -21,6 +21,7 @@ import dev.celestia.metal.backend.CelestiaTextureView;
 import dev.celestia.metal.backend.MetalConst;
 import dev.celestia.metal.backend.MetalNative;
 import dev.celestia.metal.shade.atmosphere.ShadeAtmosphere;
+import dev.celestia.metal.shade.material.ShadeMaterialAtlas;
 import dev.celestia.metal.shade.light.ColorLights;
 import dev.celestia.metal.shade.light.DynLightConfig;
 import dev.celestia.metal.shade.light.DynLights;
@@ -78,6 +79,7 @@ public final class CelestiaShade {
     private final ShadowPass shadowPass = new ShadowPass();
     private final ShadeWater water = new ShadeWater();
     private final ShadeAtmosphere atmosphere = new ShadeAtmosphere();
+    private final ShadeMaterialAtlas materials = new ShadeMaterialAtlas();
     private ShadeSettings settings;
 
     private final Matrix4f pendingProjection = new Matrix4f();
@@ -344,6 +346,7 @@ public final class CelestiaShade {
             shadowCompareSamp, linearClampSamp);
         MetalNative.shadeSetResource(device.handle(), 0, milkyWayTex);
         MetalNative.shadeSetResource(device.handle(), 1, hasPrevHdrWorld && prevHdrWorldTex != 0L ? prevHdrWorldTex : 0L);
+        materials.bind(device.handle());
     }
 
     /** Called at {@code LevelRenderer.render} HEAD to update uniforms, bake Sky LUT, and open HDR redirect. */
@@ -476,6 +479,7 @@ public final class CelestiaShade {
         }
         look.setHasPrevScene(hasPrevHdrWorld && prevHdrWorldTex != 0L);
         look.update(frame, moonPhaseIndex, (float) clampedDt);
+        look.setMaterialFeatures(materials.prepare(device.handle(), mc, applied.labPbr()));
         ShadeDims.update(frame, look, level, sky, camera.blockPos, (float) clampedDt, snap, applied.dimensions());
         shadowPass.prepare(device.handle(), camera, sky, frame, applied.shadows());
         // The fog colour in HDR once per frame (was shadeLdrToHdr per fragment: ~13 pow per pixel on every surface and the sky
@@ -882,6 +886,7 @@ public final class CelestiaShade {
         if (ctx != 0L) {
             MetalNative.shadeSetEnabled(ctx, false);
             MetalNative.shadeSetGlobals(ctx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            materials.close(ctx);
             MetalNative.shadeSetResource(ctx, 0, 0L);
             MetalNative.shadeSetResource(ctx, 1, 0L);
             if (hdrWorldView != 0L) { MetalNative.textureViewDestroy(ctx, hdrWorldView); hdrWorldView = 0L; }

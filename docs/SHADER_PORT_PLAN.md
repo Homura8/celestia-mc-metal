@@ -302,7 +302,7 @@ P6b status (branch `feat/shader-port-p6b-alpha.22`, stacked on P6a / PR #13):
       `ClientChunkCache.onLightUpdate`; terrain and water filter it per pixel half a block in front of the face, normalised
       over open cells, falling back to the vertex value outside the window. Known: a hard switch to vertex light at the
       window edge (128 blocks out); could fade over the last section.
-- [ ] Next in P6b: Nether / End looks (upstream `SKYDIMS.md`), aurora, motion blur, labPBR.
+- [x] Follow-up features covered in §10.
 
 ## 10. Photon look pass and roadmap (alpha.25 on)
 
@@ -342,6 +342,6 @@ Owner priorities (2026-11-28), in order:
 - [x] Aurora.
 - [x] Motion blur.
 - [x] A real cumulus congestus layer (replaces the thicker-cumulus stand-in on weather days 2 and 4).
-- [ ] labPBR (carried over from P6b).
+- [x] labPBR 1.3 terrain materials from Minecraft resource packs (vanilla and Sodium), with a live `LAB_PBR` option.
 
 Settled: the pink-lavender distant haze stays, as part of the Pastel look (owner).

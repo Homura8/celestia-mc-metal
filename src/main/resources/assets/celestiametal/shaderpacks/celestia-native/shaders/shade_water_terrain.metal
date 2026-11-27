@@ -16,22 +16,29 @@
 
 // Keep the lighting and glossy SSR for glass and ice out of the hot water fragment.
 static SHADE_COLD float4 shadeWaterTerrainOther(float alpha, float4 texel, float4 rawColor, float3 p, half3 n,
+                                               float2 uv, float3 dpx, float3 dpy, float2 du, float2 dv, bool fluid,
                                                float2 pixel, half sky, half block, half shadow, bool thin, float exposure,
                                                constant ShadeFrame &f, constant ShadeLook &L, constant ShadeGpu &g,
                                                constant ShadeResources &sr, constant ShadeWaterParams &wp,
                                                texture2d<half> lut, sampler lutS,
                                                texture2d<half> scene, depth2d<float> depth, texture2d<float> hz) {
 	half3 albedo = f.flags.w == 3 ? half3(0.45h) : shadeToLinear(half3(saturate(texel.rgb * rawColor.rgb)));
-	float3 lit = shadeLit2(albedo, n, sky, block, shadow, thin, false, f, L, shadeLook2Near(p, L));
+	bool pbr = !fluid && shadeMaterialEnabled(L);
+	ShadeMaterial material;
+	if (pbr) material = shadeMaterial(float3(n), float3(albedo), uv, dpx, dpy, du, dv, L, sr);
+	half3 lightNormal = pbr ? half3(material.normal) : n;
+	float3 lit = shadeLit2(albedo, lightNormal, sky, block, shadow, thin, false, f, L, shadeLook2Near(p, L));
+	if (pbr) lit = shadeMaterialLight(material, float3(albedo), lit, p, float3(n), sky, shadow, f, lut, lutS);
 #ifdef SHADE_GLOSSY
 	bool glossy = !thin && alpha > 0.02 && alpha < 0.99;
+	if (pbr) glossy = glossy && !any(material.f0 > 0.0);
 #ifdef SHADE_SSR_QUAD
 	// The glossy trace shuffles between lanes. Keep the call uniform at atlas alpha edges.
 	glossy = shadeQuadMin(float(glossy)) > 0.0;
 #endif
 	if (glossy && wp.state.x > 0.5 && !shadeDev(f, SHADE_DEV_NO_WATER)) {
 		float prevExposure = L.ssr.x > 0.5 ? g.exposure.z : 0.0;
-		return shadeGlossy(lit, alpha, p, float3(n), pixel, sky, shadow, exposure, prevExposure,
+		return shadeGlossy(lit, alpha, p, float3(lightNormal), pixel, sky, shadow, exposure, prevExposure,
 		                   f, &L, &sr, wp, lut, lutS, scene, depth, sr.prevScene, hz);
 	}
 #endif
@@ -108,8 +115,12 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
 
 	if (dimsLit) {
 		half3 albedo = f.flags.w == 3 ? half3(0.45h) : shadeToLinear(half3(saturate(texel.rgb * rawColor.rgb)));
-		radiance = shadeLit2(albedo, n, half(0.0), block, half(0.0), thin, false, f, L, shadeLook2Near(p, L))
-		         + shadeLitDimsExtra(albedo, n, shadow, thin, false, p, f, L)
+		bool pbr = shadeMaterialEnabled(L);
+		ShadeMaterial material;
+		if (pbr) material = shadeMaterial(float3(n), float3(albedo), uv, dpx, dpy, du, dv, L, sr);
+		half3 lightNormal = pbr ? half3(material.normal) : n;
+		radiance = shadeLit2(albedo, lightNormal, half(0.0), block, half(0.0), thin, false, f, L, shadeLook2Near(p, L))
+		         + shadeLitDimsExtra(albedo, lightNormal, shadow, thin, false, p, f, L)
 		         + shadeNetherEmissive(albedo, block, L);
 #ifdef SHADE_DYNLIGHT
 		radiance += float3(albedo) * f.ambientBlock.xyz * shadeDynamicLightsVol(dl, dlIrr, dlDir, p, float3(n), thin, block);
@@ -117,6 +128,7 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
 #ifdef SHADE_COLORLIGHT
 		radiance += float3(albedo) * f.ambientBlock.xyz * shadeColorLightFrag(cl, clFine, clCoarse, f, p, float3(n), float(block));
 #endif
+		if (pbr) radiance = shadeMaterialLight(material, float3(albedo), radiance, p, float3(n), sky, shadow, f, skyLut, skyLutSmplr);
 	} else if (waterFull) {
 		half3 up = half3(0.0h, 1.0h, 0.0h);
 		ShadeWaterIn wi;
@@ -186,7 +198,7 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
 		radiance = shadeWaterSurface(wi, f, wp, skyLut, skyLutSmplr, sceneCopy, depthCopy, sr.prevScene, waterWaves, waterCoarse);
 		alpha = 1.0;
 	} else {
-		float4 other = shadeWaterTerrainOther(alpha, texel, rawColor, p, n, fragCoord.xy,
+		float4 other = shadeWaterTerrainOther(alpha, texel, rawColor, p, n, uv, dpx, dpy, du, dv, waterSprite > 0, fragCoord.xy,
 		                                      sky, block, shadow, thin, ex, f, L, g, sr, wp,
 		                                      skyLut, skyLutSmplr, sceneCopy, depthCopy, waterCoarse);
 		radiance = other.rgb;

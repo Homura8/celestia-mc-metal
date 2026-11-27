@@ -144,6 +144,7 @@ shaderpacks/
   | `shade_terrain.metal`, `shade_water_terrain.metal`, `shade_entity.metal` | `shadeTerrainShade`, `shadeWaterTerrainShade` / `shadeWaterTerrainOther`, `shadeEntityShade` / `shadeEntityOut` (called from patched RenderPearl terrain, water and entity shaders) |
 
   Shared helpers live in `shade_look.metal`, `shade_common.metal` and `shade_m2.metal`, which every world source includes.
+  The terrain fragment sources also include `shade_material.metal`.
 - **Engine-owned files cannot be overridden.** These live in `assets/celestiametal/shaders/engine/`, and a pack copy is ignored:
   - `shade_api.metal`: the buffer layouts the engine writes (`ShadeFrame`, `ShadeLook`, `ShadeGpu`, `ShadeResources`, `ShadeWaterParams`).
   - `shade_slots.metal`: buffer, texture and sampler slots.
@@ -152,6 +153,21 @@ shaderpacks/
   - `taa.metal`: TAAU.
 
   `CELESTIA_WORLD_API` (currently `1`) names this ABI's version.
+
+### labPBR materials
+
+Celestia Native uses [labPBR 1.3](https://shaderlabs.org/wiki/LabPBR_Material_Standard) companion textures in active Minecraft
+resource packs. Place `_n.png` and `_s.png` alongside a block's diffuse texture, for example `textures/block/stone_n.png`
+and `textures/block/stone_s.png`. A resource pack can supply either map independently. **Materials > labPBR Materials**
+(`LAB_PBR`) is on by default. The material atlases use the block atlas's UVs and reload with the resource packs.
+
+Celestia Native supports tangent-space normals, material AO, smoothness, linear dielectric reflectance, albedo-tinted metals,
+emission, wetness porosity and backlighting from subsurface data. Direct specular and sky reflections run in the Overworld.
+The renderer uses the first frame of animated companion maps. Height remains available in the normal texture's alpha channel.
+
+World shaders can read `ShadeResources.pbrNormal` and `pbrSpecular` when the corresponding `SHADE_FEATURE_PBR_NORMAL` or
+`SHADE_FEATURE_PBR_SPECULAR` bit is set. Empty atlas regions contain zero. A `shadeTerrainShade` override can opt into the
+additional `float2 uv` parameter after the pixel position by defining `CELESTIA_TERRAIN_MATERIAL_UV`.
 
 ### Options
 

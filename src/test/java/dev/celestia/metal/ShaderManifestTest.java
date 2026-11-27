@@ -29,7 +29,7 @@ class ShaderManifestTest {
 
         assertEquals(ShaderPackManifest.PackKind.WORLD_MSL, nativePack.kind);
         assertEquals(List.of("Performance", "Balanced", "Quality", "Ultra"), List.copyOf(nativePack.presets.keySet()));
-        assertEquals(53, nativePack.options.size());
+        assertEquals(54, nativePack.options.size());
         assertTrue(nativePack.passes.isEmpty());
     }
 
@@ -71,6 +71,7 @@ class ShaderManifestTest {
         assertEquals(1f, balancedSettings.sky().auroraBrightness(), 1e-6f);
         assertEquals(0, balancedSettings.sky().auroraPalette());
         assertTrue(balancedSettings.atmosphere().cloudCongestus());
+        assertTrue(balancedSettings.labPbr());
         assertFalse(balancedSettings.post().motionBlur());
         assertEquals(1.0f, balancedSettings.post().motionBlurStrength(), 1e-6f);
 
@@ -90,6 +91,8 @@ class ShaderManifestTest {
         draft.set("WATER_REFLECTIONS", "OFF");
         assertFalse(ShadeSettings.from(draft).water().screenReflections());
         assertEquals(0f, ShadeSettings.from(draft).water().reflectionStrength());
+        draft.set("LAB_PBR", "false");
+        assertFalse(ShadeSettings.from(draft).labPbr());
 
         state.saveToDisk(tmpDir);
         ShaderOptionState reloaded = new ShaderOptionState(nativePack);

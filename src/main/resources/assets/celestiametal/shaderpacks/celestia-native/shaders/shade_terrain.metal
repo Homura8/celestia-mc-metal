@@ -13,9 +13,10 @@
 // applies shadeLit2 (shadow = 1 in P1) + shadeFogAir2 + shadeFinish2.
 #ifndef CELESTIA_SHADE_TERRAIN
 #define CELESTIA_SHADE_TERRAIN
+#define CELESTIA_TERRAIN_MATERIAL_UV 1
 
 static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawColor, float3 p, float2 light,
-                                float2 pixel, float chunkVis, bool isCutout, float4 fogRanges,
+                                float2 pixel, float2 uv, float chunkVis, bool isCutout, float4 fogRanges,
                                 texture2d<half> skyLut, sampler skyLutSmplr,
                                 depth2d_array<float> shadowMap, sampler shadowCmp,
                                 constant ShadeFrame &f, constant ShadeLook &L, constant ShadeGpu &g,
@@ -46,18 +47,27 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
 	bool axisAligned = max(max(an.x, an.y), an.z) > half(0.92);
 	bool thin = isCutout && !axisAligned;
 	bool foliage = isCutout && axisAligned;
+	bool pbr = shadeMaterialEnabled(L);
+	ShadeMaterial material;
+	if (pbr) material = shadeMaterial(n, float3(albedo), uv, dpx, dpy, dfdx(uv), dfdy(uv), L, sr);
+	half3 lightNormal = pbr ? half3(material.normal) : hn;
 
 	half shadow = (!dimsLit || f.flags.x == SHADE_DIM_END) ? shadeShadow(shadowMap, shadowCmp, f, p, hn, thin) : half(1.0);
 	float ex = shadeExposure(f, g);
 	float nearW = shadeLook2Near(p, L);
 	float2 wet = 0.0;
 	if (!dimsLit && L.wet.x + L.wet.z > 0.005) wet = shadeWetSurface(albedo, p, hn, sky, foliage, f, L, sr.weatherNoise);
-	float3 radiance = shadeLit2(albedo, hn, dimsLit ? half(0.0) : sky, block, dimsLit ? half(0.0) : shadow, thin, foliage, f, L, nearW);
+	if (pbr && wet.x > 0.0) {
+		albedo *= half(1.0 - 0.32 * material.porosity * wet.x);
+		wet *= 1.0 - 0.8 * material.porosity;
+	}
+	float3 radiance = shadeLit2(albedo, lightNormal, dimsLit ? half(0.0) : sky, block, dimsLit ? half(0.0) : shadow,
+	                          thin, foliage, f, L, nearW);
 	if (dimsLit) {
-		radiance += shadeLitDimsExtra(albedo, hn, shadow, thin, foliage, p, f, L);
+		radiance += shadeLitDimsExtra(albedo, lightNormal, shadow, thin, foliage, p, f, L);
 		radiance += shadeNetherEmissive(albedo, block, L);
 	} else {
-		if (wet.x + wet.y > 0.005) radiance = shadeWetLight(radiance, wet, p, hn, shadow, f, skyLut, skyLutSmplr);
+		if (wet.x + wet.y > 0.005) radiance = shadeWetLight(radiance, wet, p, lightNormal, shadow, f, skyLut, skyLutSmplr);
 		if (L.flash.w > 0.0) {
 			radiance += float3(albedo) * L.flash.w * saturate(dot(n, L.flash.xyz)) * float(shadeSkyCurve(sky));
 		}
@@ -70,6 +80,7 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
 	float3 clAdd = shadeColorLightFrag(cl, clFine, clCoarse, f, p, n, float(block));
 	radiance += float3(albedo) * f.ambientBlock.xyz * clAdd;
 #endif
+	if (pbr) radiance = shadeMaterialLight(material, float3(albedo), radiance, p, n, sky, shadow, f, skyLut, skyLutSmplr);
 	float vanillaFog = 0.0;
 	float3 rgb;
 	if (dimsLit) {
