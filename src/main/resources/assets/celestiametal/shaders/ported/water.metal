@@ -2104,9 +2104,9 @@ static float4 shadeSsrT(float3 p0, float3 r, float2 pixel, float maxDist, float 
 #endif
 }
 static inline float4 shadeSsr(float3 p0, float3 r, float2 pixel, float maxDist, float exposure, float prevExposure, constant ShadeFrame &f,
-                              constant ShadeLook *L, texture2d<half> scene, depth2d<float> depth, texture2d<half> prev, texture2d<float> hz, int budget) {
+                              constant ShadeLook *L, texture2d<half> scene, depth2d<float> depth, texture2d<half> prev, texture2d<float> hz, int budget, int dev = 0) {
 	float t;
-	return shadeSsrT(p0, r, pixel, maxDist, exposure, prevExposure, f, L, scene, depth, prev, hz, budget, t);
+	return shadeSsrT(p0, r, pixel, maxDist, exposure, prevExposure, f, L, scene, depth, prev, hz, budget, t, 1.0, 0.0, nullptr, dev);
 }
 
 // ---- optics -------------------------------------------------------------------------------------------------------------------
@@ -3013,7 +3013,7 @@ static float3 shadeWaterBelow(ShadeWaterIn w, constant ShadeFrame &f, constant S
 		// (2.0.1 opt) calm the TIR reflection normal like above-water SSR (prevents 1.8x amplified ripples from diverging
 		// every 2x2 quad and triggering catastrophic L1/fine SSR reads in water_underwater_up!) and cap at underwater fog range
 		float3 nTir = normalize(mix(n, float3(0.0, -1.0, 0.0), 0.7));
-		float4 hit = shadeSsr(w.p + n * 0.02, reflect(v, nTir), w.pixel, min(wp.tune.y, 28.0), w.exposure, 0.0, f, w.look, scene, depth, prev, hz, wp.quality.x);
+		float4 hit = shadeSsr(w.p + n * 0.02, reflect(v, nTir), w.pixel, min(wp.tune.y, 28.0), w.exposure, 0.0, f, w.look, scene, depth, prev, hz, wp.quality.x, int(wp.far.z));
 		below = mix(below, hit.rgb, hit.a);
 	}
 #endif

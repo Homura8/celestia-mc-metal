@@ -23,7 +23,7 @@ public final class ShadeFrame {
     public static final int VIEW = 0, PROJ = 64, VIEW_PROJ = 128, INV_VIEW_PROJ = 192, PREV_VIEW_PROJ = 256, SHADOW_VIEW_PROJ = 320,
         CAMERA_BLOCK = 448, CAMERA_FRACT = 464, SUN_DIR_WORLD = 480, SUN_DIR_VIEW = 496, MOON_DIR_WORLD = 512, LIGHT_DIR_WORLD = 528,
         SUN_COLOR = 544, AMBIENT_SKY = 560, AMBIENT_GROUND = 576, AMBIENT_BLOCK = 592, FOG_COLOR = 608, FOG_RANGE = 624, FOG_SKY = 640,
-        SKY_COLOR = 656, ZENITH_COLOR = 672, HORIZON = 688, CASCADE_SPLITS = 816, SHADOW_PARAMS = 832, SCREEN = 848, TIME = 864,
+        FOG_COLOR_HDR = 656, ZENITH_COLOR = 672, HORIZON = 688, CASCADE_SPLITS = 816, SHADOW_PARAMS = 832, SCREEN = 848, TIME = 864,
         WEATHER = 880, JITTER = 896, ATMOSPHERE = 912, AMBIENT_TOWARD = 928, AMBIENT_AWAY = 944, FLAGS = 960, FLAGS2 = 976, SUN_PATH = 992,
         WX_LINE = 1008;
     public static final int SIZE = 1024;
@@ -51,7 +51,8 @@ public final class ShadeFrame {
     public float naturalLighting;
     public final float[] fogColor = new float[4];
     public float fogEnvStart, fogEnvEnd = 1e6f, fogRenderStart, fogRenderEnd = 1e6f, fogSkyEnd = 1e6f, fogCloudEnd = 1e6f, hazeDensity = 0.0008f, hazeStrength = 0.45f;
-    public final float[] skyColor = {0.5f, 0.7f, 1f};
+    /** fogColor's rgb through the display transform's inverse (ShadeLook.ldrToHdr), once per frame: shaders blend toward it. */
+    public final float[] fogColorHdr = new float[3];
     public float rain, thunder, nightVision, starBrightness;
     public float sunsetAway = 1f;
     public float cascadeSplit0 = 32, cascadeSplit1 = 128, cascadeTexel0 = 1f / 32f, cascadeTexel1 = 1f / 8f;
@@ -147,7 +148,7 @@ public final class ShadeFrame {
         put4(b, FOG_COLOR, this.fogColor[0], this.fogColor[1], this.fogColor[2], this.fogColor[3]);
         put4(b, FOG_RANGE, this.fogEnvStart, this.fogEnvEnd, this.fogRenderStart, this.fogRenderEnd);
         put4(b, FOG_SKY, this.fogSkyEnd, this.fogCloudEnd, this.hazeDensity, this.hazeStrength);
-        put4(b, SKY_COLOR, this.skyColor[0], this.skyColor[1], this.skyColor[2], 1 - this.rain);
+        put4(b, FOG_COLOR_HDR, this.fogColorHdr[0], this.fogColorHdr[1], this.fogColorHdr[2], 1 - this.rain);
         put3(b, ZENITH_COLOR, this.sky.zenith, this.sunsetAway);
         for (int i = 0; i < 8; i++) put3(b, HORIZON + 16 * i, this.sky.horizon[i], 0);
         put4(b, CASCADE_SPLITS, this.cascadeSplit0, this.cascadeSplit1, this.cascadeTexel0, this.cascadeTexel1);

@@ -73,6 +73,26 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
 	int waterSprite = int(shadeQuadMax(float(shadeWaterSprite(uv, wp))));
 	bool waterFull = waterSprite > 0 && wp.state.x > 0.5 && !shadeDev(f, SHADE_DEV_NO_WATER);
 
+	// 12 (debug): which water fragments draw (red: full water, green: other water, e.g. glass and ice in this pass),
+	// blue: how coplanar the fragment is with the opaque surface behind it (1 = same plane; underwater only)
+	if (f.flags.w == 12) {
+		float gap = 1e9;
+		if (SHADE_CAMERA_UNDERWATER(f)) {
+			float2 dsz = float2(depthCopy.get_width(), depthCopy.get_height());
+			float od = depthCopy.read(uint2(clamp(fragCoord.xy, float2(0.0), dsz - 1.0)));
+			float4 ow = f.invViewProj * float4(fragCoord.xy / dsz * 2.0 - 1.0, od, 1.0);
+			gap = abs(dot(ow.xyz / ow.w - p, float3(n))); // along the face normal (edge-on faces stay comparable)
+		}
+		return float4(waterFull ? 1.0 : 0.0, waterFull ? 0.0 : 1.0, saturate(1.0 - gap * 5.0), 1.0);
+	}
+
+	// 13 (debug): water-pass overdraw (each fragment adds a quarter of white over a black opaque scene: 64, 112, 148, 175 = 1-4
+	// layers); 14: which water shading runs on the front layer (red the underside, green the surface/side shading, blue glass etc.)
+	if (f.flags.w == 13) return float4(1.0, 1.0, 1.0, 0.25);
+	if (f.flags.w == 14) {
+		bool below = SHADE_CAMERA_UNDERWATER(f) && n.y < -0.5h;
+		return float4(waterFull && below ? 1.0 : 0.0, waterFull && !below ? 1.0 : 0.0, waterFull ? 0.0 : 1.0, 1.0);
+	}
 	half block = half(saturate(light.x));
 #ifdef SHADE_COLORLIGHT
 	block = half(shadeSmoothBlock(cl, clLevels, f, p, float3(n), float(block)));
@@ -146,7 +166,7 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
 #endif
 		wi.look = &L;
 		wi.res = &sr;
-		wi.fog = SHADE_CAMERA_UNDERWATER(f) ? shadeLdrToHdr(f.fogColor.rgb, L) / max(ex, 1e-6) : float3(0.0);
+		wi.fog = SHADE_CAMERA_UNDERWATER(f) ? f.fogColorHdr.rgb / max(ex, 1e-6) : float3(0.0);
 
 		radiance = shadeWaterSurface(wi, f, wp, skyLut, skyLutSmplr, sceneCopy, depthCopy, sr.prevScene, waterWaves, waterCoarse);
 		alpha = 1.0;

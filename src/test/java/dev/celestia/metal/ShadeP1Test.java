@@ -52,6 +52,17 @@ class ShadeP1Test {
         assertEquals(1080f, fb.getFloat(ShadeFrame.SCREEN + 4), 1e-5f);
         assertEquals(ShadeFrame.DIM_OVERWORLD, fb.getInt(ShadeFrame.FLAGS));
 
+        // the fog colour's HDR value is packed once per frame (shaders read fogColorHdr instead of inverting the tonemap per pixel)
+        frame.fogColor[0] = 0.05f; frame.fogColor[1] = 0.2f; frame.fogColor[2] = 0.6f;
+        float[] fogHdr = look.ldrToHdr(frame.fogColor[0], frame.fogColor[1], frame.fogColor[2]);
+        System.arraycopy(fogHdr, 0, frame.fogColorHdr, 0, 3);
+        frame.pack(fb);
+        for (int i = 0; i < 3; i++) {
+            assertTrue(Float.isFinite(fogHdr[i]) && fogHdr[i] >= 0f);
+            assertEquals(fogHdr[i], fb.getFloat(ShadeFrame.FOG_COLOR_HDR + 4 * i), 1e-6f);
+        }
+        assertTrue(fogHdr[2] > fogHdr[1] && fogHdr[1] > fogHdr[0]);
+
         ByteBuffer lb = ByteBuffer.allocateDirect(ShadeLook.SIZE).order(ByteOrder.LITTLE_ENDIAN);
         look.pack(lb, frame);
         assertTrue(Float.isFinite(lb.getFloat(ShadeLook.TONEMAP)));
@@ -259,6 +270,19 @@ class ShadeP1Test {
             assertNotEquals(0L, MetalNative.compileMslLibrary(ctx, handRes.fsSource(), "test.hand.fs", true, err), () -> err.toString());
         } finally {
             MetalNative.deviceDestroy(ctx);
+        }
+    }
+
+    @Test
+    void noShaderInvertsTheFogColourPerPixel() throws Exception {
+        // (alpha.24) shadeLdrToHdr(fogColor) per fragment cost ~8 ms of the sky pass alone underwater at 3024x1742 (M1 Pro)
+        for (String name : List.of("shade_m2.metal", "shade_water_terrain.metal", "shade_terrain.metal", "sky.fs.metal",
+                "water.metal", "shade_entity.metal", "clouds.fs.metal", "celestial.fs.metal")) {
+            try (var in = ShadeP1Test.class.getResourceAsStream("/assets/celestiametal/shaders/ported/" + name)) {
+                assertNotNull(in, name);
+                String src = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                assertFalse(src.matches("(?s).*shadeLdrToHdr\\(\\s*s?f\\.fogColor.*"), name + " converts the fog colour per pixel");
+            }
         }
     }
 }

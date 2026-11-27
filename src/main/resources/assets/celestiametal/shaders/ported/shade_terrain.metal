@@ -69,8 +69,11 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
 	float3 rgb = shadeFinish2(radiance, vanillaFog, f, L, ex);
 	if (debug == 2) rgb = shadeVanillaOut(n * 0.5 + 0.5, L);
 	if (debug == 1) rgb = shadeVanillaOut(float3(0.25 + 0.75 * float(shadow)), L);
+	// 11: lit as usual, solid-block pixels whose derivative normal is not axis-aligned in pure red (edge-on derivative check)
+	if (debug == 11 && !isCutout && max(max(abs(n.x), abs(n.y)), abs(n.z)) < 0.97) rgb = float3(1.0, 0.0, 0.0);
 	if (debug == 9) rgb = shadeVanillaOut(float3(float(block)), L);                                  // vertex block light
 	if (debug == 10) rgb = shadeVanillaOut(float3(dot(rawColor.rgb, float3(0.299, 0.587, 0.114))), L); // vertex colour (AO)
+	if (debug == 13 || debug == 14) rgb = float3(0.0); // (the water views' black backdrop)
 #ifdef SHADE_COLORLIGHT
 	if (debug == 7 || debug == 8) {
 		// 7: the coloured volume's raw light at this surface (1 = level 15); 8: the colour shift it adds (0.5 = none)
