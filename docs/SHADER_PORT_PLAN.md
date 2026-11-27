@@ -258,6 +258,13 @@ P6b status (branch `feat/shader-port-p6b-alpha.22`, stacked on P6a / PR #13):
       block / section mixin as the dynamic lights; options `COLORED_LIGHTS`, `COLORED_LIGHT_STRENGTH`, `COLORED_LIGHT_GLOW`;
       F3 `| Colour N` (slots spreading); idles outside the Overworld (vanilla shading there until the Nether / End looks).
 - [x] Native Test 2r (M4/M3): fallback, soul-fire spread blocked by a wall, strength 0; warm step ~0.2 ms / 8 sections.
-- [ ] In-game check by the owner: soul torches / lanterns (blue), redstone (red), copper (green), amethyst / portal (purple),
-      sea lanterns (cyan), with vanilla and Sodium; F3 `Colour` count settles to 0 away from coloured lights.
+- [x] In-game QA (isolated clients + scripted probe, vanilla / Sodium / the 110-mod Create + Alex's Caves list): colours show
+      after fixing the section reader (`PalettedContainer.getAll` visits palette entries, not cells) and sampling half a block
+      in front of the face (no orange inside corners). alpha.23.
+- [x] Smooth block light (alpha.23, `SMOOTH_BLOCK_LIGHT`): vanilla's per-face smooth lighting left block-aligned patches the HDR
+      torch curve amplified (debug view 9 vs 10 showed the vertex block light, not AO). The client light engine's per-block
+      levels go into an RG8 fine-window volume (texture 28; R = level where open, G = open) via `shade_bl_upload`, refreshed on
+      `ClientChunkCache.onLightUpdate`; terrain and water filter it per pixel half a block in front of the face, normalised
+      over open cells, falling back to the vertex value outside the window. Known: a hard switch to vertex light at the
+      window edge (128 blocks out); could fade over the last section.
 - [ ] Next in P6b: Nether / End looks (upstream `SKYDIMS.md`), aurora, motion blur, labPBR.

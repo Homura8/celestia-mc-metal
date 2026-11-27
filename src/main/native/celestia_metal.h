@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 
-#define CM_ABI_VERSION 9
+#define CM_ABI_VERSION 10
 #define CM_MAX_COLOR_ATTACHMENTS 8
 #define CM_MAX_VERTEX_BUFFERS 8
 #define CM_MAX_UNIFORM_BUFFERS 15
@@ -42,6 +42,7 @@
 #define CM_SHADE_TEX_DL_DIR       25
 #define CM_SHADE_TEX_CL_FINE      26
 #define CM_SHADE_TEX_CL_COARSE    27
+#define CM_SHADE_TEX_CL_LEVELS    28
 #define CM_SHADE_SAMP_SHADOW      12
 #define CM_SHADE_SAMP_LINEAR      13
 #define CM_SHADE_MAX_RES_TEX      16
@@ -662,9 +663,11 @@ int64_t cm_cl_new(int64_t ctxPtr, const char *source, int32_t fw, int32_t fh, in
 void cm_cl_free(int64_t ctxPtr, int64_t statePtr);
 int32_t cm_cl_fallback(int64_t ctxPtr);
 int64_t cm_cl_ids(int64_t statePtr);
+int64_t cm_cl_levels(int64_t statePtr);
 int64_t cm_cl_list(int64_t statePtr, int32_t slot);
 void cm_cl_header(int64_t statePtr, int32_t slot, const void *bytes);
-void cm_cl_frame(int64_t ctxPtr, int64_t statePtr, int32_t slot, int32_t clears, int32_t fine, int32_t coarse, int32_t fineSteps);
+void cm_cl_frame(int64_t ctxPtr, int64_t statePtr, int32_t slot, int32_t clears, int32_t fine, int32_t coarse, int32_t fineSteps,
+                 int32_t uploadOffset, int32_t uploads);
 
 #ifdef __cplusplus
 }

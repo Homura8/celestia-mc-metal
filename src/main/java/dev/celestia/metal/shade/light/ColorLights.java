@@ -25,9 +25,12 @@ import java.util.Map;
 import dev.celestia.metal.shade.ShadeShaderPatcher;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.PalettedContainer;
@@ -114,19 +117,35 @@ public final class ColorLights {
 	}
 
 	// Live options (CelestiaShade.beginWorld, every frame).
-	private static volatile boolean liveOn = true;
+	private static volatile boolean liveOn = true, liveSmooth = true;
 	private static volatile float liveStrength = 1f, liveGlow = 1f;
 
-	/** This frame's settings: on, strength 0..1 (0 = off), glow 0..3 (the boosted coloured lights' own light). */
-	public static void applyLive(boolean on, float strength, float glow) {
+	/**
+	 * This frame's settings: coloured light on, strength 0..1 (0 = off), glow 0..3 (the boosted coloured lights' own light), and
+	 * smooth block light (Celestia: vanilla's per-block light levels in a volume the shading filters per pixel).
+	 */
+	public static void applyLive(boolean on, float strength, float glow, boolean smooth) {
 		liveOn = on;
 		liveStrength = Math.max(0f, Math.min(1f, strength));
 		liveGlow = Math.max(0f, Math.min(3f, glow));
+		liveSmooth = smooth;
 	}
 
-	/** Fine + coarse slots spreading this frame (F3). */
+	// ---- (Celestia) smooth block light: per fine slot, vanilla's block light (from the client light engine) copied into the
+	// shared levels buffer (2 bytes a cell: level x 17 where open, 255 where open) and uploaded to the RG8 volume.
+	private static long levelsAddress;
+	private static ByteBuffer levelsBuf;
+	/** Per fine slot: its block light is in the levels buffer (false: to read, after its block ids). */
+	private static final boolean[] fineLight = new boolean[FINE];
+	private static final boolean[] uploadPending = new boolean[FINE];
+	private static final byte[] lightBuf = new byte[CELLS * 2];
+	private static boolean lightSettled, lastSmooth;
+	/** Uploads a frame at most (each is 4096 texels; the first fill of the window takes a few frames). */
+	private static final int UPLOAD_CAP = 512;
+
+	/** Fine + coarse slots near a coloured light this frame (F3; 0 = no coloured light in either window). */
 	public static int activeSlots() {
-		return lastFine + lastCoarse;
+		return lastActive;
 	}
 
 	private static int[] order(int x, int y, int z) {
@@ -169,6 +188,11 @@ public final class ColorLights {
 			}
 			idsAddress = ColorLightNative.ids(state);
 			idsBuf = MemoryUtil.memByteBuffer(idsAddress, (int) TOTAL);
+			levelsAddress = ColorLightNative.levels(state);
+			levelsBuf = MemoryUtil.memByteBuffer(levelsAddress, FINE * CELLS * 2);
+			Arrays.fill(fineLight, false);
+			Arrays.fill(uploadPending, false);
+			lightSettled = false;
 			header = MemoryUtil.nmemCalloc(1, HEADER);
 			headerBuf = MemoryUtil.memByteBuffer(header, HEADER).order(ByteOrder.nativeOrder());
 			ColorLightNative.header(state, 0, header);
@@ -218,6 +242,11 @@ public final class ColorLights {
 		}
 		idsAddress = 0;
 		idsBuf = null;
+		levelsAddress = 0;
+		levelsBuf = null;
+		Arrays.fill(fineLight, false);
+		Arrays.fill(uploadPending, false);
+		lightSettled = false;
 		headerBuf = null;
 		failed = false;
 		fallback = false;
@@ -241,7 +270,7 @@ public final class ColorLights {
 		Arrays.fill(prevFineNear, false);
 		Arrays.fill(prevCoarseNear, false);
 		clearCount = 0;
-		lastFine = lastCoarse = 0;
+		lastFine = lastCoarse = lastActive = 0;
 	}
 
 	// ---- block ids -------------------------------------------------------------------------------------------------------
@@ -281,9 +310,9 @@ public final class ColorLights {
 		return id;
 	}
 
-	// read()'s palette scan and cell walk (vanilla consumers; render thread only)
-	private static boolean scanOpaque, scanLight, scanNonOpaque, readFine, readColored;
-	private static int scanCount, scanFirst, readIndex;
+	// read()'s palette scan (a vanilla consumer over the palette's entries; render thread only)
+	private static boolean scanOpaque, scanLight, scanNonOpaque;
+	private static int scanCount, scanFirst;
 	private static final java.util.function.Consumer<BlockState> PALETTE_SCAN = st -> {
 		int id = idOf(st);
 		if (scanCount++ == 0) scanFirst = id;
@@ -291,19 +320,6 @@ public final class ColorLights {
 		else {
 			scanNonOpaque = true;
 			if (id >= 16) scanLight = true;
-		}
-	};
-	private static final java.util.function.Consumer<BlockState> CELL_READ = st -> {
-		int i = readIndex++;
-		if (i >= CELLS) return;
-		int id = idOf(st);
-		if (readFine) fineBuf[i] = (byte) id;
-		int x = i & 15, z = (i >> 4) & 15, y = i >> 8, c = ((y >> 2) * 4 + (z >> 2)) * 4 + (x >> 2);
-		if (id == 15) {
-			cellOpaque[c]++;
-		} else if (id >= 16) {
-			if (((id - 16) & 15) > ((cellLight[c] - 16) & 15) || cellLight[c] == 0) cellLight[c] = id;
-			if (id >= 32) readColored = true;
 		}
 	};
 
@@ -351,11 +367,23 @@ public final class ColorLights {
 		}
 		Arrays.fill(cellOpaque, 0);
 		Arrays.fill(cellLight, 0);
-		readIndex = 0;
-		readFine = fine;
-		readColored = false;
-		states.getAll(CELL_READ); // storage order = the cells' (y, z, x) order
-		boolean colored = readColored;
+		// Per cell in the volume's (y, z, x) order. (PalettedContainer.getAll visits each palette entry once, not each cell.)
+		// Neighbouring cells are mostly the same state: the last state's id is reused without a map lookup.
+		boolean colored = false;
+		BlockState last = null;
+		int lastId = 0;
+		for (int i = 0; i < CELLS; i++) {
+			BlockState st = states.get(i & 15, i >> 8, (i >> 4) & 15);
+			int id = st == last ? lastId : (lastId = idOf(last = st));
+			if (fine) fineBuf[i] = (byte) id;
+			if (id == 15) {
+				cellOpaque[((i >> 10) * 4 + ((i >> 6) & 3)) * 4 + ((i & 15) >> 2)]++;
+			} else if (id >= 16) {
+				int c = ((i >> 10) * 4 + ((i >> 6) & 3)) * 4 + ((i & 15) >> 2);
+				if (((id - 16) & 15) > ((cellLight[c] - 16) & 15) || cellLight[c] == 0) cellLight[c] = id;
+				if (id >= 32) colored = true;
+			}
+		}
 		for (int c = 0; c < 64; c++) coarseBuf[c] = (byte) (cellLight[c] != 0 ? cellLight[c] : cellOpaque[c] >= 48 ? 15 : 0);
 		return LOADED | (colored ? COLORED : 0);
 	}
@@ -430,6 +458,10 @@ public final class ColorLights {
 				fineState[s] = 0;
 				fineColored[s] = false;
 				MemoryUtil.memSet(idsAddress + (long) s * CELLS, 0, CELLS);
+				MemoryUtil.memSet(levelsAddress + (long) s * CELLS * 2, 0, CELLS * 2); // (G = 0: the shading keeps vanilla's)
+				fineLight[s] = false;
+				uploadPending[s] = true;
+				lightSettled = false;
 				if (fineLinger[s] != 0) clear(s, false);
 				fineLinger[s] = 0;
 				markFine(s, LINGER);
@@ -497,6 +529,8 @@ public final class ColorLights {
 		if (s >= 0 && fineKey[s] == key(sx, sy, sz)) {
 			fineState[s] = 0;
 			fineSettled = false;
+			fineLight[s] = false;
+			lightSettled = false;
 			markFine(s, LINGER);
 		}
 		int cx = Math.floorDiv(sx, 4), cy = Math.floorDiv(sy, 4), cz = Math.floorDiv(sz, 4);
@@ -508,19 +542,51 @@ public final class ColorLights {
 		}
 	}
 
+	/** (Celestia) The client light engine changed section (sx, sy, sz)'s block light (ClientChunkCache.onLightUpdate). */
+	public static void lightChanged(int sx, int sy, int sz) {
+		if (state == 0) return;
+		int s = fineSlot(sx, sy, sz);
+		if (s >= 0 && fineKey[s] == key(sx, sy, sz)) {
+			fineLight[s] = false;
+			lightSettled = false;
+		}
+	}
+
+	/** Fine slot s's block light (world section sx, sy, sz) into the levels buffer, open cells from its block ids. */
+	private static void readLight(ClientLevel level, int s, int sx, int sy, int sz) {
+		DataLayer dl = level.getLightEngine().getLayerListener(LightLayer.BLOCK).getDataLayerData(SectionPos.of(sx, sy, sz));
+		byte[] d = dl == null ? null : dl.getData();
+		int uniform = d == null && dl != null ? dl.get(0, 0, 0) : 0; // (no layer: no block light there)
+		int base = s * CELLS;
+		for (int i = 0; i < CELLS; i++) {
+			boolean open = (idsBuf.get(base + i) & 255) != 15;
+			int lv = d != null ? (d[i >> 1] >> ((i & 1) << 2)) & 15 : uniform;
+			lightBuf[2 * i] = (byte) (open ? lv * 17 : 0);
+			lightBuf[2 * i + 1] = (byte) (open ? 255 : 0);
+		}
+		levelsBuf.put(base * 2, lightBuf);
+		fineLight[s] = true;
+		uploadPending[s] = true;
+	}
+
 	// ---- the frame ---------------------------------------------------------------------------------------------------------
 
 	/** This frame's reads, slot lists and header, and its spread on enc's frame command buffer (DynLights.frame, before the world). */
 	public static void frame(long ctx, ClientLevel level, double camX, double camY, double camZ) {
 		if (!init(ctx)) return;
-		boolean on = level != null && liveOn && liveStrength > 0f;
 		ByteBuffer h = headerBuf;
-		if (!on) {
-			h.putInt(12, 0);
+		if (level == null) {
+			h.putInt(12, 0).putFloat(64, 0f).putFloat(76, 0f);
 			ColorLightNative.header(state, slot, header);
-			lastFine = lastCoarse = 0;
+			lastFine = lastCoarse = lastActive = 0;
 			return;
 		}
+		boolean smooth = liveSmooth;
+		if (smooth && !lastSmooth) { // (turned on: every slot's light read again)
+			Arrays.fill(fineLight, false);
+			lightSettled = false;
+		}
+		lastSmooth = smooth;
 		if (level != lastLevel) {
 			// another level: every slot unread (the window's next placement finds them all changed); cells emptied
 			lastLevel = level;
@@ -556,6 +622,8 @@ public final class ColorLights {
 				if ((f & LOADED) != 0) {
 					idsBuf.put(s * CELLS, fineBuf);
 					fineState[s] = 1;
+					fineLight[s] = false;
+					lightSettled = false;
 					fineColored[s] = (f & COLORED) != 0;
 					markFine(s, LINGER);
 				} else {
@@ -566,6 +634,21 @@ public final class ColorLights {
 				putCoarse(sx, sy, sz, f);
 			}
 			if (!budgetHit) fineSettled = true;
+		}
+		// (Celestia) smooth block light: the read slots' light, nearest first, in the same budget
+		if (smooth && !lightSettled) {
+			boolean budgetHit = false;
+			for (int o : FINE_ORDER) {
+				int sx = fx0 + (o & 255), sy = fy0 + ((o >> 8) & 255), sz = fz0 + (o >> 16);
+				int s = fineSlot(sx, sy, sz);
+				if (fineLight[s] || fineState[s] != 1) continue;
+				if (System.nanoTime() > end) {
+					budgetHit = true;
+					break;
+				}
+				readLight(level, s, sx, sy, sz);
+			}
+			if (!budgetHit) lightSettled = true;
 		}
 		if (!coarseSettled || retry) {
 			int rd = Minecraft.getInstance().options.getEffectiveRenderDistance() + 1;
@@ -664,7 +747,8 @@ public final class ColorLights {
 		for (int i = 0; i < clearCount; i++) MemoryUtil.memPutInt(list + 4L * n++, clears[i]);
 		int nClear = n;
 		clearCount = 0;
-		boolean spread = SPREAD, converge = CONVERGE;
+		boolean colourOn = liveOn && liveStrength > 0f;
+		boolean spread = SPREAD && colourOn, converge = CONVERGE; // (no spread while the coloured light is off: nothing converges)
 		boolean coarseStep = spread && (frame & 1) == 0;
 		int activeFine = 0, activeCoarse = 0;
 		for (int s = 0; s < FINE; s++) {
@@ -699,20 +783,30 @@ public final class ColorLights {
 			}
 		}
 		int nCoarse = n - nClear - nFine;
+		int uploadOffset = n, nUpload = 0;
+		for (int s = 0; s < FINE && nUpload < UPLOAD_CAP; s++) {
+			if (!uploadPending[s]) continue;
+			uploadPending[s] = false;
+			MemoryUtil.memPutInt(list + 4L * n++, s);
+			nUpload++;
+		}
 
 		// (2.0.1 opt) fineMin.w = 0 when zero coloured lights exist anywhere in either window: skips all per-vertex 3D texture reads!
 		// fineDim.w / coarseDim.w signal per-cascade activity so fine-only worlds skip coarse 3D fetches too.
-		h.putInt(0, fx0).putInt(4, fy0).putInt(8, fz0).putInt(12, (activeFine > 0 || activeCoarse > 0) ? 1 : 0);
+		h.putInt(0, fx0).putInt(4, fy0).putInt(8, fz0).putInt(12, colourOn && (activeFine > 0 || activeCoarse > 0) ? 1 : 0);
 		h.putInt(16, FX).putInt(20, FY).putInt(24, FZ).putInt(28, activeFine > 0 ? 1 : 0);
 		h.putInt(32, cx0).putInt(36, cy0).putInt(40, cz0).putInt(44, FINE * CELLS);
 		h.putInt(48, CX).putInt(52, CY).putInt(56, CZ).putInt(60, activeCoarse > 0 ? 1 : 0);
-		h.putFloat(64, liveStrength).putFloat(68, liveGlow)
-			.putFloat(72, 16f).putFloat(76, 0f);
+		h.putFloat(64, colourOn ? liveStrength : 0f).putFloat(68, liveGlow)
+			.putFloat(72, 16f).putFloat(76, liveSmooth ? 1f : 0f);
 		ColorLightNative.header(state, slot, header);
-		ColorLightNative.frame(ctx, state, slot, nClear, spread ? nFine : 0, coarseStep ? nCoarse : 0, 1);
+		// (the spread only matters while the coloured light is on; the uploads keep the smooth block light current)
+		ColorLightNative.frame(ctx, state, slot, nClear, spread ? nFine : 0, coarseStep ? nCoarse : 0, 1,
+			uploadOffset, nUpload);
 		cpuNanos = System.nanoTime() - t0;
 		lastFine = nFine;
 		lastCoarse = nCoarse;
+		lastActive = colourOn ? activeFine + activeCoarse : 0;
 		statCpu += cpuNanos;
 		if (frame % LOG_EVERY == 0) {
 			System.out.println(String.format(java.util.Locale.ROOT,
@@ -725,5 +819,5 @@ public final class ColorLights {
 
 	private static long cpuNanos, statCpu, statRead;
 	private static int statFine, statCoarse, statNear;
-	private static int lastFine, lastCoarse;
+	private static int lastFine, lastCoarse, lastActive;
 }

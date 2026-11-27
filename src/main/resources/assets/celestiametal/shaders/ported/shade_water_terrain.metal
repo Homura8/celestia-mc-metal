@@ -74,6 +74,9 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
 	bool waterFull = waterSprite > 0 && wp.state.x > 0.5 && !shadeDev(f, SHADE_DEV_NO_WATER);
 
 	half block = half(saturate(light.x));
+#ifdef SHADE_COLORLIGHT
+	block = half(shadeSmoothBlock(cl, clLevels, f, p, float3(n), float(block)));
+#endif
 	half sky = half(saturate(light.y));
 	half shadow = sky <= 0.3h ? half(1.0) : shadeShadow(shadowMap, shadowCmp, f, p, n, false);
 	float ex = shadeExposure(f, g);
@@ -133,7 +136,7 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
 		if (!underBelow) wi.lit += f.ambientBlock.xyz * shadeDynamicLightsVol(dl, dlIrr, dlDir, p, float3(n), false, block);
 #endif
 #ifdef SHADE_COLORLIGHT
-		if (!underBelow) wi.lit += f.ambientBlock.xyz * shadeColorLightFrag(cl, clFine, clCoarse, f, p, float(block));
+		if (!underBelow) wi.lit += f.ambientBlock.xyz * shadeColorLightFrag(cl, clFine, clCoarse, f, p, float3(n), float(block));
 #endif
 		wi.exposure = ex;
 #ifdef SHADE_SSR_PREV

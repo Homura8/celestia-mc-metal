@@ -9,6 +9,7 @@
     "DebugScreenEntryListMixin",
     "DynLightEntityRendererMixin",
     "DynLightClientLevelMixin",
+    "ColorLightChunkCacheMixin",
     "MinecraftMixin",
     "GuiMixin",
     "HudMixin",

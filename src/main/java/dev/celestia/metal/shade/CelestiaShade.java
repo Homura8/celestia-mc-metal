@@ -482,10 +482,12 @@ public final class CelestiaShade {
         }
         if (ColorLights.ON) {
             ShadeSettings.Lights lights = settings.lights();
-            if (lights.colored() && lights.coloredStrength() > 0f) {
-                // Coloured block light (P6b): reads + spread before the world passes. Only the Overworld terrain shading reads
-                // it today (the Nether / End keep vanilla shading), so elsewhere the module idles with an "off" header.
-                ColorLights.applyLive(frame.dimension == ShadeFrame.DIM_OVERWORLD, lights.coloredStrength(), lights.coloredGlow());
+            boolean colour = lights.colored() && lights.coloredStrength() > 0f;
+            if (colour || lights.smoothBlock()) {
+                // Coloured block light (P6b) and smooth block light: reads, spread and uploads before the world passes. Only the
+                // Overworld terrain shading reads them today (the Nether / End keep vanilla shading), so elsewhere the module idles.
+                boolean overworld = frame.dimension == ShadeFrame.DIM_OVERWORLD;
+                ColorLights.applyLive(colour && overworld, lights.coloredStrength(), lights.coloredGlow(), lights.smoothBlock() && overworld);
                 ColorLights.frame(device.handle(), level, camera.pos.x, camera.pos.y, camera.pos.z);
             } else {
                 ColorLights.disable(device.handle());
