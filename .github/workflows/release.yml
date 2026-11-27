@@ -1,0 +1,171 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name to release (defaults to v<mod_version> from gradle.properties)'
+        required: false
+        type: string
+      draft:
+        description: 'Create as a draft release'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: macos-26
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          MOD_VERSION="$(grep '^mod_version=' gradle.properties | head -n 1 | cut -d= -f2 | tr -d '[:space:]')"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [[ -n "${INPUT_TAG// /}" ]]; then
+              TAG="${INPUT_TAG}"
+            else
+              TAG="v${MOD_VERSION}"
+            fi
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="${TAG#v}"
+          if [[ "${VERSION}" == *-* ]]; then
+            PRERELEASE="true"
+          else
+            PRERELEASE="false"
+          fi
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${PRERELEASE}" >> "${GITHUB_OUTPUT}"
+          echo "Resolved release tag=${TAG} version=${VERSION} prerelease=${PRERELEASE}"
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Print toolchain info
+        shell: bash
+        run: |
+          xcodebuild -version
+          xcrun --show-sdk-path
+          java -version
+
+      - name: Build JAR, native library, native test binary, and check privacy
+        shell: bash
+        run: |
+          ./gradlew assemble buildNativeTests checkPrivacy --no-daemon -Pmod_version="${{ steps.meta.outputs.version }}"
+
+      - name: Run pure-Java unit tests
+        shell: bash
+        run: |
+          ./gradlew test \
+            --tests 'dev.celestia.metal.ConfigAndUiTest' \
+            --tests 'dev.celestia.metal.IrisPackParserTest' \
+            --tests 'dev.celestia.metal.ShaderManifestTest' \
+            --no-daemon \
+            -Pmod_version="${{ steps.meta.outputs.version }}"
+
+      - name: Verify packaged JAR, FFM signatures, and generate SHA-256
+        shell: bash
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          JAR_PATH="build/libs/celestia-metal-${VERSION}.jar"
+          SOURCES_JAR_PATH="build/libs/celestia-metal-${VERSION}-sources.jar"
+          test -f "${JAR_PATH}"
+          test -f "${SOURCES_JAR_PATH}"
+          jar tf "${JAR_PATH}" | grep -qx 'natives/macos-arm64/libcelestiametal.dylib'
+          if javap -c build/classes/java/main/dev/celestia/metal/backend/MetalNative.class | grep -E 'invokeExact.*Ljava/lang/Object;'; then
+            echo "ERROR: Found MethodHandle.invokeExact call inferring Object in MetalNative.class" >&2
+            exit 1
+          fi
+          (cd build/libs && shasum -a 256 "celestia-metal-${VERSION}.jar" > "celestia-metal-${VERSION}.jar.sha256")
+          cat "build/libs/celestia-metal-${VERSION}.jar.sha256"
+
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        shell: bash
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          awk -v ver="${VERSION}" '
+            $0 == "## " ver { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if grep -q '[^[:space:]]' release-notes.md; then
+            echo "has_notes=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has_notes=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+          HAS_NOTES: ${{ steps.notes.outputs.has_notes }}
+          IS_DRAFT: ${{ inputs.draft }}
+        run: |
+          set -euo pipefail
+          JAR_PATH="build/libs/celestia-metal-${VERSION}.jar"
+          SOURCES_JAR_PATH="build/libs/celestia-metal-${VERSION}-sources.jar"
+          SHA_PATH="build/libs/celestia-metal-${VERSION}.jar.sha256"
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${JAR_PATH}" "${SOURCES_JAR_PATH}" "${SHA_PATH}" --clobber
+          else
+            ARGS=(
+              "${TAG}"
+              "${JAR_PATH}"
+              "${SOURCES_JAR_PATH}"
+              "${SHA_PATH}"
+              --title "Celestia Metal ${TAG}"
+            )
+            if [[ "${PRERELEASE}" == "true" ]]; then
+              ARGS+=(--prerelease)
+            fi
+            if [[ "${IS_DRAFT}" == "true" ]]; then
+              ARGS+=(--draft)
+            fi
+            if [[ "${HAS_NOTES}" == "true" ]]; then
+              ARGS+=(--notes-file release-notes.md)
+            else
+              ARGS+=(--generate-notes)
+            fi
+            if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] && ! git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+              ARGS+=(--target "${GITHUB_SHA}")
+            fi
+            gh release create "${ARGS[@]}"
+          fi
