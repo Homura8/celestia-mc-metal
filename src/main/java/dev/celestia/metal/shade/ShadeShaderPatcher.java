@@ -513,16 +513,10 @@ public final class ShadeShaderPatcher {
             fragPosName = "celFragCoord";
             shadeParams += ", float4 celFragCoord [[position]]";
         }
+        Matcher uvField = TEXCOORD_FIELD.matcher(inFs);
+        String uvExpr = inFs.contains("v_TexCoord") ? "in.v_TexCoord" : inFs.contains("texCoord0") ? "in.texCoord0"
+            : uvField.find() ? "in." + uvField.group(1) : "float2(0.0)";
         if (translucentWater) {
-            String uvExpr = "float2(0.0)";
-            if (inFs.contains("v_TexCoord")) {
-                uvExpr = "in.v_TexCoord";
-            } else if (inFs.contains("texCoord0")) {
-                uvExpr = "in.texCoord0";
-            } else {
-                Matcher uvM = TEXCOORD_FIELD.matcher(inFs);
-                if (uvM.find()) uvExpr = "in." + uvM.group(1);
-            }
             shadeParams += ", texture2d<half> celSceneCopy [[texture(" + MetalConst.SHADE_TEX_WATER_SCENE + ")]]"
                 + ", depth2d<float> celDepthCopy [[texture(" + MetalConst.SHADE_TEX_WATER_DEPTH + ")]]"
                 + ", constant ShadeWaterParams& celWP [[buffer(" + MetalConst.SHADE_BUF_WATER + ")]]"
@@ -538,16 +532,19 @@ public final class ShadeShaderPatcher {
             String defines = waterDefines() + "#define SHADE_WEATHER 1\n#define SHADE_RIPPLES 1\n#define SHADE_RIPPLE_LAYERS 1\n";
             if (aboveWater) defines += "#define SHADE_LEAN_ABOVE 1\n";
             fs.append(prelude(true, false, defines, false));
+            fs.append(resource("shade_material.metal")).append('\n');
             fs.append(resource("weather_surface.metal")).append('\n');
             fs.append(resource("water.metal")).append('\n');
             fs.append(resource("shade_water_terrain.metal")).append('\n');
         } else {
             shadeCall = "    out." + colorMember + " = shadeTerrainShade(out." + colorMember
-                + ", celTexel, in.mcoptColor, in.mcoptPos, in.mcoptLight, " + fragPosName + ".xy, " + chunkVis + ", "
+                + ", celTexel, in.mcoptColor, in.mcoptPos, in.mcoptLight, " + fragPosName + ".xy,\n"
+                + "#ifdef CELESTIA_TERRAIN_MATERIAL_UV\n        " + uvExpr + ",\n#endif\n        " + chunkVis + ", "
                 + (isCutout ? "true" : "false") + ", " + fogExpr
                 + ", celLut, celLutSmplr, celShadow, celShadowCmp, celSF, celSL, celSG, celSR CEL_DL_ARGS CEL_CL_ARGS);\n";
 
             fs.append(prelude(true, false, null, false));
+            fs.append(resource("shade_material.metal")).append('\n');
             fs.append(resource("weather_surface.metal")).append('\n');
             fs.append(resource("shade_terrain.metal")).append('\n');
         }

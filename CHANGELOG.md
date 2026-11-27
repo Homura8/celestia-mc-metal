@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **labPBR 1.3 materials** for vanilla and Sodium terrain. Celestia Native reads normal, ambient occlusion, smoothness,
+  reflectance, metalness, emission, porosity and subsurface data from resource-pack textures. Toggle **labPBR Materials** in
+  **Materials**. The option is on by default and companion atlases are allocated only when matching maps are available.
 - **Cumulus congestus cloud layer.**
   - **Sky & clouds:** replaced the thicker-cumulus stand-in on convective weather days (Photon weather days 2 and 4) with a dedicated distant (`10..50 km`), tall (`400..10000 m`) volumetric **cumulus congestus** march (`clouds.metal`: `cloudCongestusDensity`, `cloudCongestusOpticalDepth`, `cloudCongestusScattering`, `cloudCongestusMarch`), altitude wind shear, curl + 2-octave Worley sculpting, 6-octave scattering, cylindrical shell early-outs, and water reflection dome support.
   - **Options:** added **Cumulus Congestus** (`CLOUD_CONGESTUS`, default `true`) under **Clouds & Weather**.

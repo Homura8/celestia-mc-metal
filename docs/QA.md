@@ -40,6 +40,10 @@ QA_LABEL=descent tools/qa/run.sh frames -PqaJvm=celestiaqa.frames=180
 QA_LABEL=packs tools/qa/run.sh packs
 ```
 
+Use `QA_RESOURCE_PACK` to stage and enable a resource-pack directory containing `pack.mcmeta`. For labPBR, capture `pond-noon`
+with a compatible resource pack and repeat with `-PqaOptions=LAB_PBR=false`. Include `profile` in both runs to compare GPU
+pass timings with the same pack and camera.
+
 Use `celestiaqa.repeat=N` (and `celestiaqa.repeatTicks`, default 10) for a burst of N shots per scene, for animated effects such as waves, caustics and underwater shafts. Use `celestiaqa.scenes` to select comma-separated scene names in their declared order. The thirteen names are `pond-morning`, `pond-noon`, `pond-sunset`, `pond-night`, `underwater`, `underwater-noon`, `vista-noon`, `vista-sunset`, `vista-up`, `vista-night`, `vista-rain`, `nether` and `end`. Other JVM properties include `celestiaqa.preset` (default Ultra), `celestiaqa.pack=off`, `celestiaqa.debug=<view>` and `celestiaqa.prefix=<name>`. Pass shader overrides with a dedicated Gradle property, for example `-PqaOptions=GOD_RAYS=false,BLOOM_ENABLED=false`.
 
 The profile tokens are `N` for `celestiametal.shade.water.devSsr`, `bN` for `celestiametal.shade.water.ssrBudget`, `sN` for `celestiametal.shade.dev`, and `cN` for `celestiametal.shade.cloudDev`. The default is `0`. Each token applies one override to the launch settings. Use `s32,s0` to compare the previous chunk-border fog with the directional fade.

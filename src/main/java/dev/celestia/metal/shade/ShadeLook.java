@@ -31,6 +31,7 @@ public final class ShadeLook {
 
     public static final int FEATURE_HDR = 1, FEATURE_BLOOM = 2, FEATURE_AUTO_EXPOSURE = 4,
         FEATURE_PCSS = 8, FEATURE_STARS = 16, FEATURE_HAZE = 32, FEATURE_LIGHT_V2 = 64;
+    public static final int FEATURE_PBR_NORMAL = 1 << 24, FEATURE_PBR_SPECULAR = 1 << 25;
 
     public boolean cloudsEnabled;
     public int cloudSteps;
@@ -178,6 +179,10 @@ public final class ShadeLook {
 
     public int features() {
         return this.features;
+    }
+
+    public void setMaterialFeatures(int materialFeatures) {
+        this.features = (this.features & ~(FEATURE_PBR_NORMAL | FEATURE_PBR_SPECULAR)) | materialFeatures;
     }
 
     public void update(ShadeFrame f, int moonPhaseIndex, float dtSeconds) {

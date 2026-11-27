@@ -18,7 +18,8 @@
     "ViewAreaAccessor",
     "ShadeLevelRendererMixin",
     "ShadeFaceShadeMixin",
-    "ShadeDimsFogMixin"
+    "ShadeDimsFogMixin",
+    "TextureAtlasAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

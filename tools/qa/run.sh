@@ -4,7 +4,8 @@ set -euo pipefail
 usage() {
     cat <<'USAGE'
 Usage: tools/qa/run.sh <shots,profile,perf,lights,frames,packs> [Gradle options]
-Set QA_LABEL to name the output folder or QA_VERBOSE=1 to stream client logs.
+Set QA_LABEL to name the output folder, QA_VERBOSE=1 to stream client logs,
+or QA_RESOURCE_PACK to stage a resource-pack directory for the run.
 See docs/QA.md for presets, filters, profiling and the Iris/Photon reference.
 USAGE
 }
@@ -65,6 +66,17 @@ fi
 
 mkdir -p "$run/saves"
 cp tools/qa/template/options.txt "$run/options.txt"
+if [[ -n ${QA_RESOURCE_PACK:-} ]]; then
+    pack=$(cd "$QA_RESOURCE_PACK" && pwd -P)
+    test -f "$pack/pack.mcmeta"
+    staged_pack="$run/resourcepacks/celestia-qa-pack"
+    if [[ $pack != "$staged_pack" ]]; then
+        mkdir -p "$run/resourcepacks"
+        rm -rf "$staged_pack"
+        cp -R "$pack" "$staged_pack"
+    fi
+    printf '%s\n' 'resourcePacks:["vanilla","file/celestia-qa-pack"]' >> "$run/options.txt"
+fi
 rm -rf "$run/screenshots" "$run/saves/CelestiaQA"
 if [[ -f $world/level.dat ]]; then cp -cR "$world" "$run/saves/CelestiaQA"; fi
 if [[ ,$modes, == *,profile,* ]]; then gradle_args+=(-PqaProfile=120); fi

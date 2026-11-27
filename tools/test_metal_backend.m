@@ -825,6 +825,7 @@ static void verify_backend_ops(int32_t preferMetal4) {
         NSString *m2Src = read_file_str(shade_path(portedDir, @"shade_m2.metal"));
         NSString *dimsSrc = read_file_str(shade_path(portedDir, @"shade_dims.metal"));
         NSString *vuniSrc = read_file_str(shade_path(portedDir, @"vanilla_uniforms.metal"));
+        NSString *materialSrc = read_file_str(shade_path(portedDir, @"shade_material.metal"));
         NSString *prelude = [NSString stringWithFormat:@"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n%@\n%@\n%@\n%@\n%@\n%@\n%@\n",
                              slots, apiSrc, lookSrc, commonSrc, m2Src, dimsSrc, vuniSrc];
 
@@ -840,9 +841,9 @@ static void verify_backend_ops(int32_t preferMetal4) {
         char serr[4096] = {0};
         for (NSString *fn in portedShaders) {
             NSString *body = read_file_str(shade_path(portedDir, fn));
-            NSString *weather = [fn isEqualToString:@"shade_terrain.metal"]
-                ? read_file_str(shade_path(portedDir, @"weather_surface.metal")) : @"";
-            NSString *src = [NSString stringWithFormat:@"%@\n%@\n%@\n%@", dummyDefines, prelude, weather, body];
+            NSString *terrainModules = [fn isEqualToString:@"shade_terrain.metal"]
+                ? [NSString stringWithFormat:@"%@\n%@", materialSrc, read_file_str(shade_path(portedDir, @"weather_surface.metal"))] : @"";
+            NSString *src = [NSString stringWithFormat:@"%@\n%@\n%@\n%@", dummyDefines, prelude, terrainModules, body];
             int64_t l = cm_compile_msl_library(ctx, src.UTF8String, fn.UTF8String, 1, serr, sizeof(serr));
             if (!l) {
                 fprintf(stderr, "FAIL 2l compiling ported shader %s:\n%s\n", fn.UTF8String, serr);
@@ -1001,7 +1002,7 @@ static void verify_backend_ops(int32_t preferMetal4) {
 
         // Sample the same radial fade used by terrain, post haze and reflected hits.
         NSString *edgeSrc = [NSString stringWithFormat:
-            @"%@\n"
+            @"%@\n%@\n"
              "kernel void chunk_edge_probe(constant ShadeFrame &f [[buffer(0)]], constant ShadeLook &l [[buffer(1)]],"
              "                             device float *out [[buffer(2)]]) {\n"
              "    out[0] = shadeChunkEdgeFade(float3(24.0, 100.0, 0.0), f, l);\n"
@@ -1011,12 +1012,25 @@ static void verify_backend_ops(int32_t preferMetal4) {
              "    out[4] = shadeChunkEdgeDepthFade(out[1]);\n"
              "    out[5] = shadeChunkEdgeDepthFade(shadeChunkEdgeFade(float3(46.0, 0.0, 0.0), f, l));\n"
              "    out[6] = shadeChunkEdgeDepthFade(out[3]);\n"
-             "}\n", prelude];
+             "}\n"
+             "kernel void labpbr_probe(device float *out [[buffer(0)]]) {\n"
+             "    float3 n(0, 0, 1), dx(1, 0, 0), dy(0, 1, 0), albedo(0.75, 0.5, 0.25);\n"
+             "    out[0] = shadeMaterialNormal(float2(128, 255) / 255.0, n, dx, dy, float2(1, 0), float2(0, 1)).y;\n"
+             "    out[1] = shadeMaterialNormal(float2(255, 128) / 255.0, n, dx, dy, float2(-1, 0), float2(0, 1)).x;\n"
+             "    out[2] = shadeMaterialNormal(float2(128) / 255.0, n, dx, dy, float2(1, 0), float2(0, 1)).z;\n"
+             "    ShadeMaterial m = {};\n"
+             "    shadeMaterialSpecular(m, float4(127, 229, 64, 255) / 255.0, albedo);\n"
+             "    out[3] = m.roughness; out[4] = m.f0.r; out[5] = m.diffuse;\n"
+             "    out[6] = m.porosity; out[7] = m.scattering; out[8] = m.emission;\n"
+             "    shadeMaterialSpecular(m, float4(255, 230, 255, 254) / 255.0, albedo);\n"
+             "    out[9] = m.f0.g; out[10] = m.diffuse; out[11] = m.roughness;\n"
+             "    out[12] = m.porosity; out[13] = m.scattering; out[14] = m.emission;\n"
+             "}\n", prelude, materialSrc];
         int64_t edgeLib = cm_compile_msl_library(ctx, edgeSrc.UTF8String, "chunk edge probe", 1, serr, sizeof(serr));
         assert(edgeLib);
         int64_t edgeFn = cm_compile_function(edgeLib, "chunk_edge_probe", 0, 0, 0, serr, sizeof(serr));
         int64_t edgePso = cm_compute_pipeline_create(ctx, edgeFn, "chunk edge probe", serr, sizeof(serr));
-        int64_t edgeRead = cm_buffer_create(ctx, 7 * sizeof(float), NULL, "chunk edge results");
+        int64_t edgeRead = cm_buffer_create(ctx, 15 * sizeof(float), NULL, "world shader probe results");
         assert(edgeFn && edgePso && edgeRead);
         int64_t edgeBuffers[3] = { fBuf, lBuf, edgeRead };
         int64_t edgeOffsets[3] = {0};
@@ -1039,12 +1053,29 @@ static void verify_backend_ops(int32_t preferMetal4) {
             }
         }
         assert(cm_device_drain_errors(ctx, serr, sizeof(serr)) == 0);
+        printf("[Backend %s] Chunk edge radial fade, reflection weight, and fog bypass OK\n",
+               preferMetal4 ? "Metal 4" : "Metal 3");
+
+        int64_t pbrFn = cm_compile_function(edgeLib, "labpbr_probe", 0, 0, 0, serr, sizeof(serr));
+        int64_t pbrPso = cm_compute_pipeline_create(ctx, pbrFn, "labPBR probe", serr, sizeof(serr));
+        assert(pbrFn && pbrPso);
+        cm_cmd_begin(ctx);
+        cm_compute_dispatch(ctx, pbrPso, &edgeRead, edgeOffsets, 1, NULL, 0, NULL, 0, 1, 1, 1, 1, 1, 1);
+        assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+        const float *pbr = (const float *)(void *)cm_buffer_contents(edgeRead);
+        const float expectedPbr[] = {1, -1, 1, (128.f / 255.f) * (128.f / 255.f), 229.f / 255.f, 26.f / 255.f,
+                                     1, 0, 0, 0.5f, 0, 0, 0, 1, 1};
+        for (int i = 0; i < 15; i++) assert(fabsf(pbr[i] - expectedPbr[i]) < 1e-5f);
+        assert(cm_device_drain_errors(ctx, serr, sizeof(serr)) == 0);
+        cm_compute_pipeline_destroy(ctx, pbrPso);
+        cm_function_destroy(pbrFn);
+        printf("[Backend %s] labPBR normals, metallic threshold, roughness, porosity, scattering and emission OK\n",
+               preferMetal4 ? "Metal 4" : "Metal 3");
+
         cm_buffer_destroy(ctx, edgeRead);
         cm_compute_pipeline_destroy(ctx, edgePso);
         cm_function_destroy(edgeFn);
         cm_library_destroy(edgeLib);
-        printf("[Backend %s] Chunk edge radial fade, reflection weight, and fog bypass OK\n",
-               preferMetal4 ? "Metal 4" : "Metal 3");
 
         cm_shade_set_globals(ctx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         cm_shade_set_resource(ctx, 0, 0);

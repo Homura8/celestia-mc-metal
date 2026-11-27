@@ -9,6 +9,7 @@
     "Sky & Atmosphere",
     "Water",
     "Clouds & Weather",
+    "Materials",
     "Post-Processing"
   ],
   "presets": {
@@ -53,6 +54,15 @@
     }
   },
   "options": [
+    {
+      "id": "LAB_PBR",
+      "label": "labPBR Materials",
+      "description": "Uses labPBR 1.3 normal and specular textures from active resource packs.",
+      "category": "Materials",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "HIGH"
+    },
     {
       "id": "SHADOWS_ENABLED",
       "label": "Sun and Moon Shadows",
