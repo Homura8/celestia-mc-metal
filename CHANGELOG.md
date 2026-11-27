@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Cumulus congestus cloud layer.**
+  - **Sky & clouds:** replaced the thicker-cumulus stand-in on convective weather days (Photon weather days 2 and 4) with a dedicated distant (`10..50 km`), tall (`400..10000 m`) volumetric **cumulus congestus** march (`clouds.metal`: `cloudCongestusDensity`, `cloudCongestusOpticalDepth`, `cloudCongestusScattering`, `cloudCongestusMarch`), altitude wind shear, curl + 2-octave Worley sculpting, 6-octave scattering, cylindrical shell early-outs, and water reflection dome support.
+  - **Options:** added **Cumulus Congestus** (`CLOUD_CONGESTUS`, default `true`) under **Clouds & Weather**.
 - **Camera motion blur.**
   - **Post pass:** ported camera-velocity HDR motion blur (`motion_blur.metal`, `shade_motion_fs`) before bloom and tonemapping, using `invViewProj` / `prevViewProjNoJitter` reprojection with a `1/120 s` virtual shutter independent of frame rate, a `4%` trail cap, up to `12` adaptive dithered taps, depth silhouette rejection, cut/teleport guards, and zero GPU overhead on stationary frames (leaving sharp history intact for water reflections).
   - **Options:** added **Motion Blur** (`MOTION_BLUR_ENABLED`, off by default) and **Motion Blur Strength** (`MOTION_BLUR_STRENGTH`, `0.25..2.0`, default `1.0`) under **Post-Processing**.

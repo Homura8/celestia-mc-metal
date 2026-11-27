@@ -341,7 +341,7 @@ Owner priorities (2026-11-28), in order:
 - [x] Nether and End looks.
 - [x] Aurora.
 - [x] Motion blur.
-- [ ] A real cumulus congestus layer (days 2 and 4 currently stand in a thicker cumulus).
+- [x] A real cumulus congestus layer (replaces the thicker-cumulus stand-in on weather days 2 and 4).
 - [ ] labPBR (carried over from P6b).
 
 Settled: the pink-lavender distant haze stays, as part of the Pastel look (owner).

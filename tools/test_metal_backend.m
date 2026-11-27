@@ -2563,6 +2563,45 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
     printf("[Backend %s] Aurora pass (upper-sky emission, horizon cutoff, zero strength) OK\n",
            cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3");
 
+    // Cumulus congestus layer: clear cumulus/altocumulus/cirrus, set weatherB.z = 1.0, trace + resolve, verify hits in the ring.
+    float *cgLook = (float *)(void *)cm_buffer_contents(lookBuf);
+    float savedWeatherA[4] = { cgLook[128], cgLook[129], cgLook[130], cgLook[131] };
+    float savedWeatherB[4] = { cgLook[188], cgLook[189], cgLook[190], cgLook[191] };
+    cgLook[128] = cgLook[129] = cgLook[130] = cgLook[131] = 0.0f;
+    cgLook[188] = cgLook[189] = cgLook[191] = 0.0f;
+    cgLook[190] = 1.0f; // cumulus congestus active
+    static uint8_t cgNoisePx[64 * 64 * 4];
+    for (int i = 0; i < 64 * 64; i++) {
+        cgNoisePx[i * 4 + 0] = 128;
+        cgNoisePx[i * 4 + 1] = 128;
+        cgNoisePx[i * 4 + 2] = 128;
+        cgNoisePx[i * 4 + 3] = 240; // strong convective anvil/tower coverage
+    }
+    int64_t cgN2d = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, 64, 64, 1, 1, 0, 0, 1, 0, "2o congestus n2d");
+    assert(cgN2d);
+    cm_cmd_begin(ctx);
+    cm_blit_write_texture(ctx, cgN2d, cgNoisePx, sizeof(cgNoisePx), 64 * 4, 0, 0, 0, 0, 64, 64);
+    int64_t cgInputs[4] = { cgN2d, worley, curl, cloudHistory };
+    uint32_t cgPush[4] = { 0, 0, 0, 0 };
+    cm_shade_fullscreen_pass(ctx, pso[TRACE], tex[TRACE], cgInputs, 4, NULL, 0, cgPush, sizeof(cgPush));
+    int64_t cgResolveInputs[2] = { tex[TRACE], cloudHistory };
+    cm_shade_fullscreen_pass(ctx, pso[CLOUDS], tex[CLOUDS], cgResolveInputs, 2, NULL, 0, cgPush, sizeof(cgPush));
+    cm_blit_copy_texture_to_buffer(ctx, tex[CLOUDS], 0, 0, 0, 0, 96, 64, cloudRead, 0, 96 * 8);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    size_t cgCovered = 0;
+    for (size_t i = 0; i < 96 * 64; i++) {
+        float light = cloudPixels[i * 4], T = cloudPixels[i * 4 + 3];
+        assert(isfinite(light) && T >= 0.0f && T <= 1.0f);
+        if (T < 0.95f && light > 0.01f) cgCovered++;
+    }
+    assert(cgCovered > 16);
+    memcpy(cgLook + 128, savedWeatherA, sizeof(savedWeatherA));
+    memcpy(cgLook + 188, savedWeatherB, sizeof(savedWeatherB));
+    cm_texture_destroy(ctx, cgN2d);
+    assert(cm_device_drain_errors(ctx, err, sizeof(err)) == 0);
+    printf("[Backend %s] Cumulus congestus layer (cylindrical ring, scattering, transmittance) OK\n",
+           cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3");
+
     // Time the recurring atmosphere passes at the owner test resolution.
     const int W = 3024, H = 1752, SW = W / 4, SH = H / 4;
     // clouds: traced at a quarter of the half-resolution pixels (SW x SH), resolved at half resolution (ping-pong history)

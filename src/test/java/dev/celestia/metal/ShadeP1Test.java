@@ -424,10 +424,14 @@ class ShadeP1Test {
         assertEquals(0.6f, w[0], 1e-6f);
         assertEquals(0.8f, w[1], 1e-6f);
         assertEquals(0.7f, w[7], 1e-6f);
-        // congestus days stand in a cumulus; coverage scales every layer
-        dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(12000L, 0f, 0.5f, 2, w);
-        assertEquals(0.225f, w[0], 1e-6f);
+        // congestus days keep real cumulus congestus in weatherB.z when enabled, or substitute cumulus when disabled
+        dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(12000L, 0f, 0.5f, 2, true, w);
+        assertEquals(0f, w[0], 1e-6f);
+        assertEquals(0f, w[1], 1e-6f);
         assertEquals(1f, w[6], 1e-6f);
+        dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(12000L, 0f, 0.5f, 2, false, w);
+        assertEquals(0.20f, w[0], 1e-6f);
+        assertEquals(0f, w[6], 1e-6f);
         // the daily cycle is deterministic and continuous across the dawn blend
         float[] a = new float[8], b = new float[8];
         dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(5L * 24000L + 5999L, 0f, 1f, -1, a);

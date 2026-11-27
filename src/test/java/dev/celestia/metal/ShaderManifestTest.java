@@ -29,7 +29,7 @@ class ShaderManifestTest {
 
         assertEquals(ShaderPackManifest.PackKind.WORLD_MSL, nativePack.kind);
         assertEquals(List.of("Performance", "Balanced", "Quality", "Ultra"), List.copyOf(nativePack.presets.keySet()));
-        assertEquals(52, nativePack.options.size());
+        assertEquals(53, nativePack.options.size());
         assertTrue(nativePack.passes.isEmpty());
     }
 
@@ -70,6 +70,7 @@ class ShaderManifestTest {
         assertEquals(2, balancedSettings.sky().auroraMode());
         assertEquals(1f, balancedSettings.sky().auroraBrightness(), 1e-6f);
         assertEquals(0, balancedSettings.sky().auroraPalette());
+        assertTrue(balancedSettings.atmosphere().cloudCongestus());
         assertFalse(balancedSettings.post().motionBlur());
         assertEquals(1.0f, balancedSettings.post().motionBlurStrength(), 1e-6f);
 
