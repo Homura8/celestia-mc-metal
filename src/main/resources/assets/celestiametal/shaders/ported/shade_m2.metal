@@ -331,37 +331,57 @@ static inline float3 shadeUnderwaterFog(float3 radiance, float3 p, constant Shad
 	return radiance * T + scatter;
 }
 
+// FogRenderer gives a horizontal render range in blocks. Finish up to one chunk inside it
+// so the fade is complete when culling steps across the camera or a diagonal.
+static inline bool shadeChunkEdgeEnabled(constant ShadeFrame &f, constant ShadeLook &L) {
+	return f.flags.x == SHADE_DIM_OVERWORLD && f.flags.y == 0 && f.fogColor.a == 0.0 && L.fogMisc.z > 0.0
+	    && !shadeDev(f, SHADE_DEV_LEGACY_CHUNK_EDGE);
+}
+
+static inline float shadeChunkEdgeFade(float3 p, constant ShadeFrame &f, constant ShadeLook &L) {
+	if (!shadeChunkEdgeEnabled(f, L)) return 0.0;
+	float range = L.fogMisc.z + 8.0;
+	float end = max(range - 16.0, range * 0.75);
+	float start = end * min(L.fogMisc.y, 0.72);
+	return smoothstep(start * start, end * end, dot(p.xz, p.xz));
+}
+
+static inline float shadeChunkEdgeDepthFade(float edge) {
+	return smoothstep(0.92, 1.0, edge);
+}
+
+static inline bool shadeChunkEdgeDiscard(float edge, float2 pixel) {
+	return edge > 0.92 && shadeChunkEdgeDepthFade(edge) > shadeNoise(floor(pixel), 0);
+}
+
+static float3 shadeSkyBackground(float3 dir, texture2d<half> lut, sampler s, constant ShadeFrame &f,
+                                 constant ShadeLook &L, constant ShadeResources &R);
+
 static float3 shadeFogAir2(float3 radiance, float3 p, float vanillaFog, float chunkFade, texture2d<half> lut, sampler s,
-                           constant ShadeFrame &f, constant ShadeLook &L, constant ShadeResources *R = nullptr, bool leanFog = false) {
+                           constant ShadeFrame &f, constant ShadeLook &L, constant ShadeResources &R, float chunkEdge) {
 #ifdef MCOPT_HDR
 	if (f.flags.x == SHADE_DIM_OVERWORLD && SHADE_CAMERA_UNDERWATER(f)) return shadeUnderwaterFog(radiance, p, f, L);
 #endif
-	if (!shadeFeature(L, SHADE_FEATURE_HAZE)) return shadeFogAir(radiance, p, vanillaFog, lut, s, f);
+	bool border = shadeChunkEdgeEnabled(f, L);
+	float fade = chunkEdge;
+	bool haze = shadeFeature(L, SHADE_FEATURE_HAZE);
+	if (!haze && fade <= 0.002) return shadeFogAir(radiance, p, vanillaFog, lut, s, f);
 	float d = length(p);
 	float3 v = p / max(d, 1e-4);
+	if (!haze) {
+		float3 fogged = shadeFogAir(radiance, p, vanillaFog, lut, s, f);
+		return mix(fogged, shadeSkyBackground(v, lut, s, f, L, R), fade);
+	}
 	bool air = f.fogColor.a < 0.5;
 	float ap = (1.0 - exp(-d * f.fogSky.z)) * f.fogSky.w * (1.0 - f.fogColor.a);
 	bool smoothAir = shadeAirSmooth(L);
 	if (smoothAir) ap *= shadeAirSky(L);
 	float apMix = smoothAir ? ap * 0.6 * smoothstep(0.002, 0.004, ap) : (ap > 0.002 ? ap * 0.6 : 0.0);
 	if (shadeCloudDev(L, SHADE_CLOUD_DEV_NO_AP)) apMix = 0.0;
-	if (leanFog) {
-		if (apMix > 0.0) {
-			float3 skyBehind = shadeSkyLookup(float3(v.x, max(v.y, 0.0), v.z), lut, s, f);
-			radiance = mix(radiance, skyBehind, apMix);
-		}
-#ifndef MCOPT_HDR
-		if (air && (smoothAir || d > 2.0)) {
-			float3 T;
-			float3 S = shadeHazeInscatter(p, f, L, 1.0, T);
-			radiance = radiance * T + S;
-		}
-#endif
-		return radiance;
-	}
 	float3 skyBehind = float3(0.0);
-	float edge = 0.0;
-	if (air) {
+	// Keep the section-upload fade on the original aerial haze path.
+	float edge = border ? chunkFade : 0.0;
+	if (air && !border) {
 		if (L.fogMisc.z > 0.0) {
 			float2 q = p.xz * p.xz;
 			float l4 = sqrt(sqrt(dot(q, q)));
@@ -375,7 +395,6 @@ static float3 shadeFogAir2(float3 radiance, float3 p, float vanillaFog, float ch
 	if (needSky) {
 		float3 vs = float3(v.x, max(v.y, 0.0), v.z);
 		skyBehind = shadeSkyLookup(vs, lut, s, f);
-		(void)R;
 	}
 	if (apMix > 0.0) radiance = mix(radiance, skyBehind, apMix);
 #ifndef MCOPT_HDR
@@ -386,6 +405,7 @@ static float3 shadeFogAir2(float3 radiance, float3 p, float vanillaFog, float ch
 	}
 #endif
 	if (air && edge > 0.002) radiance = mix(radiance, needSky ? skyBehind : shadeSkyLookup(float3(v.x, max(v.y, 0.0), v.z), lut, s, f), edge);
+	if (fade > 0.002) radiance = mix(radiance, shadeSkyBackground(v, lut, s, f, L, R), fade);
 	return radiance;
 }
 
@@ -550,6 +570,30 @@ static float3 shadeSkyRadiance2(float3 dir, texture2d<half> lut, sampler s, cons
 		}
 		sky += behind * (1.0 - cover) + moonLight * cover;
 	}
+	return sky;
+}
+
+// The terrain at full fade uses the same sky, cloud coverage and lightning as the sky pass.
+static float3 shadeSkyBackground(float3 dir, texture2d<half> lut, sampler s, constant ShadeFrame &f,
+                                 constant ShadeLook &L, constant ShadeResources &R) {
+#ifdef MCOPT_HDR
+	float4 clouds = shadeCloudDev(L, SHADE_CLOUD_DEV_NO_SKY) ? float4(0.0, 0.0, 0.0, 1.0) : shadeCloudsScreen(dir, L, R.cloudScreen);
+	float3 sky = clouds.rgb;
+	if (clouds.a > 0.001) {
+		float pixelAngle = 2.0 * atan(1.0 / max(abs(f.proj[1][1]), 1e-3)) * f.screen.w;
+		float3 back = shadeSkyRadiance2(dir, lut, s, f, L, R.milkyWay, pixelAngle);
+		sky += back * clouds.a;
+	}
+	if (L.flash.w > 0.0) {
+		float3 fl = float3(0.78, 0.86, 1.0) * (L.flash.w * 0.35 * (0.35 + 0.65 * pow(saturate(dot(dir, L.flash.xyz) * 0.5 + 0.5), 3.0)));
+		sky += fl * (L.clouds0.w > 0.5 ? 0.4 + 0.6 * (1.0 - clouds.a) : 1.0);
+	}
+#else
+	float pixelAngle = 2.0 * atan(1.0 / max(abs(f.proj[1][1]), 1e-3)) * f.screen.w;
+	float3 sky = shadeSkyRadiance2(dir, lut, s, f, L, R.milkyWay, pixelAngle);
+	if (L.flash.w > 0.0)
+		sky += float3(0.78, 0.86, 1.0) * (L.flash.w * 0.35 * (0.35 + 0.65 * pow(saturate(dot(dir, L.flash.xyz) * 0.5 + 0.5), 3.0)));
+#endif
 	return sky;
 }
 

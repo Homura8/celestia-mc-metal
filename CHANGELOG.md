@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Fade distant Overworld terrain and water into the directional sky at chunk borders. The fade also applies to depth coverage
+  and screen-space water reflections.
+
 ## 0.1.0-alpha.25
 
 ### Changed

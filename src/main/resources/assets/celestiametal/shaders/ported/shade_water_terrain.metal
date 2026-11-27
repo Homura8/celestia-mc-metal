@@ -182,7 +182,10 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
 	float vanillaFog = shadeVanillaFog(p, fogRanges.xy, fogRanges.zw);
 	float chunkFade = saturate(1.0 - chunkVis);
 	if (!(waterFull && SHADE_WDEV_IS(f, SHADE_WDEV_NO_FOG))) {
-		radiance = shadeFogAir2(radiance, p, vanillaFog, chunkFade, skyLut, skyLutSmplr, f, L, &sr);
+		float chunkEdge = shadeChunkEdgeFade(p, f, L);
+		// Water and glossy translucents use quad operations. Fade their depth only after the trace.
+		if (f.flags.w == 0 && shadeChunkEdgeDiscard(chunkEdge, fragCoord.xy)) discard_fragment();
+		radiance = shadeFogAir2(radiance, p, vanillaFog, chunkFade, skyLut, skyLutSmplr, f, L, sr, chunkEdge);
 	}
 	float3 rgb = shadeFinish2(radiance, vanillaFog, f, L, ex);
 	if (f.flags.w == 2) rgb = shadeVanillaOut(float3(n) * 0.5 + 0.5, L);

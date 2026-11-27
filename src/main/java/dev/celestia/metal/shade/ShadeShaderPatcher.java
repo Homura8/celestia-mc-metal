@@ -431,6 +431,14 @@ public final class ShadeShaderPatcher {
 
         String shadeCall;
         StringBuilder fs = new StringBuilder(texelCaptured.length() + (translucentWater ? 65536 : 4096));
+        String fragPosName;
+        Matcher fpM = FRAG_POSITION_PARAM.matcher(texelCaptured);
+        if (fpM.find(pSig) && fpM.start() < pClose) {
+            fragPosName = fpM.group(1);
+        } else {
+            fragPosName = "celFragCoord";
+            shadeParams += ", float4 celFragCoord [[position]]";
+        }
         if (translucentWater) {
             String uvExpr = "float2(0.0)";
             if (inFs.contains("v_TexCoord")) {
@@ -440,14 +448,6 @@ public final class ShadeShaderPatcher {
             } else {
                 Matcher uvM = TEXCOORD_FIELD.matcher(inFs);
                 if (uvM.find()) uvExpr = "in." + uvM.group(1);
-            }
-            String fragPosName = null;
-            Matcher fpM = FRAG_POSITION_PARAM.matcher(texelCaptured);
-            if (fpM.find(pSig) && fpM.start() < pClose) {
-                fragPosName = fpM.group(1);
-            } else {
-                fragPosName = "celFragCoord";
-                shadeParams += ", float4 celFragCoord [[position]]";
             }
             shadeParams += ", texture2d<half> celSceneCopy [[texture(" + MetalConst.SHADE_TEX_WATER_SCENE + ")]]"
                 + ", depth2d<float> celDepthCopy [[texture(" + MetalConst.SHADE_TEX_WATER_DEPTH + ")]]"
@@ -469,7 +469,7 @@ public final class ShadeShaderPatcher {
             fs.append(resource("shade_water_terrain.metal")).append('\n');
         } else {
             shadeCall = "    out." + colorMember + " = shadeTerrainShade(out." + colorMember
-                + ", celTexel, in.mcoptColor, in.mcoptPos, in.mcoptLight, " + chunkVis + ", "
+                + ", celTexel, in.mcoptColor, in.mcoptPos, in.mcoptLight, " + fragPosName + ".xy, " + chunkVis + ", "
                 + (isCutout ? "true" : "false") + ", " + fogExpr
                 + ", celLut, celLutSmplr, celShadow, celShadowCmp, celSF, celSL, celSG, celSR CEL_DL_ARGS CEL_CL_ARGS);\n";
 

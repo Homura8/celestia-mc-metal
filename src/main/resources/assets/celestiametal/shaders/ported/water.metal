@@ -1453,7 +1453,7 @@ static inline float3 shadeWaterHazed(float3 c, float3 p, float3 o, constant Shad
 	if (L == nullptr || !shadeFeature(*L, SHADE_FEATURE_HAZE) || f.flags.x != SHADE_DIM_OVERWORLD || f.fogColor.a >= 0.5 || dot(s, s) <= 4.0) return c;
 	float3 T;
 	float3 S = shadeHazeInscatterFrom(s, f.cameraBlock.y + f.cameraFract.y + o.y, f, *L, 1.0, T);
-	return c * T + S;
+	return mix(c * T + S, c, shadeChunkEdgeFade(p, f, *L));
 }
 
 // (candidate 8) Last frame's image at uv over the footprint (fx, fy): the steps (uv units) to where the neighbouring pixels' mirrored
@@ -1502,18 +1502,23 @@ static inline float3 shadeWaterPrevTaps(texture2d<half> prev, float2 uvp, float2
 
 // known: the hit's camera-relative point is given (pwKnown: the exact march's hit on its ray), not read back from the depth copy
 static inline float3 shadeWaterHitColorCore(float2 uv, float3 o, float exposure, float prevExposure, constant ShadeFrame &f, constant ShadeLook *L, texture2d<half> scene,
+                                 thread float &coverage,
                                  depth2d<float> depth, texture2d<half> prev, float2 fx = float2(0.0), float2 fy = float2(0.0), bool wide = false,
                                  bool known = false, float3 pwKnown = float3(0.0), constant ShadeResources *R = nullptr) {
 	float2 tex = float2(depth.get_width(), depth.get_height());
 	float2 size = shadeWaterRenderSize(f, tex);
+	bool border = L != nullptr && shadeChunkEdgeEnabled(f, *L);
+	float z = 1.0;
+	float3 pw = pwKnown;
+	if (!known && (prevExposure > 0.0 || border)) {
+		z = depth.read(uint2(clamp(uv * size, float2(0.0), size - 1.0)));
+		float4 wp = f.invViewProj * float4(uv * 2.0 - 1.0, z, 1.0);
+		pw = wp.xyz / wp.w;
+	}
+	// The caller blends this hit over the sky sampled along the reflected ray.
+	coverage = border && z > 0.0 ? 1.0 - shadeChunkEdgeFade(pw, f, *L) : 1.0;
+	if (coverage <= 0.0) return float3(0.0);
 	if (prevExposure > 0.0) {
-		float z = 1.0;
-		float3 pw = pwKnown;
-		if (!known) {
-			z = depth.read(uint2(clamp(uv * size, float2(0.0), size - 1.0)));
-			float4 wp = f.invViewProj * float4(uv * 2.0 - 1.0, z, 1.0);
-			pw = wp.xyz / wp.w;
-		}
 		// (FT2.8, audit idx 35) last frame's image is the TAA history: steady, unjittered (as the puddles read it)
 		float4 pc = (L != nullptr ? L->prevViewProjNoJitter : f.prevViewProj) * float4(pw, 1.0);
 		float2 uvp = pc.xy / pc.w * 0.5 + 0.5;
@@ -1547,9 +1552,11 @@ static inline float3 shadeWaterHitColorCore(float2 uv, float3 o, float exposure,
 	return shadeWaterSceneRadiance(scene.sample(shadeWaterLinear, uv * size / tex).rgb, exposure);
 }
 // (candidate 7's march and the glossy translucents) the same as a call: only pixels with a hit pay for it
-static SHADE_COLD float3 shadeWaterHitColor(float2 uv, float3 o, float exposure, float prevExposure, constant ShadeFrame &f, constant ShadeLook *L, texture2d<half> scene,
-                                 depth2d<float> depth, texture2d<half> prev) {
-	return shadeWaterHitColorCore(uv, o, exposure, prevExposure, f, L, scene, depth, prev);
+static SHADE_COLD float4 shadeWaterHitColor(float2 uv, float3 o, float exposure, float prevExposure, constant ShadeFrame &f, constant ShadeLook *L, texture2d<half> scene,
+                                 depth2d<float> depth, texture2d<half> prev, float weight) {
+	float coverage;
+	float3 color = shadeWaterHitColorCore(uv, o, exposure, prevExposure, f, L, scene, coverage, depth, prev);
+	return float4(color, weight * coverage);
 }
 
 // The sky in the reflected direction r: the atmosphere LUT, or (prevExposure > 0) the rendered sky where r points on
@@ -1632,7 +1639,11 @@ static float3 shadeWaterSkyRefl(float3 r, float3 rs, float3 o, float prevExposur
 			float3 pw = float3(0.0);
 			bool needPw = false;
 			if (z > 0.0) {
-				if (!volumetricClouds) {
+				if (L != nullptr && shadeChunkEdgeEnabled(f, *L)) {
+					float4 h = f.invViewProj * float4(uvs * 2.0 - 1.0, z, 1.0);
+					pw = h.xyz / h.w;
+					wgt *= shadeChunkEdgeDepthFade(shadeChunkEdgeFade(pw, f, *L));
+				} else if (!volumetricClouds) {
 					float4 h = f.invViewProj * float4(uvs * 2.0 - 1.0, z, 1.0);
 					pw = h.xyz / h.w;
 					if (pw.y + f.cameraBlock.y + f.cameraFract.y <= 150.0) wgt *= smoothstep(160.0, 320.0, shadeLinearW(z, f));
@@ -1847,8 +1858,9 @@ static SHADE_COLD float4 shadeSsrResolve(bool isHit, float hitW, float2 uv, floa
 	}
 #endif
 	if (isHit) {
-		c = shadeWaterHitColorCore(uv, o, exposure, prevExposure, f, L, scene, depth, prev, fx, fy, wide, known, pwKnown, R);
-		wgt = hitW;
+		float coverage;
+		c = shadeWaterHitColorCore(uv, o, exposure, prevExposure, f, L, scene, coverage, depth, prev, fx, fy, wide, known, pwKnown, R);
+		wgt = hitW * coverage;
 	}
 #ifdef SHADE_WATER_PANO
 	if (panoW > 0.0 && wgt < 0.999 && R != nullptr) {
@@ -2089,9 +2101,9 @@ static float4 shadeSsrT(float3 p0, float3 r, float2 pixel, float maxDist, float 
 #endif
 	tHit = shadeSsrHitT(h.xy, p0, f, depth);
 #ifdef SHADE_PRICE_NOHAZE
-	return float4(shadeWaterHitColor(h.xy, p0, exposure, prevExposure, f, nullptr, scene, depth, prev), h.z);
+	return shadeWaterHitColor(h.xy, p0, exposure, prevExposure, f, nullptr, scene, depth, prev, h.z);
 #endif
-	return float4(shadeWaterHitColor(h.xy, p0, exposure, prevExposure, f, L, scene, depth, prev), h.z);
+	return shadeWaterHitColor(h.xy, p0, exposure, prevExposure, f, L, scene, depth, prev, h.z);
 #else
 	if (!shadeSsrSegment(p0, r, maxDist, f, s0, ds, screenEnd)) return 0.0;
 	float4 hit = shadeSsrMarch(s0, ds, screenEnd, 0, 1, shadeNoise(pixel, SHADE_WATER_NOISE_FRAME(f)), f, depth, hz);
@@ -2100,7 +2112,7 @@ static float4 shadeSsrT(float3 p0, float3 r, float2 pixel, float maxDist, float 
 	if (shadeSsrBelowStart(hit.xy, p0, r, f, depth)) return 0.0;
 #endif
 	tHit = shadeSsrHitT(hit.xy, p0, f, depth);
-	return float4(shadeWaterHitColor(hit.xy, p0, exposure, prevExposure, f, L, scene, depth, prev), hit.z);
+	return shadeWaterHitColor(hit.xy, p0, exposure, prevExposure, f, L, scene, depth, prev, hit.z);
 #endif
 }
 static inline float4 shadeSsr(float3 p0, float3 r, float2 pixel, float maxDist, float exposure, float prevExposure, constant ShadeFrame &f,

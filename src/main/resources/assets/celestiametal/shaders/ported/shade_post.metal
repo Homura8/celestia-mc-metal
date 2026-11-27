@@ -137,13 +137,14 @@ fragment float4 shade_final(ShadeFsOut in [[stage_in]],
 #endif
 	if (d > 0.0 && (hazeOn || aoOn)) {
 		float3 wp = shadeWorldFromDepth(in.uv, d, f);
+		float edge = shadeChunkEdgeFade(wp, f, L);
 #ifdef CELESTIA_SSAO
-		if (aoOn) c *= saturate(mix(1.0, float(shadeAoSample(ambientOcclusion, in.uv, length(wp))), P.v.y));
+		if (aoOn) c *= saturate(mix(1.0, float(shadeAoSample(ambientOcclusion, in.uv, length(wp))), P.v.y * (1.0 - edge)));
 #endif
 		if (hazeOn && dot(wp, wp) > hazeNear) {
 			float3 S = shadeHazeInscatter(wp, f, L, 1.0, T);
 			if (L.user4.x > 1.5 && L.fogMisc.z > 0.0) {
-				float kk = shadeHazeBorderKeep(wp, L);
+				float kk = shadeChunkEdgeEnabled(f, L) ? 1.0 - edge : shadeHazeBorderKeep(wp, L);
 				T = mix(float3(1.0), T, kk);
 				S *= kk;
 			}
