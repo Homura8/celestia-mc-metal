@@ -42,6 +42,8 @@ Use `celestiaqa.scenes` to select comma-separated scene names in their declared 
 
 The profile tokens are `N` for `celestiametal.shade.water.devSsr`, `bN` for `celestiametal.shade.water.ssrBudget`, `sN` for `celestiametal.shade.dev`, and `cN` for `celestiametal.shade.cloudDev`. The default is `0`. Each token applies one override to the launch settings. Use `s32,s0` to compare the previous chunk-border fog with the directional fade.
 
+For underwater comparisons, `s64` restores the previous Snell window, `s128` disables underwater shafts, and `s192` applies both overrides. Profile `s128,s0,s128` in `underwater` to isolate shaft cost with Volumetric Light Shafts enabled.
+
 ## Adding scenes
 
 Add a named scene to `Shots.SCENES` under `tools/qa/probe/` with its time, weather and spectator pose. Keep wet scenes at the end. The normal settle waits for visible section meshes, target rain intensity and a minimum history warm-up. Use `celestiaqa.fixedShots=true` to compare against a 240-tick wait at the same camera angles. Keep each `/fill` below 32,000 blocks. If you change the pond geometry, update the pond marker and regenerate the saved QA world template.

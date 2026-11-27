@@ -58,6 +58,7 @@ static_assert(sizeof(ShadeFrame) == 1024, "ShadeFrame size must be 1024 bytes");
 #define SHADE_DEV_NO_WATER 8
 #define SHADE_DEV_FLAT_LIGHT 16
 #define SHADE_DEV_LEGACY_CHUNK_EDGE 32
+#define SHADE_DEV_LEGACY_SNELL 64
 
 static inline bool shadeDev(constant ShadeFrame &f, int bit) { return (int(f.sunPath.z) & bit) != 0; }
 #ifdef SHADE_LEAN_ABOVE

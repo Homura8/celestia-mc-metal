@@ -230,9 +230,9 @@ constant float3 SHADE_CAUSTIC_A[SHADE_CAUSTIC_COUNT] = {
 	float3(0.29904116, 0.0840, 9.5),
 };
 
-static float shadeCausticFocus(float2 x, float t, float kk) {
+static float shadeCausticFocus(float2 x, float t, float kk, int harmonics = SHADE_CAUSTIC_COUNT) {
 	half3 hs = 0.0h;
-	for (int i = 0; i < SHADE_CAUSTIC_COUNT; i++) {
+	for (int i = 0; i < harmonics; i++) {
 		float4 w = SHADE_CAUSTIC_K[i];
 		float3 a = SHADE_CAUSTIC_A[i];
 		float th = w.z * dot(w.xy, x) + w.w * t + a.z;
@@ -306,6 +306,21 @@ static float3 shadeHazeInscatter(float3 p, constant ShadeFrame &f, constant Shad
 	return shadeHazeInscatterFrom(p, f.cameraBlock.y + f.cameraFract.y, f, L, sunVis, T, Ssun);
 }
 
+constant float SHADE_WATER_IOR = 1.333;
+constant float SHADE_WATER_SCATTERING = 0.010;
+constant float3 SHADE_WATER_EXTINCTION = float3(0.11, 0.040, 0.022) + SHADE_WATER_SCATTERING;
+
+// Water-to-air exit direction and unpolarized Fresnel reflectance. The zero ray marks total internal reflection.
+static inline float4 shadeSnellExit(float3 incident, float3 up) {
+	float cosI = saturate(dot(incident, up));
+	float cosT2 = 1.0 - SHADE_WATER_IOR * SHADE_WATER_IOR * (1.0 - cosI * cosI);
+	if (cosT2 <= 0.0) return float4(0.0, 0.0, 0.0, 1.0);
+	float cosT = sqrt(cosT2);
+	float s = (SHADE_WATER_IOR * cosI - cosT) / (SHADE_WATER_IOR * cosI + cosT);
+	float p = (cosI - SHADE_WATER_IOR * cosT) / (cosI + SHADE_WATER_IOR * cosT);
+	return float4(incident * SHADE_WATER_IOR + up * (cosT - SHADE_WATER_IOR * cosI), 0.5 * (s * s + p * p));
+}
+
 // (alpha.25) Water fog seen from inside the water, after Photon's water_fog_simple (include/fog/simple_fog.glsl at commit 26c2906e,
 // MIT, LICENSES/MIT-Photon.txt) with its underwater coefficients: Beer-Lambert extinction per channel over the eye-to-point
 // distance, and the sun (forward-scattering phase) and sky light scattered toward the eye inside it, with Jessie's
@@ -313,9 +328,8 @@ static float3 shadeHazeInscatter(float3 p, constant ShadeFrame &f, constant Shad
 static inline float3 shadeUnderwaterFog(float3 radiance, float3 p, constant ShadeFrame &f, constant ShadeLook &L) {
 	// (alpha.25, clearer than Photon's 0.20 / 0.08 / 0.04 + 0.03 at the owner's request: clean ocean/river water, ~60 blocks of
 	// visibility in blue-green, reds still gone after ~10)
-	const float3 sigmaA = float3(0.11, 0.040, 0.022), sigmaS = float3(0.010);
-	const float3 sigmaT = sigmaA + sigmaS;
-	const float3 albedo = sigmaS / sigmaT;
+	const float3 sigmaT = SHADE_WATER_EXTINCTION;
+	const float3 albedo = SHADE_WATER_SCATTERING / sigmaT;
 	const float3 ms = 0.84 * albedo;
 	float d = length(p);
 	float3 T = exp(-sigmaT * d);

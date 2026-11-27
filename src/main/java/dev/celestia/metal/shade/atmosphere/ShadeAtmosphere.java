@@ -51,6 +51,7 @@ public final class ShadeAtmosphere {
                         CloudStatus status, float cloudHeight, float dt, int w, int h, ShadeSettings.Atmosphere options) {
         clouds = volume = false;
         look.cloudsEnabled = false;
+        look.waterShaftSurface = 0f;
         look.wetness = look.puddles = look.snow = look.flashStrength = 0f;
         if (level == null || frame.dimension != ShadeFrame.DIM_OVERWORLD) {
             weatherLevel = null;
@@ -91,11 +92,16 @@ public final class ShadeAtmosphere {
             domeReady = false;
             cloudHistoryValid = false;
         }
-        volume = VOLUMETRICS && options.volumetrics() && options.lightStrength() > 0f && frame.fogType == ShadeFrame.FOG_AIR && frame.eyeSkyLight >= 2 && frame.sky.lightDir[1] > 0.015f;
+        boolean waterShafts = frame.fogType == ShadeFrame.FOG_WATER && frame.waterSurfaceAbove > 0f
+            && frame.waterSurfaceAbove < 24f && frame.sky.sunLight && frame.eyeSkyLight >= 4
+            && (ShadeFrame.devBits() & ShadeFrame.DEV_NO_UNDERWATER_SHAFTS) == 0;
+        volume = VOLUMETRICS && options.volumetrics() && options.lightStrength() > 0f
+            && (frame.fogType == ShadeFrame.FOG_AIR || waterShafts) && frame.eyeSkyLight >= 2 && frame.sky.lightDir[1] > 0.015f;
         if (volume && textures[VOLUME] == 0L) {
             textures[VOLUME] = texture(ctx, VOLUME, (w + 3) / 4, (h + 3) / 4);
         }
         volume &= textures[VOLUME] != 0L;
+        if (volume && waterShafts) look.waterShaftSurface = frame.waterSurfaceAbove;
 
         look.cloudsEnabled = clouds;
         look.cloudSteps = status == CloudStatus.FANCY ? options.cloudSteps() : Math.max(4, Math.round(options.cloudSteps() * 4f / 7f));

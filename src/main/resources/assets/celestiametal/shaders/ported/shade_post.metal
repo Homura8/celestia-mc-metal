@@ -159,7 +159,7 @@ fragment float4 shade_final(ShadeFsOut in [[stage_in]],
 		c = mix(c, b, saturate(m));
 	}
 #ifdef CELESTIA_VL_COMPOSITE
-	if (P.v.x > 0.5) c += vlUpsample(volume, in.uv, vlDistance(in.uv, d, shadeEye(f.invViewProj), f)) * ex;
+	if (P.v.x > 0.5) c += vlUpsample(volume, in.uv, vlDistance(in.uv, d, shadeEye(f.invViewProj), f, L.vl.z)) * ex;
 #endif
 	c = select(c, float3(0.0), (as_type<uint3>(c) & uint3(0x7f800000u)) == uint3(0x7f800000u));
 	half3 ch = half3(min(max(c, 0.0), 60000.0));

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add underwater sunlight shafts with wave focusing and shadow occlusion. Looking up through water uses physical refraction
+  and Fresnel reflection, with a directional sky fallback when the refracted view leaves the screen.
+- New **Water > Snell's Window** option (on by default). On keeps the physical view from underwater: the world above shows only
+  inside the 97-degree cone, and the surface mirrors the water outside it. Off matches Photon's default: the sky, clouds and
+  the world above show through the whole surface, shifted slightly by the waves. Off is also cheaper, because the underside
+  skips its SSR march: underwater on Ultra at 3024×1742 drops from 24.8 to 15.3 ms on an M1 Pro.
 - Fade distant Overworld terrain and water into the directional sky at chunk borders. The fade also applies to depth coverage
   and screen-space water reflections.
 

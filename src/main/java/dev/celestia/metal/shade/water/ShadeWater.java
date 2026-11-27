@@ -19,7 +19,6 @@ import dev.celestia.metal.shade.ShadeSettings;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import net.minecraft.client.multiplayer.ClientLevel;
 import org.slf4j.Logger;
 
 /**
@@ -107,14 +106,12 @@ public final class ShadeWater {
         }
     }
 
-    public void beginFrame(long ctx, int ringSlot, ShadeFrame frame, ClientLevel level,
-                           double camX, double camY, double camZ, ShadeSettings.Water options, boolean weather) {
+    public void beginFrame(long ctx, int ringSlot, ShadeFrame frame, ShadeSettings.Water options, boolean weather) {
         if (!ensureInitialized(ctx)) {
             disableFrame(ctx);
             return;
         }
         WaterFrame.sprites(stillRect, flowRect);
-        float surfaceAbove = frame.underwater ? WaterFrame.surfaceAbove(level, camX, camY, camZ) : 0f;
         int slot = Math.floorMod(ringSlot, RING_SLOTS);
         currentSlotOffset = (long) slot * SLOT_STRIDE;
 
@@ -142,7 +139,7 @@ public final class ShadeWater {
         }
 
         ByteBuffer b = paramsSeg.asSlice(currentSlotOffset, PARAMS_BYTES).asByteBuffer().order(ByteOrder.nativeOrder());
-        packParams(b, stillRect, flowRect, false, surfaceAbove, weather ? frame.rain : 0f,
+        packParams(b, stillRect, flowRect, false, frame.waterSurfaceAbove, weather ? frame.rain : 0f,
             wavesEnabled && wavesReady, swellEnabled && swellReady, options);
 
         capturedThisFrame = false;
@@ -196,7 +193,8 @@ public final class ShadeWater {
         // far: x dist, y band, z dev, w baked swell ready
         p.putFloat(144, 176f).putFloat(148, 64f).putFloat(152, (float) Integer.getInteger("celestiametal.shade.water.devSsr", 0)).putFloat(156, swellReady ? 1f : 0f);
         int budget = Math.clamp(Integer.getInteger("celestiametal.shade.water.ssrBudget", options.ssrBudget()), 8, 32);
-        p.putInt(160, budget).putInt(164, 0).putInt(168, 0).putInt(172, 0);
+        // quality: x SSR budget, y physical Snell's window from below (0 = Photon's default: the world above, no TIR)
+        p.putInt(160, budget).putInt(164, options.snellWindow() ? 1 : 0).putInt(168, 0).putInt(172, 0);
     }
 
     public void close(long ctx) {

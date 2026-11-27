@@ -166,7 +166,7 @@ struct ShadeWaterParams {
 	               // tap per pixel), z (candidate 8, SHADE_WATER_PANO) the panorama's share off screen (mcopt.shade.water.reflPano, 1; 0 = none),
 	               // w (1.2.8) the gain of the caustics' bright lines seen from above (mcopt.shade.water.causticGain; 1 = 1.2.7's)
 	float4 far;    // (1.2.9, water phase 2) x the far water's distance D (blocks, mcopt.shade.water.far; 0 = off), y its fade band (blocks)
-	int4 quality;  // x hierarchical SSR interval budget, yzw reserved
+	int4 quality;  // x hierarchical SSR interval budget, y physical Snell's window from below (0: Photon's default), zw reserved
 };
 static_assert(sizeof(ShadeWaterParams) == 176, "ShadeWaterParams layout");
 
@@ -2975,8 +2975,8 @@ float3 shadeWaterAbove(ShadeWaterIn w, constant ShadeFrame &f, constant ShadeWat
 
 // The surface seen from below (the camera under water): inside Snell's window (48.6 degrees around the normal) the world
 // above, refracted (the scene copy, or the sky where the copy has none); outside it total internal reflection mirrors the
-// water below (SSR into the underwater scene, else the water's own colour). The vanilla underwater fog then applies
-// between the camera and the surface (shadeFinish).
+// water below (SSR into the underwater scene, else the water's own colour). Physical water fog
+// is applied by the terrain shader over the segment from the eye to the surface.
 #ifndef SHADE_LEAN_ABOVE
 static float3 shadeWaterBelow(ShadeWaterIn w, constant ShadeFrame &f, constant ShadeWaterParams &wp, texture2d<half> lut, sampler lutS,
                               texture2d<half> scene, depth2d<float> depth, texture2d<half> prev, texture2d<half> waves, texture2d<float> hz) {
@@ -2987,23 +2987,54 @@ static float3 shadeWaterBelow(ShadeWaterIn w, constant ShadeFrame &f, constant S
 	float pattern;
 	// (M2.1: the fine ripples from below too, a bit calmer: the long swell alone made blobby clay edges at Snell's window)
 	float3 up = shadeWaterNormal(w, f, wp, waves, height, pattern, 0.6);
-	up = normalize(float3(up.x * 1.8, up.y, up.z * 1.8)); // from below the ripples bend the light more visibly
+	bool legacy = shadeDev(f, SHADE_DEV_LEGACY_SNELL);
+	// (alpha.26) Water > Snell's Window off (wp.quality.y == 0) is Photon's default (its SNELLS_WINDOW off): no total internal
+	// reflection, the sky and the world above show through the whole surface, shifted a little by the waves. On (the default)
+	// keeps the physical cone below.
+	bool photon = !legacy && wp.quality.y == 0;
+	if (legacy) up = normalize(float3(up.x * 1.8, up.y, up.z * 1.8));
 	float3 n = -up; // toward the camera
-	float3 t = refract(v, n, 1.333);
-	bool tir = dot(t, t) < 1e-6;
-	float fres = tir ? 1.0 : shadeWaterFresnel(dot(t, up));
+	float3 t;
+	float fres;
+	if (photon) {
+		t = normalize(v + (up - float3(0.0, 1.0, 0.0)) * 0.3); // the view ray, bent by the ripples' tilt
+		fres = 0.02; // (a faint mirror of the water below; below 0.05 the underside's SSR march is skipped)
+	} else if (legacy) {
+		t = refract(v, n, SHADE_WATER_IOR);
+		fres = dot(t, t) < 1e-6 ? 1.0 : shadeWaterFresnel(dot(t, up));
+	} else {
+		float4 window = shadeSnellExit(v, up);
+		t = window.xyz;
+		fres = window.w;
+	}
 	float2 tex = float2(scene.get_width(), scene.get_height());
 	float2 size = shadeWaterRenderSize(f, tex);
 	float2 uv = w.pixel / size;
-	// the world above through the window: the copy behind the surface, shifted by the waves' tilt
 	float3 above = 0.0;
-	if (!tir) {
-		float3 tilt = (f.view * float4(up - float3(0.0, 1.0, 0.0), 0.0)).xyz;
-		float wSurf = shadeLinearW(w.depth, f);
-		float2 uvR = clamp(uv + float2(f.proj[0][0] * tilt.x, f.proj[1][1] * tilt.y) * (1.2 / max(wSurf, 0.5)), 0.5 / size, 1.0 - 0.5 / size);
-		float wR = shadeWaterSceneW(depth, uint2(uvR * size), f);
-		// (2.0.1 opt) check scene depth BEFORE sky/cloud/glare evaluation: avoids wasted LUT + dome + screen cloud samples behind blocks
-		if (wR < SHADE_WATER_SKY_W) {
+	if (fres < 1.0) {
+		float2 uvR = uv;
+		bool aboveSurface = false;
+		if (legacy || photon) {
+			float3 tilt = (f.view * float4(up - float3(0.0, 1.0, 0.0), 0.0)).xyz;
+			float wSurf = shadeLinearW(w.depth, f);
+			uvR = clamp(uv + float2(f.proj[0][0] * tilt.x, f.proj[1][1] * tilt.y) * ((legacy ? 1.2 : 0.5) / max(wSurf, 0.5)), 0.5 / size, 1.0 - 0.5 / size);
+			aboveSurface = shadeWaterSceneW(depth, uint2(uvR * size), f) < SHADE_WATER_SKY_W;
+		} else {
+			// Project along the outgoing ray and accept visible geometry above the water surface.
+			float4 clip = f.viewProj * float4(w.p + t * (6.0 + 0.35 * dist), 1.0);
+			if (clip.w > 0.0 && all(abs(clip.xy) < clip.w)) {
+				uint2 px = min(uint2((clip.xy / clip.w * 0.5 + 0.5) * size), uint2(size) - 1u);
+				uvR = (float2(px) + 0.5) / size;
+				float z = depth.read(px);
+				if (z > 0.0) {
+					float4 hit = f.invViewProj * float4(uvR * 2.0 - 1.0, z, 1.0);
+					float3 fromSurface = hit.xyz / hit.w - w.p;
+					aboveSurface = fromSurface.y >= -0.06 && dot(fromSurface, t) > 0.0;
+				}
+			}
+		}
+		// Depth validation first avoids LUT, cloud and glare samples behind solid geometry.
+		if (aboveSurface) {
 			above = shadeWaterSceneRadiance(scene.sample(shadeWaterLinear, uvR * size / tex).rgb, w.exposure);
 		} else {
 			float3 sky = shadeSkyLookup(t, lut, lutS, f);

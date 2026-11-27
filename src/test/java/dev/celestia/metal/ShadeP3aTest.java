@@ -26,7 +26,8 @@ class ShadeP3aTest {
         ByteBuffer b = ByteBuffer.allocateDirect(ShadeWater.PARAMS_BYTES).order(ByteOrder.LITTLE_ENDIAN);
         ShadeWater.packParams(b, new float[] {0.1f, 0.2f, 0.3f, 0.4f}, new float[] {0.5f, 0.6f, 0.7f, 0.8f},
             true, 3.5f, 0.75f, true, true, new ShadeSettings.Water(
-                true, true, 1.2f, 0.9f, true, 0.8f, 16, 96, 0.4f, 1f));
+                true, true, 1.2f, 0.9f, true, 0.8f, 16, 96, 0.4f, 1f, true));
+        assertEquals(1, b.getInt(164)); // quality.y: Snell's window
         assertEquals(0.1f, b.getFloat(0), 1e-6f);
         assertEquals(0.8f, b.getFloat(28), 1e-6f);
         assertEquals(1.0f, b.getFloat(32), 1e-6f); // state.x

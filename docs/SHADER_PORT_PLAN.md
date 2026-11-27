@@ -286,9 +286,15 @@ Follow-up:
 - [x] Chunk-edge blending fades distant Overworld terrain and water into the directional sky. Depth coverage tapers at the outer
       edge, and water reflection hits fade toward the sky along the reflected ray. Use the QA profile tokens `s32,s0` to compare
       the previous border fog with chunk-edge blending.
+- [x] Underwater sunlight shafts reuse the quarter-resolution volumetric pass and stop at the visible terrain or water surface.
+      Snell's window uses physical refraction and Fresnel reflection; the Water > Snell's Window option (on by default, the owner's choice) can switch to Photon's see-through default, which is cheaper. Test 2o checks the critical angle and underwater occlusion on Metal 3 and 4.
+      Follow-up QA: profile `s128,s0` in the underwater scene to isolate the shafts, and compare the same camera views against Photon.
 
 Next, in order:
-- [ ] Underwater light shafts and a clear Snell window to the sky.
+- [ ] Underwater light shafts that read like Photon's: today's march takes 4-8 samples over 32 blocks, which averages the
+      ~2-block caustic beams into an even glow, so the shafts are nearly invisible (~0.1 ms). Raising their weight only adds
+      haze (tried: beam base 0.15-0.4 and weight 6 -> 14). They need more samples where the beams are, or beams evaluated
+      in screen space along the sun direction. Keep the water clear.
 - [ ] A real cumulus congestus layer (days 2 and 4 currently stand in a thicker cumulus).
 - [ ] Terrain ambient: Photon's cooler sky light.
 - [ ] Nether and End looks, aurora, motion blur, labPBR (carried over from P6b).

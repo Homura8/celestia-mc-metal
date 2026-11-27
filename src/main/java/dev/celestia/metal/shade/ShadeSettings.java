@@ -11,7 +11,8 @@ public record ShadeSettings(Shadows shadows, Lights lights, Sky sky, Water water
                          boolean colored, float coloredStrength, float coloredGlow, boolean smoothBlock) {}
     public record Sky(boolean stars, boolean haze, float hazeStrength) {}
     public record Water(boolean enabled, boolean waves, float waveStrength, float swell, boolean screenReflections,
-                        float reflectionStrength, int ssrBudget, int ssrDistance, float caustics, float foam) {}
+                        float reflectionStrength, int ssrBudget, int ssrDistance, float caustics, float foam,
+                        boolean snellWindow) {}
     public record Atmosphere(boolean clouds, int cloudSteps, float cloudCoverage, float cloudDensity, float cloudSpeed,
                              boolean volumetrics, int lightSteps, float lightStrength, boolean weather) {}
     public record Post(int look, boolean bloom, float bloomStrength, float exposureEv, float saturation, float pastel) {}
@@ -30,7 +31,8 @@ public record ShadeSettings(Shadows shadows, Lights lights, Sky sky, Water water
             new Water(s.getBoolean("WATER_ENABLED"), s.getBoolean("WATER_WAVES"), value(s, "WAVE_STRENGTH"),
                 value(s, "WATER_SWELL"), reflections.equals("SSR_AND_SKY") && reflectionStrength > 0f,
                 reflectionStrength,
-                s.getInt("SSR_BUDGET"), s.getInt("SSR_DISTANCE"), value(s, "WATER_CAUSTICS"), value(s, "WATER_FOAM")),
+                s.getInt("SSR_BUDGET"), s.getInt("SSR_DISTANCE"), value(s, "WATER_CAUSTICS"), value(s, "WATER_FOAM"),
+                s.getBoolean("WATER_SNELL_WINDOW")),
             new Atmosphere(s.getBoolean("CLOUDS_ENABLED"), s.getInt("CLOUD_STEPS"), value(s, "CLOUD_COVERAGE"),
                 value(s, "CLOUD_DENSITY"), value(s, "CLOUD_SPEED"), s.getBoolean("GOD_RAYS"),
                 s.getInt("VL_STEPS"), value(s, "VL_STRENGTH"), s.getBoolean("WEATHER_ENABLED")),
