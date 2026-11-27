@@ -37,6 +37,8 @@ public final class ShadeLook {
     public float cloudPhase;
     private ShadeSettings options;
     public float cloudBase, wetness, puddles, snow;
+    /** ShadeWeather.compute's eight daily cloud weather values (ShadeAtmosphere fills them each frame). */
+    public final float[] cloudWeather = {0.40f, 0.55f, 0.30f, 0.50f, 0.40f, 0.50f, 0f, 0f};
     public float flashX, flashY, flashZ, flashStrength;
 
     // elevation, chroma gamma, light mul, ambient rgb (3), saturation, contrast a, bloom mix, VL k, mist sigma, white balance (mired)
@@ -63,15 +65,39 @@ public final class ShadeLook {
     private static final float[][] SKY_ROSE = {
         {-6, 0f}, {-3, 0.32f}, {0, 0.64f}, {4, 0.70f}, {9, 0.56f}, {16, 0.28f}, {26, 0.07f}, {34, 0f}
     };
-    private static final float[] ROSE_LOOK = {1f, 1.15f, 0.6f};
+    private static final float[] ROSE_LOOK = {1f, 1.15f, 0.6f, 1.4f};
     static final float ROSE_AMOUNT = 0.25f;
 
     private static final int K_GAMMA = 1, K_LIGHT = 2, K_AMB = 3, K_SAT = 6, K_CONTRAST = 7, K_BLOOM = 8, K_VL = 9, K_MIST = 10, K_WB = 11;
 
-    private static final float[] PRESET_GAMMA = {1.0f, 1.15f, 0.9f}, PRESET_SAT = {0.08f, 0.14f, 0.02f},
-        PRESET_CONTRAST = {1.05f, 0.97f, 0.95f}, PRESET_BLOOM = {1.0f, 1.25f, 0.8f},
-        PRESET_LAMBDA = {0.55f, 0.40f, 0.70f}, PRESET_INSET = {0.20f, 0.16f, 0.24f},
-        PRESET_VL = {1.0f, 1.25f, 0.8f}, PRESET_SPECTRUM = {0.6f, 0.9f, 0.3f};
+    // looks: 0 EPIC, 1 STORYBOOK, 2 NATURAL, 3 PASTEL (alpha.25: "Leica Vibrant, but more pastel and cuter": vibrant midtones
+    // through the vibrance step, softer airy contrast, highlights that whiten sooner (inset), rosy lifted blacks and a faint pink
+    // highlight gain, pinker sunsets, a little more bloom)
+    private static final float[] PRESET_GAMMA = {1.0f, 1.15f, 0.9f, 1.05f}, PRESET_SAT = {0.08f, 0.14f, 0.02f, 0.26f},
+        PRESET_CONTRAST = {1.05f, 0.97f, 0.95f, 0.84f}, PRESET_BLOOM = {1.0f, 1.25f, 0.8f, 1.45f},
+        PRESET_LAMBDA = {0.55f, 0.40f, 0.70f, 0.50f}, PRESET_INSET = {0.20f, 0.16f, 0.24f, 0.34f},
+        PRESET_VL = {1.0f, 1.25f, 0.8f, 1.1f}, PRESET_SPECTRUM = {0.6f, 0.9f, 0.3f, 0.75f},
+        PRESET_VIBRANCE = {0.10f, 0.18f, 0.10f, 0.36f},
+        PRESET_EV = {0f, 0f, 0f, 0.3f}; // exposure bias (EV): pastel is a bright, high-key look
+    // display lift (linear, added after the tone curve) and gain per look
+    private static final float[][] PRESET_LIFT = {{0f, 0f, 0f}, {0f, 0f, 0f}, {0f, 0f, 0f}, {0.030f, 0.019f, 0.030f}},
+        PRESET_GAIN = {{1f, 1f, 1f}, {1f, 1f, 1f}, {1f, 1f, 1f}, {1.0f, 0.93f, 0.965f}};
+    // a white-balance tint per look, applied with the white balance before the tone curve (PASTEL: rose through the midtones)
+    private static final float[][] PRESET_TINT = {{1f, 1f, 1f}, {1f, 1f, 1f}, {1f, 1f, 1f}, {1.03f, 0.96f, 1.0f}};
+    public static final int LOOKS = 4, PASTEL = 3;
+    private float pastelK = 1f;
+
+    /** A look parameter: PASTEL blends from EPIC's value by Pastel Strength (0 = Epic, 1 = Pastel, up to 1.5 beyond it). */
+    private float lk(float[] a) {
+        return this.lookPreset == PASTEL ? a[0] + (a[PASTEL] - a[0]) * this.pastelK : a[this.lookPreset];
+    }
+
+    private float[] lk3(float[][] a) {
+        if (this.lookPreset != PASTEL) return a[this.lookPreset];
+        float[] r = new float[3];
+        for (int i = 0; i < 3; i++) r[i] = a[0][i] + (a[PASTEL][i] - a[0][i]) * this.pastelK;
+        return r;
+    }
 
     static final float MID_IN = 0.18f, MID_OUT = 0.20f, WHITE = 12f, SHOULDER = 0.92f;
     static final float METER_KEY = 0.30f, EV_DOWN = 1.75f, EV_UP = 1.75f, EV_UP_NIGHT = 0.6f, TAU_UP = 0.6f, TAU_DOWN = 2.2f;
@@ -131,10 +157,16 @@ public final class ShadeLook {
     public void setOptions(ShadeSettings options) {
         this.options = options;
         setLookPreset(options.post().look());
+        this.pastelK = Math.max(0f, Math.min(1.5f, options.post().pastel()));
     }
 
     public void setLookPreset(int preset) {
-        this.lookPreset = Math.max(0, Math.min(2, preset));
+        this.lookPreset = Math.max(0, Math.min(LOOKS - 1, preset));
+    }
+
+    /** The bloom pyramid's level weighting exponent for the current look. */
+    public float bloomSpectrum() {
+        return lk(PRESET_SPECTRUM);
     }
 
     public int lookPreset() {
@@ -153,13 +185,13 @@ public final class ShadeLook {
         this.rising = f.dayTime > 0.5f ? 1f : -1f;
         float[] k = keyframe(this.elevation);
         float rain = f.rain, thunder = f.thunder;
-        this.chromaGamma = k[K_GAMMA] * PRESET_GAMMA[look];
+        this.chromaGamma = k[K_GAMMA] * lk(PRESET_GAMMA);
         this.lightMul = k[K_LIGHT];
         for (int i = 0; i < 3; i++) this.ambientTint[i] = k[K_AMB + i];
-        this.saturation = k[K_SAT] + PRESET_SAT[look];
-        this.contrast = k[K_CONTRAST] * PRESET_CONTRAST[look];
-        this.bloomMix = k[K_BLOOM] * PRESET_BLOOM[look];
-        this.vlStrength = k[K_VL] * PRESET_VL[look];
+        this.saturation = k[K_SAT] + lk(PRESET_SAT);
+        this.contrast = k[K_CONTRAST] * lk(PRESET_CONTRAST);
+        this.bloomMix = k[K_BLOOM] * lk(PRESET_BLOOM);
+        this.vlStrength = k[K_VL] * lk(PRESET_VL);
         this.mistSigma = k[K_MIST];
         this.whiteBalance = k[K_WB];
 
@@ -194,7 +226,7 @@ public final class ShadeLook {
                 break;
             }
         }
-        this.skyRose = rose * goldK * ROSE_LOOK[look] * ROSE_AMOUNT;
+        this.skyRose = rose * goldK * lk(ROSE_LOOK) * ROSE_AMOUNT;
         ShadeSky.sunsetArt = true;
 
         float rainFog = rain;
@@ -213,9 +245,9 @@ public final class ShadeLook {
             float[] day = keyframe(45f);
             float in = 1f - this.outdoor;
             this.whiteBalance += (day[K_WB] - this.whiteBalance) * in;
-            this.contrast += (day[K_CONTRAST] * PRESET_CONTRAST[look] - this.contrast) * in;
-            this.saturation += (day[K_SAT] + PRESET_SAT[look] - this.saturation) * in;
-            this.bloomMix += (day[K_BLOOM] * PRESET_BLOOM[look] - this.bloomMix) * in;
+            this.contrast += (day[K_CONTRAST] * lk(PRESET_CONTRAST) - this.contrast) * in;
+            this.saturation += (day[K_SAT] + lk(PRESET_SAT) - this.saturation) * in;
+            this.bloomMix += (day[K_BLOOM] * lk(PRESET_BLOOM) - this.bloomMix) * in;
         }
 
         float lightK = 1f;
@@ -225,7 +257,8 @@ public final class ShadeLook {
 
         float mired = 1e6f / 6504f + this.whiteBalance;
         float[] target = blackbody(1e6f / Math.max(mired, 20f)), d65 = blackbody(6504f);
-        for (int i = 0; i < 3; i++) this.wbGain[i] = 1f + (target[i] / d65[i] - 1f) * 0.5f;
+        float[] tint = lk3(PRESET_TINT);
+        for (int i = 0; i < 3; i++) this.wbGain[i] = (1f + (target[i] / d65[i] - 1f) * 0.5f) * tint[i];
         float l = luma(this.wbGain[0], this.wbGain[1], this.wbGain[2]);
         for (int i = 0; i < 3; i++) this.wbGain[i] /= l;
 
@@ -234,7 +267,7 @@ public final class ShadeLook {
         this.toneB = (float) ((wa / 1.0 - ma / MID_OUT) / (wad - mad));
         this.toneBeta = (float) (ma / MID_OUT - mad * this.toneB);
 
-        this.inset = PRESET_INSET[look];
+        this.inset = lk(PRESET_INSET);
         if (options != null) {
             this.saturation *= options.post().saturation();
             this.bloomMix *= options.post().bloomStrength();
@@ -280,14 +313,16 @@ public final class ShadeLook {
         put4(b, SUN_ART, l[0], l[1], l[2], 1f);
         put4(b, AMBIENT_ART, this.ambientTint[0], this.ambientTint[1], this.ambientTint[2], 0.06f * (1f - 0.7f * f.rain) * this.l2Bounce);
         put4(b, BOUNCE, 0.62f, 0.56f, 0.44f, 0f);
-        put4(b, GRADE0, options == null ? 0f : options.post().exposureEv(), this.saturation, this.lookPreset == 1 ? 0.18f : 0.10f, 1f);
+        put4(b, GRADE0, (options == null ? 0f : options.post().exposureEv()) + lk(PRESET_EV), this.saturation,
+            lk(PRESET_VIBRANCE), 1f);
         put4(b, GRADE1, this.wbGain[0], this.wbGain[1], this.wbGain[2], 0.55f);
-        put4(b, GRADE2, 0f, 0f, 0f, 0.0025f);
-        put4(b, GRADE3, 1f, 1f, 1f, this.inset);
+        float[] lift = lk3(PRESET_LIFT), gain = lk3(PRESET_GAIN);
+        put4(b, GRADE2, lift[0], lift[1], lift[2], 0.0025f);
+        put4(b, GRADE3, gain[0], gain[1], gain[2], this.inset);
         put4(b, TONEMAP, this.contrast, SHOULDER, this.toneB, this.toneBeta);
         float inverseMax = Math.min(0.80f, 0.95f / (this.toneB * SHOULDER));
         put4(b, OUTPUT, 1f, 1f, 1f, inverseMax);
-        put4(b, BLOOM, this.bloomMix, PRESET_SPECTRUM[this.lookPreset], 0.06f * (1f + f.rain), 1f);
+        put4(b, BLOOM, this.bloomMix, lk(PRESET_SPECTRUM), 0.06f * (1f + f.rain), 1f);
         float hazeScale = options == null ? 1f : options.sky().hazeStrength();
         float haze = (1f + this.rainFog) * hazeScale;
         put4(b, FOG_R, HAZE_SIGMA[0] * haze, HAZE_SIGMA[1] * haze, HAZE_SIGMA[2] * haze, HAZE_H);
@@ -298,9 +333,12 @@ public final class ShadeLook {
         put4(b, VL, options == null ? 12f : options.atmosphere().lightSteps(),
             options == null ? 1f : options.atmosphere().lightStrength(), 0f, 0f);
         put4(b, WET, wetness, puddles, snow, f.rain);
-        put4(b, WIND, 0f, 0f, 0f, 0f);
-        put4(b, CLOUDS0, cloudBase, cloudBase + (options == null ? 32f : options.atmosphere().cloudThickness()),
-            0f, cloudsEnabled ? 1f : 0f);
+        float[] w = this.cloudWeather; // (ShadeWeather: weatherA cumulus / altocumulus coverage, weatherB the rest)
+        put4(b, WIND, w[0], w[1], w[2], w[3]);
+        // clouds0: x cumulus base (block y), y coverage scale (clouds.metal cloudLayer), w volumetric clouds on
+        // (z: -Dcelestiametal.shade.cloudDev, live, pricing: 1 no altocumulus, 2 no cirrus, 4 no cumulus, 8 trace nothing)
+        put4(b, CLOUDS0, cloudBase, options == null ? 1f : options.atmosphere().cloudCoverage(),
+            (float) Integer.getInteger("celestiametal.shade.cloudDev", 0), cloudsEnabled ? 1f : 0f);
         put4(b, CLOUDS1, cloudsEnabled ? 1f : 0f, cloudSteps,
             options == null ? 1f : options.atmosphere().cloudDensity(), cloudPhase);
         put4(b, EYE, 0.5f, 0.5f, 1f, this.eyeSky);
@@ -310,7 +348,7 @@ public final class ShadeLook {
         put4(b, SSR, this.hasPrevScene ? 1f : 0f, 0f, 0f, 0f);
         float nightUp = EV_UP - (EV_UP - EV_UP_NIGHT) * (1f - smooth(-10f, -2f, this.elevation)) * this.outdoor;
         put4(b, EXPOSURE_CFG, EV_DOWN, nightUp, TAU_UP, TAU_DOWN);
-        put4(b, DIM_TINT, 0f, 0f, 0f, 0f);
+        put4(b, DIM_TINT, w[4], w[5], w[6], w[7]);
         put4(b, FLASH, flashX, flashY, flashZ, flashStrength);
         put4(b, RENDER_SCALE, f.renderScale, (float) (Math.log(Math.max(f.mipScale, 1e-4f)) / Math.log(2.0)), f.width, f.height);
         put4(b, DT, this.dt, f.gameTimeSeconds, 0f, this.rising);
@@ -321,7 +359,7 @@ public final class ShadeLook {
         putRows(b, GRADE_OUT, this.gradeOut);
         putRows(b, GRADE_IN_INV, this.gradeInInv);
         putRows(b, GRADE_OUT_INV, this.gradeOutInv);
-        float lambda = Math.min(PRESET_LAMBDA[this.lookPreset] * this.l2Lambda, 1f);
+        float lambda = Math.min(lk(PRESET_LAMBDA) * this.l2Lambda, 1f);
         put4(b, EXPOSURE_REF, this.exposureRef, lambda, METER_KEY, this.snapExposure ? 1f : 0f);
         this.snapExposure = false;
         put4(b, USER0, SUN_RADIUS, 0.12f, 1f, 1f);
@@ -464,7 +502,11 @@ public final class ShadeLook {
             c[r] = (float) Math.min(1.0, xa / (xad * this.toneB + this.toneBeta));
         }
         float[] y = new float[3];
-        for (int r = 0; r < 3; r++) y[r] = Math.max(0f, this.gradeOut[r][0] * c[0] + this.gradeOut[r][1] * c[1] + this.gradeOut[r][2] * c[2]);
+        float[] lift = lk3(PRESET_LIFT), gain = lk3(PRESET_GAIN);
+        for (int r = 0; r < 3; r++) {
+            y[r] = Math.max(0f, this.gradeOut[r][0] * c[0] + this.gradeOut[r][1] * c[1] + this.gradeOut[r][2] * c[2]);
+            y[r] = Math.max(0f, y[r] * gain[r] + lift[r]); // (shadeDisplay: gain, then lift)
+        }
         return y;
     }
 
@@ -475,6 +517,8 @@ public final class ShadeLook {
             s[i] = v <= 0.04045f ? v / 12.92f : (float) Math.pow((v + 0.055f) / 1.055f, 2.4f);
         }
         float max = Math.min(0.80f, 0.95f / (this.toneB * SHOULDER));
+        float[] lift = lk3(PRESET_LIFT), gain = lk3(PRESET_GAIN);
+        for (int i = 0; i < 3; i++) s[i] = (s[i] - lift[i]) / Math.max(gain[i], 1e-3f); // (shadeLdrToHdr: lift and gain first)
         for (int i = 0; i < 3; i++) y[i] = Math.min(max, Math.max(0f, this.gradeOutInv[i][0] * s[0] + this.gradeOutInv[i][1] * s[1] + this.gradeOutInv[i][2] * s[2]));
         for (int i = 0; i < 3; i++) {
             double yy = y[i], bb = this.toneB, d = SHOULDER, beta = this.toneBeta;

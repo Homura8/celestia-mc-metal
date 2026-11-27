@@ -94,6 +94,17 @@ class ShadeP1Test {
             float targetLin = (float) Math.pow(((i == 0 ? 0.5f : i == 1 ? 0.3f : 0.8f) + 0.055f) / 1.055f, 2.4);
             assertEquals(targetLin, disp[i], 0.015f);
         }
+        // (alpha.25) every look, PASTEL's lift and gain included, inverts exactly (fog and clear colours rely on it)
+        for (int preset = 0; preset < ShadeLook.LOOKS; preset++) {
+            look.setLookPreset(preset);
+            look.update(frame, 0, 0.016f);
+            float[] h = look.ldrToHdr(0.5f, 0.3f, 0.8f);
+            float[] d = look.display(h);
+            for (int i = 0; i < 3; i++) {
+                float targetLin = (float) Math.pow(((i == 0 ? 0.5f : i == 1 ? 0.3f : 0.8f) + 0.055f) / 1.055f, 2.4);
+                assertEquals(targetLin, d[i], 0.015f, "look " + preset + " channel " + i);
+            }
+        }
     }
 
     @Test
@@ -284,5 +295,70 @@ class ShadeP1Test {
                 assertFalse(src.matches("(?s).*shadeLdrToHdr\\(\\s*s?f\\.fogColor.*"), name + " converts the fog colour per pixel");
             }
         }
+    }
+
+    @Test
+    void atmosphereShadersCompileAndCloudNoiseLoads() throws Exception {
+        // (alpha.25) the Photon-style clouds: every atmosphere entry compiles, and the atlases wrap as clouds.metal expects
+        long ctx = MetalNative.deviceCreate(true, false, "");
+        assertNotEquals(0L, ctx);
+        try {
+            StringBuilder err = new StringBuilder();
+            long lib = MetalNative.compileMslLibrary(ctx, ShadeShaderPatcher.atmosphereSource(), "test.atmosphere", true, err);
+            assertNotEquals(0L, lib, () -> err.toString());
+            for (String entry : List.of("shade_cloud_trace", "shade_cloud_resolve", "shade_cloud_dome", "shade_vl_march", "shade_wx_noise_fs")) {
+                long fn = MetalNative.compileFunction(lib, entry, false, 0, 0, err);
+                assertNotEquals(0L, fn, () -> entry + ": " + err);
+                MetalNative.functionDestroy(fn);
+            }
+            MetalNative.libraryDestroy(lib);
+        } finally {
+            MetalNative.deviceDestroy(ctx);
+        }
+        // a 4^3 volume of distinct voxels into 2x2 tiles of 6^2: tile (z % 2, z / 2), border = the opposite edge
+        int n = 4;
+        byte[] vol = new byte[n * n * n];
+        for (int i = 0; i < vol.length; i++) vol[i] = (byte) i;
+        byte[] at = dev.celestia.metal.shade.atmosphere.ShadeCloudNoise.atlasForTest(vol, n, 1, 1, 2, 2);
+        int aw = 12;
+        int z = 3, ox = (z % 2) * 6, oy = (z / 2) * 6;
+        assertEquals((z * n + 0) * n + 0, at[(oy + 1) * aw + ox + 1]);         // (0, 0) at texel (1, 1)
+        assertEquals((z * n + 0) * n + (n - 1), at[(oy + 1) * aw + ox]);       // left gutter wraps to x = 3
+        assertEquals((z * n + (n - 1)) * n + 0, at[oy * aw + ox + 1]);         // top gutter wraps to y = 3
+        assertEquals((z * n + 0) * n + 0, at[(oy + 5) * aw + ox + 5] & 0xFF);  // bottom-right corner wraps to (0, 0)
+        // the shipped files have the sizes the shader assumes, and the PNG's alpha (noise data) is read raw
+        try (var in = ShadeP1Test.class.getResourceAsStream("/assets/celestiametal/textures/clouds/photon_worley.dat")) {
+            assertEquals(64 * 64 * 64, in.readAllBytes().length);
+        }
+        try (var in = ShadeP1Test.class.getResourceAsStream("/assets/celestiametal/textures/clouds/photon_curl.dat")) {
+            assertEquals(32 * 32 * 32 * 3, in.readAllBytes().length);
+        }
+        try (var in = ShadeP1Test.class.getResourceAsStream("/assets/celestiametal/textures/clouds/photon_noise.png")) {
+            byte[] rgba = dev.celestia.metal.shade.atmosphere.ShadeCloudNoise.rgbaForTest(javax.imageio.ImageIO.read(in));
+            assertEquals(512 * 512 * 4, rgba.length);
+            int distinctAlpha = (int) java.util.stream.IntStream.range(0, 512 * 512).map(i -> rgba[i * 4 + 3] & 0xFF).distinct().count();
+            assertTrue(distinctAlpha > 64, "alpha holds noise, not coverage: " + distinctAlpha + " distinct values");
+        }
+    }
+
+    @Test
+    void dailyCloudWeatherFollowsPhotonsTable() {
+        float[] w = new float[8];
+        // a fixed sky is that day's row; rain pushes toward overcast stratus
+        dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(12000L, 0f, 1f, 0, w);
+        assertArrayEquals(new float[] {0.40f, 0.60f, 0.20f, 0.50f, 0.00f, 0.53f, 0f, 0f}, w, 1e-6f);
+        dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(12000L, 1f, 1f, 0, w);
+        assertEquals(0.6f, w[0], 1e-6f);
+        assertEquals(0.8f, w[1], 1e-6f);
+        assertEquals(0.7f, w[7], 1e-6f);
+        // congestus days stand in a cumulus; coverage scales every layer
+        dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(12000L, 0f, 0.5f, 2, w);
+        assertEquals(0.225f, w[0], 1e-6f);
+        assertEquals(1f, w[6], 1e-6f);
+        // the daily cycle is deterministic and continuous across the dawn blend
+        float[] a = new float[8], b = new float[8];
+        dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(5L * 24000L + 5999L, 0f, 1f, -1, a);
+        dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(5L * 24000L + 6001L, 0f, 1f, -1, b);
+        for (int i = 0; i < 8; i++) assertEquals(a[i], b[i], 0.02f, "jump at noon in value " + i);
     }
 }

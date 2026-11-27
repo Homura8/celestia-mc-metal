@@ -27,6 +27,8 @@ We gratefully acknowledge and preserve attribution for the following projects an
     - **[Photon Shaders](https://github.com/sixthsurge/photon)** by **Benjamin Stott ("sixthsurge")** (`MIT`, `LICENSES/MIT-Photon.txt`) — volumetric clouds, air-mode volumetric light, and golden-hour mist formulas.
     - **[SE Natural Bloom & Dirty Lens](https://github.com/sonicether/SE-Natural-Bloom-Dirty-Lens)** by **sonicether** (`MIT`) — energy-conserving bloom composite concept.
     - **5-tap Catmull-Rom bicubic filter** by **Matt Pettineo (MJP)** (`MIT`) — history/upscale tap pattern.
+- **[Photon Shaders](https://github.com/sixthsurge/photon)** by **Benjamin Stott ("sixthsurge")** (`MIT` at commit `26c2906e`, `LICENSES/MIT-Photon.txt`)
+  - Celestia Native's volumetric cumulus clouds (alpha.25): the density model, light/sky optical-depth marches, multiple-scattering octaves, powder term and phase lobes (`clouds.metal`), rewritten in MSL for Apple GPUs with a quarter-rate checkerboard trace and temporal resolve; that commit's noise textures ship unmodified in `assets/celestiametal/textures/clouds`. Later Photon releases (e.g. v1.4) use a different licence and were only used as a visual reference.
 - **[Ciderlight](https://github.com/riccqi/ciderlight)** by **riccqi** (`Apache-2.0`)
   - Modular MSL shader passes, native binding cache deduplication, and automated MSL shader unit-check methodology.
 - **[SiliconShaders](https://github.com/rellefnediew/SiliconShaders)** by **rellefnediew** (`Apache-2.0`)

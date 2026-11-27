@@ -2216,14 +2216,15 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
     int64_t vs = cm_compile_function(lib, "shade_fs_vs", 0, 0, 0, err, sizeof(err));
     assert(vs);
 
-    enum { NOISE, CLOUDS, DOME, VOLUME, WEATHER, FINAL, AO, PASSES };
+    // (alpha.25) the Photon-style clouds: a quarter-rate trace (48x32) resolved into the half-resolution image (96x64)
+    enum { TRACE, CLOUDS, DOME, VOLUME, WEATHER, FINAL, AO, PASSES };
     const char *entries[PASSES] = {
-        "shade_cloud_noise", "shade_cloud_screen", "shade_cloud_dome", "shade_vl_march", "shade_wx_noise_fs", "shade_final",
+        "shade_cloud_trace", "shade_cloud_resolve", "shade_cloud_dome", "shade_vl_march", "shade_wx_noise_fs", "shade_final",
         "shade_ambient_occlusion"
     };
-    const int widths[PASSES] = {272, 96, 160, 96, 1024, 96, 48};
-    const int heights[PASSES] = {272, 64, 64, 64, 1024, 64, 32};
-    const int formats[PASSES] = {CM_FMT_RG16_FLOAT, CM_FMT_RGBA16_FLOAT, CM_FMT_RGBA16_FLOAT,
+    const int widths[PASSES] = {48, 96, 160, 96, 1024, 96, 48};
+    const int heights[PASSES] = {32, 64, 64, 64, 1024, 64, 32};
+    const int formats[PASSES] = {CM_FMT_RGBA16_FLOAT, CM_FMT_RGBA16_FLOAT, CM_FMT_RGBA16_FLOAT,
                                  CM_FMT_RGBA16_FLOAT, CM_FMT_RG16_FLOAT, CM_FMT_RGBA8_UNORM, CM_FMT_RG16_FLOAT};
     int64_t pso[PASSES], tex[PASSES];
     for (int i = 0; i < PASSES; i++) {
@@ -2258,7 +2259,9 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
         frame[140 + c] = 0.35f; frame[144 + c] = 0.15f; // ambient
     }
     look[112] = 0.002f; look[113] = 128.0f; // fogM
-    look[132] = 12.0f; look[133] = 44.0f; look[135] = 1.0f; // clouds0
+    look[132] = 12.0f; look[133] = 1.0f; look[135] = 1.0f; // clouds0: base, coverage scale, on
+    look[128] = 0.40f; look[129] = 0.55f; look[130] = 0.30f; look[131] = 0.50f; // weatherA: cumulus, altocumulus coverage
+    look[188] = 0.40f; look[189] = 0.50f; // weatherB: cirrus, cirrocumulus (no congestus, no stratus)
     look[136] = 1.0f; look[137] = 14.0f; look[138] = 1.0f; // reflection dome, steps, density
     look[92] = look[93] = look[94] = 1.0f; // grade3
     look[96] = 1.4f; look[97] = 0.92f; look[98] = 0.8f; look[99] = 0.05f; // tonemap
@@ -2290,9 +2293,28 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
     cm_blit_clear_depth(ctx, shadow, 0.0);
     cm_blit_clear_color(ctx, lut, 0.3f, 0.4f, 0.5f, 1.0f);
     cm_blit_clear_color(ctx, scene, 0.1f, 0.1f, 0.1f, 1.0f);
-    cm_shade_fullscreen_pass(ctx, pso[NOISE], tex[NOISE], NULL, 0, NULL, 0, NULL, 0);
-    cm_shade_fullscreen_pass(ctx, pso[CLOUDS], tex[CLOUDS], &tex[NOISE], 1, NULL, 0, NULL, 0);
-    cm_shade_fullscreen_pass(ctx, pso[DOME], tex[DOME], &tex[NOISE], 1, NULL, 0, NULL, 0);
+    // the cloud noises (ShadeCloudNoise's layouts): a 64^2 2D noise whose shape channel (alpha) is an 8-texel checkerboard
+    // (~580 m cells at its 0.000027 / m scale, so part of the sky clouds over), blank Worley and curl atlases
+    static uint8_t n2dPx[64 * 64 * 4];
+    for (int y = 0; y < 64; y++)
+        for (int x = 0; x < 64; x++) {
+            uint8_t *t = n2dPx + (y * 64 + x) * 4;
+            t[0] = 128; t[1] = 128; t[2] = 128; t[3] = (((x >> 3) + (y >> 3)) & 1) ? 255 : 0;
+        }
+    int64_t n2d = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, 64, 64, 1, 1, 0, 0, 1, 0, "2o cloud noise");
+    int64_t worley = cm_texture_create(ctx, CM_FMT_R8_UNORM, 528, 528, 1, 1, 0, 1, 1, 0, "2o worley");
+    int64_t curl = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, 272, 136, 1, 1, 0, 1, 1, 0, "2o curl");
+    cm_blit_write_texture(ctx, n2d, n2dPx, sizeof(n2dPx), 64 * 4, 0, 0, 0, 0, 64, 64);
+    cm_blit_clear_color(ctx, worley, 0.0f, 0.0f, 0.0f, 0.0f);
+    cm_blit_clear_color(ctx, curl, 0.0f, 0.0f, 0.0f, 0.0f);
+    int64_t cloudHistory = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 96, 64, 1, 1, 0, 1, 1, 0, "2o cloud history");
+    cm_blit_clear_color(ctx, cloudHistory, 0.0f, 0.0f, 0.0f, 1.0f);
+    uint32_t cloudPush[4] = {0, 0, 0, 0}; // frame 0, no history
+    int64_t traceInputs[4] = { n2d, worley, curl, cloudHistory };
+    cm_shade_fullscreen_pass(ctx, pso[TRACE], tex[TRACE], traceInputs, 4, NULL, 0, cloudPush, sizeof(cloudPush));
+    int64_t resolveInputs[2] = { tex[TRACE], cloudHistory };
+    cm_shade_fullscreen_pass(ctx, pso[CLOUDS], tex[CLOUDS], resolveInputs, 2, NULL, 0, cloudPush, sizeof(cloudPush));
+    cm_shade_fullscreen_pass(ctx, pso[DOME], tex[DOME], traceInputs, 3, NULL, 0, NULL, 0);
     cm_shade_fullscreen_pass(ctx, pso[VOLUME], tex[VOLUME], &depth, 1, NULL, 0, NULL, 0);
     cm_shade_fullscreen_pass(ctx, pso[WEATHER], tex[WEATHER], NULL, 0, NULL, 0, NULL, 0);
     int64_t finalInputs[6] = { scene, scene, depth, scene, tex[VOLUME], tex[AO] };
@@ -2371,7 +2393,12 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
 
     // Time the recurring atmosphere passes at the owner test resolution.
     const int W = 3024, H = 1752, SW = W / 4, SH = H / 4;
+    // clouds: traced at a quarter of the half-resolution pixels (SW x SH), resolved at half resolution (ping-pong history)
     int64_t benchCloud = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, SW, SH, 1, 1, 0, 1, 1, 0, "P3b bench cloud");
+    int64_t benchHist[2] = {
+        cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W / 2, H / 2, 1, 1, 0, 1, 1, 0, "P3b bench cloud history 0"),
+        cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W / 2, H / 2, 1, 1, 0, 1, 1, 0, "P3b bench cloud history 1")
+    };
     int64_t benchVL = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, SW, SH, 1, 1, 0, 1, 1, 0, "P3b bench VL");
     int64_t benchScene = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "P3b bench scene");
     int64_t benchDepth = cm_texture_create(ctx, CM_FMT_D32_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "P3b bench depth");
@@ -2393,8 +2420,12 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
             finalParams[8] = mode != 0 ? 1.0f : 0.0f;
             cm_cmd_begin(ctx);
             if (mode != 0) {
-                cm_shade_fullscreen_pass(ctx, pso[CLOUDS], benchCloud, &tex[NOISE], 1, NULL, 0, NULL, 0);
-                if ((iteration & 3) == 0) cm_shade_fullscreen_pass(ctx, pso[DOME], tex[DOME], &tex[NOISE], 1, NULL, 0, NULL, 0);
+                uint32_t push[4] = { (uint32_t)iteration, iteration > 0 ? 1u : 0u, 0, 0 };
+                int64_t hPrev = benchHist[iteration & 1], hNext = benchHist[(iteration & 1) ^ 1];
+                int64_t ti[4] = { n2d, worley, curl, hPrev }, ri[2] = { benchCloud, hPrev };
+                cm_shade_fullscreen_pass(ctx, pso[TRACE], benchCloud, ti, 4, NULL, 0, push, sizeof(push));
+                cm_shade_fullscreen_pass(ctx, pso[CLOUDS], hNext, ri, 2, NULL, 0, push, sizeof(push));
+                if ((iteration & 3) == 0) cm_shade_fullscreen_pass(ctx, pso[DOME], tex[DOME], ti, 3, NULL, 0, NULL, 0);
                 cm_shade_fullscreen_pass(ctx, pso[VOLUME], benchVL, &benchDepth, 1, NULL, 0, NULL, 0);
             }
             cm_shade_fullscreen_pass(ctx, pso[FINAL], benchOut, benchInputs, 6, NULL, 0, finalParams, sizeof(finalParams));
@@ -2408,6 +2439,8 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
     assert(cm_device_drain_errors(ctx, err, sizeof(err)) == 0);
     cm_texture_destroy(ctx, benchOut); cm_texture_destroy(ctx, benchDepth); cm_texture_destroy(ctx, benchScene);
     cm_texture_destroy(ctx, benchVL); cm_texture_destroy(ctx, benchCloud);
+    cm_texture_destroy(ctx, benchHist[0]); cm_texture_destroy(ctx, benchHist[1]);
+    cm_texture_destroy(ctx, n2d); cm_texture_destroy(ctx, worley); cm_texture_destroy(ctx, curl); cm_texture_destroy(ctx, cloudHistory);
 
     cm_buffer_destroy(ctx, finalRead); cm_buffer_destroy(ctx, wxRead); cm_buffer_destroy(ctx, vlRead); cm_buffer_destroy(ctx, cloudRead);
     cm_sampler_destroy(ctx, linear); cm_sampler_destroy(ctx, cmp);

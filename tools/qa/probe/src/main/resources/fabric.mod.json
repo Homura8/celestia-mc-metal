@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "celestiaqa",
+  "version": "1.0.0",
+  "name": "Celestia QA probe",
+  "description": "Scripted in-game QA for Celestia Metal (tools/qa). Development only: never ship or install it in a real instance.",
+  "environment": "client",
+  "mixins": ["celestiaqa.mixins.json"]
+}

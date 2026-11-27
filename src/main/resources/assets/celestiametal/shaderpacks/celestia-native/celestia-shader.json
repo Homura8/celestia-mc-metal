@@ -25,8 +25,7 @@
       "WATER_CAUSTICS": "0",
       "CLOUD_STEPS": "8",
       "GOD_RAYS": "false",
-      "BLOOM_STRENGTH": "0.75",
-      "COLOR_LOOK": "NATURAL"
+      "BLOOM_STRENGTH": "0.75"
     },
     "Balanced": {},
     "Quality": {
@@ -37,8 +36,7 @@
       "SSR_BUDGET": "28",
       "SSR_DISTANCE": "176",
       "CLOUD_STEPS": "18",
-      "VL_STEPS": "16",
-      "COLOR_LOOK": "STORYBOOK"
+      "VL_STEPS": "16"
     },
     "Ultra": {
       "SHADOW_RES": "4096",
@@ -48,8 +46,7 @@
       "SSR_BUDGET": "32",
       "SSR_DISTANCE": "224",
       "CLOUD_STEPS": "24",
-      "VL_STEPS": "20",
-      "COLOR_LOOK": "STORYBOOK"
+      "VL_STEPS": "20"
     }
   },
   "options": [
@@ -387,16 +384,16 @@
       "step": 2
     },
     {
-      "id": "CLOUD_THICKNESS",
-      "label": "Cloud Layer Thickness",
-      "description": "Sets the height of the cumulus layer in blocks.",
+      "id": "CLOUD_COVERAGE",
+      "label": "Cloud Coverage",
+      "description": "Scales how much of the sky the cumulus layer covers. Rain still pushes it toward overcast.",
       "category": "Clouds & Weather",
-      "type": "INT_SLIDER",
-      "default": "32",
+      "type": "FLOAT_SLIDER",
+      "default": "1.0",
       "impact": "LOW",
-      "min": 16,
-      "max": 64,
-      "step": 4
+      "min": 0.0,
+      "max": 1.6,
+      "step": 0.05
     },
     {
       "id": "CLOUD_DENSITY",
@@ -467,16 +464,29 @@
     {
       "id": "COLOR_LOOK",
       "label": "Color Look",
-      "description": "Chooses the filmic color grade.",
+      "description": "Chooses the filmic color grade. Pastel: vibrant, airy and a little rosy.",
       "category": "Post-Processing",
       "type": "ENUM",
-      "default": "EPIC",
+      "default": "PASTEL",
       "impact": "NEGLIGIBLE",
       "values": [
+        "PASTEL",
         "EPIC",
         "STORYBOOK",
         "NATURAL"
       ]
+    },
+    {
+      "id": "PASTEL_STRENGTH",
+      "label": "Pastel Strength",
+      "description": "How pastel the Pastel look is: 0 is the Epic grade, 1 the default airy rose pastel, 1.5 dreamier still.",
+      "category": "Post-Processing",
+      "type": "FLOAT_SLIDER",
+      "default": "1.0",
+      "impact": "NEGLIGIBLE",
+      "min": 0.0,
+      "max": 1.5,
+      "step": 0.05
     },
     {
       "id": "BLOOM_ENABLED",

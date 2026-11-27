@@ -1,0 +1,93 @@
+sourceSets {
+    qa {
+        java.srcDir 'tools/qa/probe/src/main/java'
+        resources.srcDir 'tools/qa/probe/src/main/resources'
+        compileClasspath = sourceSets.main.output + sourceSets.main.compileClasspath
+    }
+}
+
+tasks.named('compileQaJava', JavaCompile) {
+    options.compilerArgs += '-proc:none'
+}
+
+def probeJar = tasks.register('qaProbeJar', Jar) {
+    group = 'verification'
+    description = 'Build the standalone in-game QA probe mod.'
+    destinationDirectory = layout.buildDirectory.dir('qa/probe')
+    archiveFileName = 'celestia-qa-probe.jar'
+    from sourceSets.qa.output
+}
+
+tasks.named('check') { dependsOn probeJar }
+
+def qaDirectory = providers.gradleProperty('qaDir').orElse('build/qa/run')
+def referenceMods = providers.gradleProperty('qaReferenceMods')
+def qaModes = providers.gradleProperty('qaModes')
+def stageMods = tasks.register('qaStageMods', Sync) {
+    def stageDir = file(qaDirectory.get() + '/mods').canonicalFile
+    if (!stageDir.toPath().startsWith(layout.buildDirectory.dir('qa').get().asFile.canonicalFile.toPath())) {
+        throw new GradleException('Automatic QA mod staging requires a game directory under build/qa.')
+    }
+    into stageDir
+    from probeJar
+    if (referenceMods.present) {
+        from(file(referenceMods.get())) { include '*.jar' }
+    } else {
+        from tasks.named('jar')
+    }
+}
+
+tasks.register('qaClient', JavaExec) {
+    group = 'verification'
+    description = 'Launch the standalone Fabric QA client.'
+    if (qaModes.present) dependsOn stageMods
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
+    mainClass = 'net.fabricmc.loader.impl.launch.knot.KnotClient'
+    def dir = file(qaDirectory.get())
+    workingDir = dir
+    jvmArgs '-XstartOnFirstThread', '--enable-native-access=ALL-UNNAMED', '-Xmx6G'
+    systemProperty 'fabric.gameVersion', project.minecraft_version
+    // The production mods come from the game directory. Keep Loom's Minecraft and library dependencies only.
+    def replacements = ['fabric-loader-': findProperty('qaLoader'), 'sponge-mixin-': findProperty('qaMixin')]
+        .findAll { prefix, path -> path != null }
+    classpath = (sourceSets.main.runtimeClasspath - sourceSets.main.output).filter { jar ->
+        !replacements.keySet().any { jar.name.startsWith(it) }
+    } + files(replacements.values())
+
+    // Commas in values are allowed when the following field doesn't start another JVM property.
+    def props = [:]
+    findProperty('qaJvm')?.toString()?.split(/,(?=[\w.-]+=)/)?.each { entry ->
+        def pair = entry.split('=', 2)
+        if (pair.length != 2 || !pair[0].matches(/[\w.-]+/)) {
+            throw new GradleException("Expected k=v in qaJvm, got: ${entry}")
+        }
+        props[pair[0]] = pair[1]
+    }
+    // qaOptions is unambiguous even when option IDs contain commas and equals signs.
+    if (providers.gradleProperty('qaOptions').present) props['celestiaqa.options'] = findProperty('qaOptions')
+    if (qaModes.present) props['celestiaqa.modes'] = qaModes.get()
+    if (providers.gradleProperty('qaProfile').present) {
+        def every = findProperty('qaProfile').toString()
+        if (every == '' || every == 'true') every = '120'
+        if (!(every ==~ /[1-9][0-9]{1,5}/)) {
+            throw new GradleException('qaProfile must be 10 to 999999 submits per report.')
+        }
+        environment 'CELESTIA_GPU_PROFILE', '1'
+        environment 'CELESTIA_GPU_PROFILE_EVERY', every
+        props['celestiaqa.profileEvery'] = every
+        props['celestiametal.noPassMerge'] = 'true'
+    }
+    systemProperties props
+    def assets = new File(gradle.gradleUserHomeDir, 'caches/fabric-loom/assets')
+    args '--gameDir', dir.absolutePath, '--assetsDir', assets.absolutePath, '--assetIndex', '26.3-34',
+        '--version', project.minecraft_version, '--accessToken', '0', '--username', 'CelestiaQA',
+        '--width', '1512', '--height', '900'
+    doFirst {
+        dir.mkdirs()
+        if (new File(dir, 'saves/CelestiaQA/level.dat').isFile()) {
+            args '--quickPlaySingleplayer', 'CelestiaQA'
+        } else {
+            systemProperty 'celestiaqa.create', 'true'
+        }
+    }
+}

@@ -1,0 +1,7 @@
+{
+  "required": true,
+  "package": "celestiaqa.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": ["TickHook", "FrameHook"],
+  "injectors": { "defaultRequire": 1 }
+}

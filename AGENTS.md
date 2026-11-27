@@ -54,6 +54,16 @@ ls "$(xcrun --show-sdk-path)/System/Library/Frameworks/Metal.framework/Headers/"
 
 ---
 
+## QA harness
+
+- Run `tools/qa/run.sh shots,frames` for scripted screenshots and a frame-by-frame pond descent. Use `profile` for Metal 4 pass breakdowns, `perf` for A/B/A GPU timing, and `lights` for the colour and dynamic light rooms. See [docs/QA.md](docs/QA.md) for mode filters, output locations and Iris reference runs.
+- Read `summary.txt` first and open `review.jpg` when images are needed. Open individual captures only for specific follow-up.
+- Keep QA in `build/qa/` so the runner can reuse the compiled Metal pipeline cache and QA world template. Use the Gradle daemon for repeated runs.
+- Keep every `/fill` below 32,000 blocks. Compare changed screenshot settles against the 240-tick baseline and preserve the light propagation and performance sampling windows.
+- Use only Photon commit `26c2906e` (MIT) for code or assets. Photon v1.4 is a visual reference.
+
+---
+
 ## Technical Invariants & Pitfalls
 
 1. **Java 25 FFM (`MetalNative.java`)**:

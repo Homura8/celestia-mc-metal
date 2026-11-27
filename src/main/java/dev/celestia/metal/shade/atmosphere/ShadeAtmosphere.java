@@ -8,6 +8,8 @@ import dev.celestia.metal.shade.ShadeFrame;
 import dev.celestia.metal.shade.ShadeLook;
 import dev.celestia.metal.shade.ShadeSettings;
 import dev.celestia.metal.shade.ShadeShaderPatcher;
+import java.io.IOException;
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import net.minecraft.client.CloudStatus;
@@ -22,15 +24,21 @@ public final class ShadeAtmosphere {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final boolean VOLUMETRICS = !"false".equalsIgnoreCase(System.getProperty("celestiametal.shade.volumetrics"));
     private static final String[] ENTRIES = {
-        "shade_cloud_noise", "shade_cloud_screen", "shade_cloud_dome", "shade_vl_march", "shade_wx_noise_fs"
+        "shade_cloud_trace", "shade_cloud_resolve", "shade_cloud_dome", "shade_vl_march", "shade_wx_noise_fs"
     };
-    private static final int CLOUD_NOISE = 0, CLOUD_SCREEN = 1, CLOUD_DOME = 2, VOLUME = 3, WEATHER_NOISE = 4;
+    // (textures[CLOUD_SCREEN] is unused: the resolved clouds ping-pong between cloudHistory[0] and [1])
+    private static final int CLOUD_TRACE = 0, CLOUD_SCREEN = 1, CLOUD_DOME = 2, VOLUME = 3, WEATHER_NOISE = 4;
     private static final int WEATHER_SLOT = 4, DOME_SLOT = 13, SCREEN_SLOT = 14;
-    private static final int CLOUD_NOISE_SIZE = 272, WEATHER_NOISE_SIZE = 1024;
+    private static final int WEATHER_NOISE_SIZE = 1024;
     private static final int DOME_WIDTH = 160, DOME_HEIGHT = 64;
 
     private final long[] pipelines = new long[ENTRIES.length];
     private final long[] textures = new long[ENTRIES.length];
+    private final long[] cloudHistory = new long[2];
+    private int cloudCurrent;
+    private boolean cloudHistoryValid;
+    private ShadeCloudNoise cloudNoise;
+    private final MemorySegment cloudPush = Arena.global().allocate(16, 16);
     private int width, height;
     private boolean failed, clouds, volume, noiseBaked, domeReady;
     private float previousCloudBase;
@@ -47,6 +55,7 @@ public final class ShadeAtmosphere {
         if (level == null || frame.dimension != ShadeFrame.DIM_OVERWORLD) {
             weatherLevel = null;
             domeReady = false;
+            cloudHistoryValid = false;
             return;
         }
         if (!initialize(ctx)) return;
@@ -54,7 +63,7 @@ public final class ShadeAtmosphere {
         previousOptions = options;
         cloudPhase += dt * options.cloudSpeed();
         if (w != width || h != height) {
-            destroyTexture(ctx, CLOUD_SCREEN);
+            destroyCloudTargets(ctx);
             destroyTexture(ctx, VOLUME);
             width = w;
             height = h;
@@ -69,12 +78,18 @@ public final class ShadeAtmosphere {
         if (base != previousCloudBase) domeReady = false;
         previousCloudBase = base;
         if (options.clouds() && status != CloudStatus.OFF) {
-            if (textures[CLOUD_SCREEN] == 0L) {
-                textures[CLOUD_SCREEN] = texture(ctx, CLOUD_SCREEN, (w + 3) / 4, (h + 3) / 4);
+            if (textures[CLOUD_TRACE] == 0L) {
+                // half resolution resolved (ping-pong history), traced at a quarter of those pixels per frame (2x2 checkerboard)
+                int hw = Math.max(1, (w + 1) / 2), hh = Math.max(1, (h + 1) / 2);
+                textures[CLOUD_TRACE] = texture(ctx, CLOUD_TRACE, (hw + 1) / 2, (hh + 1) / 2);
+                cloudHistory[0] = texture(ctx, CLOUD_SCREEN, hw, hh);
+                cloudHistory[1] = texture(ctx, CLOUD_SCREEN, hw, hh);
+                cloudHistoryValid = false;
             }
-            clouds = textures[CLOUD_SCREEN] != 0L;
+            clouds = textures[CLOUD_TRACE] != 0L && cloudHistory[0] != 0L && cloudHistory[1] != 0L;
         } else {
             domeReady = false;
+            cloudHistoryValid = false;
         }
         volume = VOLUMETRICS && options.volumetrics() && options.lightStrength() > 0f && frame.fogType == ShadeFrame.FOG_AIR && frame.eyeSkyLight >= 2 && frame.sky.lightDir[1] > 0.015f;
         if (volume && textures[VOLUME] == 0L) {
@@ -85,6 +100,8 @@ public final class ShadeAtmosphere {
         look.cloudsEnabled = clouds;
         look.cloudSteps = status == CloudStatus.FANCY ? options.cloudSteps() : Math.max(4, Math.round(options.cloudSteps() * 4f / 7f));
         look.cloudBase = base;
+        ShadeWeather.compute(level.getOverworldClockTime(), frame.rain, options.cloudCoverage(), Integer.getInteger("celestiametal.shade.weatherDay", -1),
+            look.cloudWeather);
         look.cloudPhase = (float) cloudPhase;
         if (!options.weather()) {
             wetness = puddles = snow = 0f;
@@ -130,18 +147,40 @@ public final class ShadeAtmosphere {
     public void renderClouds(long ctx, int frameIndex, MemorySegment texArgs) {
         if (textures[WEATHER_NOISE] != 0L && !noiseBaked) {
             draw(ctx, WEATHER_NOISE, 0L, texArgs);
-            draw(ctx, CLOUD_NOISE, 0L, texArgs);
             noiseBaked = true;
         }
         MetalNative.shadeSetResource(ctx, WEATHER_SLOT, textures[WEATHER_NOISE]);
+        long screen = 0L;
         if (clouds) {
-            draw(ctx, CLOUD_SCREEN, textures[CLOUD_NOISE], texArgs);
+            long prev = cloudHistory[cloudCurrent], next = cloudHistory[cloudCurrent ^ 1];
+            cloudPush.set(ValueLayout.JAVA_INT, 0, frameIndex);
+            cloudPush.set(ValueLayout.JAVA_INT, 4, cloudHistoryValid ? 1 : 0);
+            // trace: noise 2D, Worley, curl, (the history only for its size)
+            texArgs.set(ValueLayout.JAVA_LONG, 0, cloudNoise.noise2d);
+            texArgs.set(ValueLayout.JAVA_LONG, 8, cloudNoise.worley);
+            texArgs.set(ValueLayout.JAVA_LONG, 16, cloudNoise.curl);
+            texArgs.set(ValueLayout.JAVA_LONG, 24, prev);
+            MetalNative.shadeFullscreenPass(ctx, pipelines[CLOUD_TRACE], textures[CLOUD_TRACE], texArgs, 4,
+                MemorySegment.NULL, 0, cloudPush, 16);
+            // resolve into the other history texture: this frame's cell plus the reprojected history
+            texArgs.set(ValueLayout.JAVA_LONG, 0, textures[CLOUD_TRACE]);
+            texArgs.set(ValueLayout.JAVA_LONG, 8, prev);
+            MetalNative.shadeFullscreenPass(ctx, pipelines[CLOUD_SCREEN], next, texArgs, 2, MemorySegment.NULL, 0, cloudPush, 16);
+            cloudCurrent ^= 1;
+            cloudHistoryValid = true;
+            screen = next;
             if (!domeReady || (frameIndex & 3) == 0) {
-                draw(ctx, CLOUD_DOME, textures[CLOUD_NOISE], texArgs);
+                texArgs.set(ValueLayout.JAVA_LONG, 0, cloudNoise.noise2d);
+                texArgs.set(ValueLayout.JAVA_LONG, 8, cloudNoise.worley);
+                texArgs.set(ValueLayout.JAVA_LONG, 16, cloudNoise.curl);
+                MetalNative.shadeFullscreenPass(ctx, pipelines[CLOUD_DOME], textures[CLOUD_DOME], texArgs, 3,
+                    MemorySegment.NULL, 0, MemorySegment.NULL, 0);
                 domeReady = true;
             }
+        } else {
+            cloudHistoryValid = false;
         }
-        MetalNative.shadeSetResource(ctx, SCREEN_SLOT, clouds ? textures[CLOUD_SCREEN] : 0L);
+        MetalNative.shadeSetResource(ctx, SCREEN_SLOT, screen);
         MetalNative.shadeSetResource(ctx, DOME_SLOT, clouds ? textures[CLOUD_DOME] : 0L);
     }
 
@@ -185,10 +224,14 @@ public final class ShadeAtmosphere {
                     MetalNative.functionDestroy(fragment);
                 }
             }
-            textures[CLOUD_NOISE] = texture(ctx, CLOUD_NOISE, CLOUD_NOISE_SIZE, CLOUD_NOISE_SIZE);
+            try {
+                cloudNoise = ShadeCloudNoise.create(ctx);
+            } catch (IOException e) {
+                throw new IllegalStateException("Failed to load the cloud noise textures", e);
+            }
             textures[CLOUD_DOME] = texture(ctx, CLOUD_DOME, DOME_WIDTH, DOME_HEIGHT);
             textures[WEATHER_NOISE] = texture(ctx, WEATHER_NOISE, WEATHER_NOISE_SIZE, WEATHER_NOISE_SIZE);
-            if (textures[CLOUD_NOISE] == 0L || textures[CLOUD_DOME] == 0L || textures[WEATHER_NOISE] == 0L) {
+            if (cloudNoise == null || textures[CLOUD_DOME] == 0L || textures[WEATHER_NOISE] == 0L) {
                 throw new IllegalStateException("Failed to allocate atmosphere noise or dome textures");
             }
             LOGGER.info("CelestiaShade P3b clouds, volumetric lighting and weather initialized");
@@ -205,12 +248,21 @@ public final class ShadeAtmosphere {
     }
 
     private static int format(int pass) {
-        return pass == CLOUD_NOISE || pass == WEATHER_NOISE ? MetalConst.FMT_RG16_FLOAT : MetalConst.FMT_RGBA16_FLOAT;
+        return pass == WEATHER_NOISE ? MetalConst.FMT_RG16_FLOAT : MetalConst.FMT_RGBA16_FLOAT;
     }
 
     private static long texture(long ctx, int pass, int w, int h) {
         return MetalNative.textureCreate(ctx, format(pass), w, h, 1, 1,
             false, true, true, false, ENTRIES[pass]);
+    }
+
+    private void destroyCloudTargets(long ctx) {
+        destroyTexture(ctx, CLOUD_TRACE);
+        for (int i = 0; i < 2; i++) {
+            if (cloudHistory[i] != 0L) MetalNative.textureDestroy(ctx, cloudHistory[i]);
+            cloudHistory[i] = 0L;
+        }
+        cloudHistoryValid = false;
     }
 
     private void destroyTexture(long ctx, int index) {
@@ -225,6 +277,9 @@ public final class ShadeAtmosphere {
         MetalNative.shadeSetResource(ctx, WEATHER_SLOT, 0L);
         MetalNative.shadeSetResource(ctx, DOME_SLOT, 0L);
         MetalNative.shadeSetResource(ctx, SCREEN_SLOT, 0L);
+        destroyCloudTargets(ctx);
+        if (cloudNoise != null) cloudNoise.close(ctx);
+        cloudNoise = null;
         for (int i = 0; i < ENTRIES.length; i++) {
             destroyTexture(ctx, i);
             if (pipelines[i] != 0L) MetalNative.pipelineDestroy(ctx, pipelines[i]);

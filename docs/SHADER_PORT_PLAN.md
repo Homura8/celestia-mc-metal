@@ -268,3 +268,26 @@ P6b status (branch `feat/shader-port-p6b-alpha.22`, stacked on P6a / PR #13):
       over open cells, falling back to the vertex value outside the window. Known: a hard switch to vertex light at the
       window edge (128 blocks out); could fade over the last section.
 - [ ] Next in P6b: Nether / End looks (upstream `SKYDIMS.md`), aurora, motion blur, labPBR.
+
+## 10. Photon look pass and roadmap (alpha.25 on)
+
+Visual target: Photon v1.4's look, with Celestia's own Pastel colour grade on top. Port code and assets only from Photon's last
+MIT commit, `26c2906e`; v1.4 and every later release use a different licence and serve only as a visual reference. Every
+feature must stay cheap on Apple Silicon: profile it with `CELESTIA_GPU_PROFILE=1` and compare against a clear-sky or
+feature-off run.
+
+Done (alpha.25):
+- [x] Volumetric cumulus, altocumulus and cirrus/cirrocumulus layers, with Photon's 12-day weather cycle (`ShadeWeather`).
+- [x] Water absorption and scattering, and physical underwater fog. Underwater is now clearer than Photon at the owner's request.
+- [x] The Pastel colour look with a Pastel Strength slider.
+
+Next, in order:
+- [ ] Calmer water surface, closer to Photon's gentle waves (fine ripples reduced in alpha.25; check in game).
+- [ ] **Chunk-edge blending (owner request):** at the render distance the terrain ends abruptly. Fade the last chunks smoothly
+      into the sky or atmosphere, as other packs do: border fog toward the sky colour in the reflected and aerial direction,
+      plus a dithered or soft depth fade.
+- [ ] Underwater light shafts and a clear Snell window to the sky.
+- [ ] A real cumulus congestus layer (days 2 and 4 currently stand in a thicker cumulus).
+- [ ] Terrain ambient: Photon's cooler sky light.
+- [ ] Nether and End looks, aurora, motion blur, labPBR (carried over from P6b).
+- [ ] Multiple native MSL shader packs: keep engine code pack-agnostic.

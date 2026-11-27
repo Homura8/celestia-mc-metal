@@ -143,6 +143,22 @@ public final class CelestiaShade {
         return activeInstance;
     }
 
+    private volatile boolean snapRequested;
+
+    /**
+     * Makes the next frame jump to its targets instead of easing toward them: exposure, the atmosphere's smoothing and the
+     * temporal histories (as after a dimension change). For scripted cuts such as the QA harness's scene changes
+     * (tools/qa), so a screenshot or a timing window needs no multi-second adaptation wait.
+     */
+    public void requestSnap() {
+        this.snapRequested = true;
+    }
+
+    /** Selects a shader debug view (ShadeFrame.debug: 0 off; see shade_terrain.metal / shade_water_terrain.metal). */
+    public void setDebugView(int view) {
+        this.frame.debug = view;
+    }
+
     public static boolean isEnabled() {
         return appliedSettings() != null;
     }
@@ -420,7 +436,8 @@ public final class CelestiaShade {
         long now = System.nanoTime();
         float dt = lastNanos == 0L ? 0f : (now - lastNanos) / 1e9f;
         lastNanos = now;
-        boolean snap = lastDimension != frame.dimension || dt > 1f || !applied.equals(settings);
+        boolean snap = lastDimension != frame.dimension || dt > 1f || !applied.equals(settings) || snapRequested;
+        snapRequested = false;
         settings = applied;
         double clampedDt = Math.min(Math.max(dt, 0f), 0.25);
         waterClock = (waterClock + clampedDt) % 4096.0;
@@ -555,7 +572,7 @@ public final class CelestiaShade {
             }
         }
         if (bloom && levelsUsed > 0) {
-            float spectrum = look.lookPreset() == 1 ? 0.9f : look.lookPreset() == 2 ? 0.3f : 0.6f;
+            float spectrum = look.bloomSpectrum();
             float sum = 0f;
             if (levelsUsed >= 3) {
                 float wLast = (float) Math.pow(levelsUsed + bloomShift, spectrum);

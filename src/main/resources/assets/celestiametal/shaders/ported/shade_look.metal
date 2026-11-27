@@ -38,8 +38,8 @@ struct ShadeLook {
 	float4 fogMisc;    // 464  x haze base y (absolute), y border fog start fraction, z border fog radius (blocks, 0 = off), w evening glow
 	float4 vl;         // 480  volumetric light: x samples, y strength, zw reserved
 	float4 wet;        // 496  x wetness, y puddles, z snow cover, w rain intensity
-	float4 wind;       // 512  xy wind direction, z rain slant, w snowfall at camera
-	float4 clouds0;    // 528  x cumulus base y, y top y, z cloud shadow strength, w volumetric clouds on
+	float4 weatherA;   // 512  daily cloud weather (ShadeWeather): x, y cumulus coverage min / max, z, w altocumulus min / max
+	float4 clouds0;    // 528  x cumulus base y, y coverage scale (now folded into weatherA/B), z unused, w volumetric clouds on
 	float4 clouds1;    // 544  x reflection dome enabled, y samples, z density scale, w drift phase
 	float4 waterShadow;// 560  water soft shadow / DH direct / contact / torch caustics
 	float4 water;      // 576  wet-all look / film roughness / veg roughness / gate
@@ -53,7 +53,7 @@ struct ShadeLook {
 	float4 clock2;     // 704  x slow sky clock (s), y air sky light, z caveAir on, w air sun light
 	float4 renderScale;// 720  x render scale, y texture mip bias, zw live render size (px)
 	float4 exposureCfg;// 736  x EV below ref, y EV above ref, z adapt-up tau (s), w adapt-down tau (s)
-	float4 dimTint;    // 752  reserved
+	float4 weatherB;   // 752  x cirrus coverage, y cirrocumulus coverage, z cumulus congestus amount, w stratus amount
 	float4 flash;      // 768  xyz lightning direction, w lightning radiance
 	float4 dt;         // 784  x frame dt (s), y time (s), z day index, w +1 morning / -1 evening
 	int4 tier;         // 800  x tier (0 P .. 3 U), y feature bits (SHADE_FEATURE_*), z look preset (0 epic, 1 storybook, 2 natural), w debug view

@@ -2133,15 +2133,21 @@ static inline float shadeGgxSpec(float3 n, float3 v, float3 l, float alpha) {
 // Absorption (1/block) from the biome's water colour (the vertex tint, linear): pure water's red-first absorption plus the
 // tint's own darkness per channel (vanilla's default blue gives clear teal shallows and deep blue; swamp water turns green
 // and murky; warm oceans stay clear cyan).
+// (alpha.25, Photon's water: include/fog/simple_fog.glsl biome_water_coeff at commit 26c2906e, MIT, LICENSES/MIT-Photon.txt)
+// Absorption (1/block): Photon's base (0.39, 0.14, 0.07) plus a third of the biome tint's own absorption relative to the forest
+// biome's water colour, so oceans stay Photon's deep clear blue and swamps turn murky green.
 static inline float3 shadeWaterSigmaALin(float3 tintLinear) {
-	float3 t = max(tintLinear, float3(0.004));
-	return float3(0.26, 0.07, 0.035) + 0.09 * -log(t);
+	const float3 forest = float3(0.3125, 0.2575, 0.0512); // -0.15 * log(0.1245, 0.1797, 0.7108)
+	float3 biome = -0.15 * log(max(tintLinear, float3(0.004))) - forest;
+	return max(float3(0.39, 0.14, 0.07) + 0.33 * biome, float3(0.0));
 }
 static inline float3 shadeWaterSigmaA(half3 tint) {
-	// (2.0.1 opt) exact algebraic simplification: -log(max(pow(tint, 2.2), 0.004)) == -2.2*ln(2)*log2(max(tint, 0.004^(1/2.2)))
-	return float3(0.26, 0.07, 0.035) + float3((-0.09h * 2.2h * 0.693147h) * log2(max(tint, half3(0.08138h))));
+	// -0.15 * log(tint^2.2) == (-0.15 * 2.2 * ln 2) * log2(tint), tint clamped as 0.004^(1/2.2)
+	const float3 forest = float3(0.3125, 0.2575, 0.0512);
+	float3 biome = float3((-0.15h * 2.2h * 0.693147h) * log2(max(tint, half3(0.08138h)))) - forest;
+	return max(float3(0.39, 0.14, 0.07) + 0.33 * biome, float3(0.0));
 }
-#define SHADE_WATER_SIGMA_S 0.022 // scattering (1/block), grey: the blue of deep water comes from absorbing red and green
+#define SHADE_WATER_SIGMA_S 0.01 // scattering (1/block, Photon's WATER_SCATTERING): clear water, its blue from absorbing red and green
 
 // A 2D value noise in [0, 1] (smooth, cheap: four hashed lattice corners), for the foam's patches.
 static inline float shadeWaterHash2(float2 c) {
@@ -2166,8 +2172,8 @@ static inline float3 shadeWaterViewPoint(depth2d<float> depth, uint2 q, float2 s
 
 #ifdef SHADE_WATER_DETAIL
 #define SHADE_WATER_DETAIL_SCALE 3.3  // the fine ripples: the baked field this many times smaller
-#define SHADE_WATER_DETAIL_AMP 0.30   // their height scale (slopes: x SHADE_WATER_DETAIL_SCALE)
-#define SHADE_WATER_LONG 0.6          // the long waves' scale
+#define SHADE_WATER_DETAIL_AMP 0.10   // their height scale (slopes: x SHADE_WATER_DETAIL_SCALE; alpha.25: 0.30 -> 0.10, Photon-calm)
+#define SHADE_WATER_LONG 1.0          // the long waves' scale (alpha.25: 0.6 -> 1.0, Photon's gentle visible swells)
 #define SHADE_WATER_PIXEL 0.7         // how far the near ripples' sample point is pulled to its 1/16-block cell's centre
 // The detail sample's rotation R (53 degrees) and its transpose; the detail field's coordinates for absolute xz x.
 static inline float2 shadeWaterRot(float2 v) { return float2(0.6 * v.x - 0.8 * v.y, 0.8 * v.x + 0.6 * v.y); }
@@ -2409,7 +2415,7 @@ static float3 shadeWaterNormal(ShadeWaterIn w, constant ShadeFrame &f, constant 
 	float mv = shadeWaterMoving(float(w.cave.w), w.p); // (FT2.11) a current roughens them (mcopt.shade.water.falls)
 #endif
 #ifdef SHADE_WATER_SMOOTH
-	const float fade = 1.0 / 170.0; // FT1.3: the ripples' texture carries farther (Gael's references: textured to the horizon)
+	const float fade = 1.0 / 110.0; // (alpha.25: 1/170 carried tiny ripples to the horizon, a crowded surface; Photon's fade calmer)
 #else
 	const float fade = 1.0 / 90.0;
 #endif
@@ -2714,7 +2720,10 @@ float3 shadeWaterAbove(ShadeWaterIn w, constant ShadeFrame &f, constant ShadeWat
 	}
 #endif
 	// light scattered toward the eye inside the water: what reaches a mean depth of ~2 blocks, single-scattering albedo
-	float3 inScatter = w.lit * float3(exp(-sigmaT * 2.0h) * (half3(SHADE_WATER_SIGMA_S) / sigmaT) * 0.8h);
+	// (alpha.25) times Photon's multiple-scattering energy (Jessie's approximation: 0.84 albedo / (1 - 0.84 albedo) on top)
+	half3 albedoS = half3(SHADE_WATER_SIGMA_S) / sigmaT;
+	half3 msK = 0.84h * albedoS;
+	float3 inScatter = w.lit * float3(exp(-sigmaT * 2.0h) * albedoS * 0.8h * (1.0h + msK / (1.0h - msK)));
 	float3 body = bottom * float3(tBottom) + inScatter * float3(1.0h - tView);
 #if defined(SHADE_WATER_DETAIL) && !defined(SHADE_WATER_SMOOTH)
 	body *= 1.0 + 0.13 * clamp(pattern, -1.5, 2.5) + 0.35 * smoothstep(0.9, 2.0, pattern);

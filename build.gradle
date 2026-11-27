@@ -198,3 +198,5 @@ loom {
 		}
 	}
 }
+
+apply from: 'tools/qa/qa.gradle'

@@ -144,7 +144,8 @@ static inline float3 shadeVanillaOut(float3 srgb, constant ShadeLook &L) {
 static inline float3 shadeFinish2(float3 radiance, float vanillaFog, constant ShadeFrame &f, constant ShadeLook &L, float ex) {
 #ifdef MCOPT_HDR
 	float3 c = shadeOut(radiance, f, ex);
-	float a = vanillaFog * f.fogColor.a;
+	// (alpha.25) under water shadeFogAir2's physical water fog replaces vanilla's fog colour blend
+	float a = f.flags.x == SHADE_DIM_OVERWORLD && SHADE_CAMERA_UNDERWATER(f) ? 0.0 : vanillaFog * f.fogColor.a;
 	if (a <= 0.0) return c;
 	float3 t = f.flags.y == 1 ? pow(1.0 - a, float3(2.6, 1.25, 1.0)) : float3(1.0 - a);
 	return c * t + f.fogColorHdr.rgb * (1.0 - t); // (the fog colour in HDR: converted once per frame on the CPU)
@@ -305,8 +306,36 @@ static float3 shadeHazeInscatter(float3 p, constant ShadeFrame &f, constant Shad
 	return shadeHazeInscatterFrom(p, f.cameraBlock.y + f.cameraFract.y, f, L, sunVis, T, Ssun);
 }
 
+// (alpha.25) Water fog seen from inside the water, after Photon's water_fog_simple (include/fog/simple_fog.glsl at commit 26c2906e,
+// MIT, LICENSES/MIT-Photon.txt) with its underwater coefficients: Beer-Lambert extinction per channel over the eye-to-point
+// distance, and the sun (forward-scattering phase) and sky light scattered toward the eye inside it, with Jessie's
+// multiple-scattering energy. Replaces vanilla's opaque blue fog wall: near things stay clear, the far water turns deep teal.
+static inline float3 shadeUnderwaterFog(float3 radiance, float3 p, constant ShadeFrame &f, constant ShadeLook &L) {
+	// (alpha.25, clearer than Photon's 0.20 / 0.08 / 0.04 + 0.03 at the owner's request: clean ocean/river water, ~60 blocks of
+	// visibility in blue-green, reds still gone after ~10)
+	const float3 sigmaA = float3(0.11, 0.040, 0.022), sigmaS = float3(0.010);
+	const float3 sigmaT = sigmaA + sigmaS;
+	const float3 albedo = sigmaS / sigmaT;
+	const float3 ms = 0.84 * albedo;
+	float d = length(p);
+	float3 T = exp(-sigmaT * d);
+	float sky = saturate(L.eye.w);
+	float nu = dot(p / max(d, 1e-4), f.lightDirWorld.xyz);
+	const float iso = 0.25 / M_PI_F;
+	float g = 0.4, gg = g * g, den = 1.0 + gg - 2.0 * g * nu;
+	float hg = iso * (1.0 - gg) / (den * sqrt(den));
+	// the light has crossed ~3 blocks of water to reach the volume around the eye
+	float3 sun = f.sunColor.rgb * M_PI_F * exp(-sigmaT * 3.0) * smoothstep(0.0, 0.25, sky) * (0.7 * hg + 0.3 * iso);
+	float3 amb = (f.ambientSky.rgb * M_PI_F * sky + f.ambientBlock.rgb * 0.25) * iso;
+	float3 scatter = (sun + amb) * (1.0 - T) * albedo * (1.0 + ms / (1.0 - ms));
+	return radiance * T + scatter;
+}
+
 static float3 shadeFogAir2(float3 radiance, float3 p, float vanillaFog, float chunkFade, texture2d<half> lut, sampler s,
                            constant ShadeFrame &f, constant ShadeLook &L, constant ShadeResources *R = nullptr, bool leanFog = false) {
+#ifdef MCOPT_HDR
+	if (f.flags.x == SHADE_DIM_OVERWORLD && SHADE_CAMERA_UNDERWATER(f)) return shadeUnderwaterFog(radiance, p, f, L);
+#endif
 	if (!shadeFeature(L, SHADE_FEATURE_HAZE)) return shadeFogAir(radiance, p, vanillaFog, lut, s, f);
 	float d = length(p);
 	float3 v = p / max(d, 1e-4);
