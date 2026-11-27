@@ -166,6 +166,8 @@ class ShadeP1Test {
         assertTrue(vanRes.fsSource().contains("celDL [[buffer(29)]]"));
         assertTrue(vanRes.fsSource().contains("celCL [[buffer(30)]]"));
         assertTrue(vanRes.fsSource().contains("shadeColorLightFrag("));
+        assertTrue(vanRes.fsSource().contains("celClLevels [[texture(28)]]"));
+        assertTrue(vanRes.fsSource().contains("shadeSmoothBlock("));
 
         // Sodium 0.9.x terrain patching (no Sodium classes touched)
         String sodiumTerrainVs = """

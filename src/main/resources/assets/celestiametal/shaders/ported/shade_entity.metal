@@ -80,7 +80,7 @@ static float4 shadeEntityShade(float4 vanilla, float4 albedoSrgb, float4 overlay
 	if (kind != SHADE_ENT_HAND) radiance += float3(albedo) * f.ambientBlock.xyz * shadeDynamicLightsVol(dl, dlIrr, dlDir, p, n, thin, block);
 #endif
 #ifdef SHADE_COLORLIGHT
-	if (kind != SHADE_ENT_HAND) radiance += float3(albedo) * f.ambientBlock.xyz * shadeColorLightFrag(cl, clFine, clCoarse, f, p, float(block));
+	if (kind != SHADE_ENT_HAND) radiance += float3(albedo) * f.ambientBlock.xyz * shadeColorLightFrag(cl, clFine, clCoarse, f, p, n, float(block));
 #endif
 #ifdef MCOPT_HAND
 	float vanillaFog = 0.0;

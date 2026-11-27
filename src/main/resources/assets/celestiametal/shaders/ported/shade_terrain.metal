@@ -36,6 +36,9 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
 	if (debug == 3) albedo = half3(0.45h);
 
 	half block = half(saturate(light.x));
+#ifdef SHADE_COLORLIGHT
+	block = half(shadeSmoothBlock(cl, clLevels, f, p, n, float(block)));
+#endif
 	half sky = half(saturate(light.y));
 	half3 an = abs(hn);
 	bool axisAligned = max(max(an.x, an.y), an.z) > half(0.92);
@@ -57,7 +60,8 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
 	radiance += float3(albedo) * f.ambientBlock.xyz * shadeDynamicLightsVol(dl, dlIrr, dlDir, p, n, thin, block);
 #endif
 #ifdef SHADE_COLORLIGHT
-	radiance += float3(albedo) * f.ambientBlock.xyz * shadeColorLightFrag(cl, clFine, clCoarse, f, p, float(block));
+	float3 clAdd = shadeColorLightFrag(cl, clFine, clCoarse, f, p, n, float(block));
+	radiance += float3(albedo) * f.ambientBlock.xyz * clAdd;
 #endif
 	float vanillaFog = shadeVanillaFog(p, fogRanges.xy, fogRanges.zw);
 	float chunkFade = saturate(1.0 - chunkVis);
@@ -65,6 +69,21 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
 	float3 rgb = shadeFinish2(radiance, vanillaFog, f, L, ex);
 	if (debug == 2) rgb = shadeVanillaOut(n * 0.5 + 0.5, L);
 	if (debug == 1) rgb = shadeVanillaOut(float3(0.25 + 0.75 * float(shadow)), L);
+	if (debug == 9) rgb = shadeVanillaOut(float3(float(block)), L);                                  // vertex block light
+	if (debug == 10) rgb = shadeVanillaOut(float3(dot(rawColor.rgb, float3(0.299, 0.587, 0.114))), L); // vertex colour (AO)
+#ifdef SHADE_COLORLIGHT
+	if (debug == 7 || debug == 8) {
+		// 7: the coloured volume's raw light at this surface (1 = level 15); 8: the colour shift it adds (0.5 = none)
+		float3 w = f.cameraFract.xyz + p + n * 0.5, wf = floor(w);
+		int3 qi = int3(f.cameraBlock.xyz) + int3(wf);
+		float3 raw = cl.fineMin.w != 0 ? shadeClSample(cl, clFine, qi, w - wf, false) : float3(0.0);
+		// (7: red = the bound header is off / the fallback; green = vanilla block light; blue = the volume's light level / 15)
+		float rawMax = max(raw.x, max(raw.y, raw.z));
+		float rawLevel = rawMax > 0.0 ? saturate((15.0 + log2(rawMax)) / 15.0) : 0.0;
+		rgb = debug == 7 ? shadeVanillaOut(float3(cl.fineMin.w == 0 ? 1.0 : 0.0, float(block), rawLevel), L)
+		                 : shadeVanillaOut(saturate(clAdd * 2.0 + 0.5), L);
+	}
+#endif
 	return float4(rgb, vanillaColor.a);
 }
 

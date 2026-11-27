@@ -502,7 +502,8 @@ public final class ShadeShaderPatcher {
         if (!dev.celestia.metal.shade.light.ColorLights.ON) return "";
         return ", constant ShadeColorLights& celCL [[buffer(" + MetalConst.SHADE_BUF_COLORLIGHT + ")]]"
             + ", texture3d<float> celClFine [[texture(" + MetalConst.SHADE_TEX_CL_FINE + ")]]"
-            + ", texture3d<float> celClCoarse [[texture(" + MetalConst.SHADE_TEX_CL_COARSE + ")]]";
+            + ", texture3d<float> celClCoarse [[texture(" + MetalConst.SHADE_TEX_CL_COARSE + ")]]"
+            + ", texture3d<float> celClLevels [[texture(" + MetalConst.SHADE_TEX_CL_LEVELS + ")]]";
     }
 
     private static String captureTerrainTexel(String fsMsl, int sig, int close, int ret, boolean sodium) {

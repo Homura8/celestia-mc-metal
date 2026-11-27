@@ -24,6 +24,7 @@
 #define CM_SHADE_BUF_COLORLIGHT   30
 #define CM_SHADE_TEX_CL_FINE      26
 #define CM_SHADE_TEX_CL_COARSE    27
+#define CM_SHADE_TEX_CL_LEVELS    28
 
 // Dynamic lights (P6a): extra shading-function parameters / arguments, empty when the module is off.
 #ifdef SHADE_DYNLIGHT
@@ -34,8 +35,8 @@
 #define CEL_DL_ARGS
 #endif
 #ifdef SHADE_COLORLIGHT
-#define CEL_CL_PARAMS , constant ShadeColorLights &cl, texture3d<float> clFine, texture3d<float> clCoarse
-#define CEL_CL_ARGS , celCL, celClFine, celClCoarse
+#define CEL_CL_PARAMS , constant ShadeColorLights &cl, texture3d<float> clFine, texture3d<float> clCoarse, texture3d<float> clLevels
+#define CEL_CL_ARGS , celCL, celClFine, celClCoarse, celClLevels
 #else
 #define CEL_CL_PARAMS
 #define CEL_CL_ARGS

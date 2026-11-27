@@ -177,6 +177,15 @@
       "impact": "LOW"
     },
     {
+      "id": "SMOOTH_BLOCK_LIGHT",
+      "label": "Smooth Block Light",
+      "description": "Reads each block's light level per pixel, so torchlight fades smoothly across walls and floors instead of in block-sized patches.",
+      "category": "Lighting & Shadows",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "LOW"
+    },
+    {
       "id": "COLORED_LIGHTS",
       "label": "Coloured Block Lights",
       "description": "Placed lights tint their surroundings in their own colour: soul fire blue, redstone red, copper green, amethyst and portals purple, sea lanterns cyan.",

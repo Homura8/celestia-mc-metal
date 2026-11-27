@@ -40,7 +40,8 @@ struct ShadeColorLights {
 	int4 fineDim;    // xyz sections per axis, w 0
 	int4 coarseMin;  // xyz the coarse window's first coarse section (64-block units), w the coarse slots' first cell (fine slots x 4096)
 	int4 coarseDim;  // xyz coarse sections per axis, w 0
-	float4 tune;     // x strength (mcopt.shade.coloredLights.strength; 0 = off), y glow (.glow), z the edge band (blocks), w 0
+	float4 tune;     // x strength (mcopt.shade.coloredLights.strength; 0 = off), y glow (.glow), z the edge band (blocks),
+	                 // w (Celestia) 1 = smooth block light: the shading reads vanilla's block light from texture 28
 };
 
 #define SHADE_CL_BIAS 16.0
@@ -131,9 +132,25 @@ kernel void shade_cl_flood(uint3 tg3 [[threadgroup_position_in_grid]], uint3 tid
 	}
 	if (float(max(r.x, max(r.y, r.z))) < SHADE_CL_DARK_BELOW) r = uint3(0u);
 	uint3 t = uint3(sc * 16 + l);
-	float4 o = float4(float3(r) * (1.0 / 255.0), 0.0);
+	// (Celestia) alpha marks a cell that holds light: the shading filters over those only (shadeClSample), so a buried cell with
+	// no light (inside a wall, at an inside corner) never pulls the level down next to it.
+	float4 o = float4(float3(r) * (1.0 / 255.0), any(r != 0u) ? 1.0 : 0.0);
 	if (coarse) coarseTex.write(o, t);
 	else fineTex.write(o, t);
+}
+
+// (Celestia) Smooth block light: the listed fine slots' cells from the CPU's levels buffer (2 bytes a cell: vanilla's block
+// light x 17 where the cell is open, 255 where it is open) into the RG8 volume the shading reads (shadeSmoothBlockAt).
+kernel void shade_bl_upload(uint3 tg3 [[threadgroup_position_in_grid]], uint3 tid [[thread_position_in_threadgroup]],
+                            constant ShadeColorLights &H [[buffer(0)]], device const uint *list [[buffer(3)]],
+                            device const uchar2 *levels [[buffer(4)]], texture3d<float, access::write> levelTex [[texture(2)]]) {
+	uint tg = tg3.x, slot = list[tg >> 3], brick = tg & 7u;
+	int4 dm = H.fineDim;
+	int s = int(slot);
+	int3 sc = int3(s % dm.x, s / (dm.x * dm.z), (s / dm.x) % dm.z);
+	int3 l = int3(brick & 1u, (brick >> 1) & 1u, brick >> 2) * 8 + int3(tid);
+	uchar2 v = levels[slot * 4096u + uint((l.y * 16 + l.z) * 16 + l.x)];
+	levelTex.write(float4(float(v.x) * (1.0 / 255.0), float(v.y) * (1.0 / 255.0), 0.0, 0.0), uint3(sc * 16 + l));
 }
 
 // The listed slots emptied (a slot that now holds another world section, or no longer near a coloured light).
@@ -160,8 +177,11 @@ static float3 shadeClSample(constant ShadeColorLights &H, texture3d<float> tex, 
 	// (2.0.1 opt) fine dims (16, 8, 16) * 16 = (256, 128, 256) are powers of two: bitwise mask avoids 3 integer divisions per vertex
 	float3 c = coarse ? float3(shadeClMod(qi >> 2, sz)) + (float3(qi & 3) + qf) * 0.25 : float3(qi & (sz - 1)) + qf;
 	constexpr sampler s(filter::linear, address::repeat, coord::normalized);
-	float3 lv = tex.sample(s, c / float3(sz)).rgb * (255.0 / 8.0) - SHADE_CL_BIAS;
-	return max(lv.x, max(lv.y, lv.z)) < -2.5 ? float3(0.0) : exp2(lv - 15.0);
+	// (Celestia) normalised over the cells that hold light (alpha), faded out over the last half cell at the light's edge
+	float4 t = tex.sample(s, c / float3(sz));
+	if (t.a < 1e-3) return float3(0.0);
+	float3 lv = t.rgb / t.a * (255.0 / 8.0) - SHADE_CL_BIAS;
+	return max(lv.x, max(lv.y, lv.z)) < -2.5 ? float3(0.0) : exp2(lv - 15.0) * saturate(t.a * 2.0);
 }
 
 // How far point qi (blocks) is inside a window (blocks per section unit u), in blocks: < 0 outside.
@@ -178,7 +198,9 @@ static inline float shadeClInside(int3 qi, int4 mn, int4 dm, int u) {
 // is clearly brighter than the volume's (a light it doesn't know yet), nothing.
 static float3 shadeColorLightAt(constant ShadeColorLights &H, texture3d<float> fineTex, texture3d<float> coarseTex, int3 qi, float3 qf,
                                 float block) {
-	if (H.fineMin.w == 0 || H.tune.x <= 0.0 || block < 0.02) return float3(0.0);
+	// (Celestia: no early out where vanilla's block light is 0. The boosted lights' glow reaches past vanilla's light and fades on
+	// its own; cutting it there drew a hard contour once the block light is smooth.)
+	if (H.fineMin.w == 0 || H.tune.x <= 0.0) return float3(0.0);
 	float band = max(H.tune.z, 1.0);
 	float wFine = saturate(shadeClInside(qi, H.fineMin, H.fineDim, 16) / band);
 	float3 L = 0.0;
@@ -211,13 +233,37 @@ static float3 shadeColorLightAt(constant ShadeColorLights &H, texture3d<float> f
 	return add;
 }
 
+// (Celestia) Smooth block light at point qi + qf (blocks; the caller passes the point half a block in front of the face): vanilla's
+// own per-block light levels, filtered over the open cells only (an opaque cell counts for nothing, so walls never darken the
+// corners next to them). Vanilla's smooth lighting works its light out per face, so neighbouring faces disagree at their shared
+// edges (block-sized patches, strongest by walls) and the HDR torch curve shows every step; this is continuous across blocks.
+// Returns `block` (the vertex value) where the volume has nothing: off, outside the window or near its edge, cells not read yet.
+static float shadeSmoothBlockAt(constant ShadeColorLights &H, texture3d<float> levelTex, int3 qi, float3 qf, float block) {
+	if (H.tune.w < 0.5 || shadeClInside(qi, H.fineMin, H.fineDim, 16) < 1.0) return block;
+	int3 sz = H.fineDim.xyz * 16;
+	constexpr sampler s(filter::linear, address::repeat, coord::normalized);
+	float2 v = levelTex.sample(s, (float3(qi & (sz - 1)) + qf) / float3(sz)).rg;
+	return v.y < 0.2 ? block : saturate(v.x / v.y);
+}
+
 #ifdef SHADE_COLORLIGHT
-// Celestia: per fragment at camera-relative p; ShadeFrame's cameraBlock (integer) + cameraFract give the exact world block, so
-// the toroidal lookup has no float precision loss far from the origin.
+// Celestia: smooth block light per fragment at camera-relative p with face normal n (see shadeSmoothBlockAt).
+static inline float shadeSmoothBlock(constant ShadeColorLights &H, texture3d<float> levelTex, constant ShadeFrame &f, float3 p,
+                                     float3 n, float block) {
+	if (H.tune.w < 0.5) return block;
+	float3 w = f.cameraFract.xyz + p + n * 0.5;
+	float3 wf = floor(w);
+	return shadeSmoothBlockAt(H, levelTex, int3(f.cameraBlock.xyz) + int3(wf), w - wf, block);
+}
+
+// Celestia: per fragment at camera-relative p with face normal n; ShadeFrame's cameraBlock (integer) + cameraFract give the exact
+// world block, so the toroidal lookup has no float precision loss far from the origin. The volume is read half a block in front
+// of the face, in the open cell vanilla's own block light for that face comes from: read on the surface itself, the filter
+// would blend in the cells inside the block (and at inside corners a buried cell with no light), dimming every edge.
 static inline float3 shadeColorLightFrag(constant ShadeColorLights &H, texture3d<float> fineTex, texture3d<float> coarseTex,
-                                         constant ShadeFrame &f, float3 p, float block) {
+                                         constant ShadeFrame &f, float3 p, float3 n, float block) {
 	if (H.fineMin.w == 0) return float3(0.0);
-	float3 w = f.cameraFract.xyz + p;
+	float3 w = f.cameraFract.xyz + p + n * 0.5;
 	float3 wf = floor(w);
 	return shadeColorLightAt(H, fineTex, coarseTex, int3(f.cameraBlock.xyz) + int3(wf), w - wf, block);
 }

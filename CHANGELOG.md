@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.1.0-alpha.23
+
+### Added
+- **Smooth Block Light** (on by default, in Lighting & Shadows). Torchlight now fades smoothly across walls and floors.
+  - **Before:** vanilla's smooth lighting works out each face separately, so neighbouring faces disagree at their edges. That leaves block-sized patches, strongest beside walls, and the HDR torch curve made every step visible.
+  - **How:** Celestia now copies each section's block light from the client light engine into a 256×128×256-block volume around the camera and filters it per pixel. Only open cells are counted, so walls never darken the corners next to them.
+  - **Coverage:** vanilla terrain, Sodium terrain and water. Outside the volume, the vertex light is used as before.
+  - **Light changes:** a new `ClientChunkCache.onLightUpdate` hook keeps the volume current when a torch is placed or broken.
+
+### Fixed
+- **Coloured block light didn't show in-game.** Section reads used `PalettedContainer.getAll`, which in 26.3 visits each palette entry once rather than every cell. The volume got only a few block IDs per section, so placed lights rarely landed where they belonged. Sections are now read cell by cell, with the last block's ID reused for runs of the same block. Soul lanterns, redstone, copper, amethyst and sea lanterns now light their surroundings in their colour, on vanilla terrain and with Sodium.
+- **Orange stripes along inside corners under coloured light.** The volume is now read half a block in front of each face, in the open cell vanilla's own light comes from. Before, it was read on the surface, where the filter blended in cells inside the block.
+- **Coloured light edges.** The boosted lights, such as redstone and amethyst, spread further than vanilla's own light so their colour shows. Their glow is no longer cut off where vanilla's light reaches 0; that cut showed as a hard contour. The coloured volume is now also filtered over lit cells only, which removes the small orange patches where two walls meet the floor.
+- F3 `Colour N` now counts the volume sections near coloured lights. It used to count only sections still spreading, which reads 0 once the light settles.
+
+### Added
+- Terrain debug views (`ShadeFrame.debug`):
+  - 7: the coloured volume's light level, with red where the bound header is off.
+  - 8: the colour shift the volume adds.
+  - 9: the block light the shading uses.
+  - 10: the vertex colour (vanilla AO).
+- Native ABI 10 adds `cm_cl_levels` and smooth-light uploads in `cm_cl_frame`. The volume is bound at texture 28.
+- Native Test 2r also covers the in-game window layout (16×8×16 fine sections at world coordinates near 1000, with a 12×4×12 coarse window) and the smooth block light filter. Halfway between levels 10 and 6 it reads 8/15, and beside an opaque row it reads 10/15.
+
+### Verified in-game
+- Isolated QA clients with a scripted probe mod ran through closed test rooms lit only by block light.
+- **Vanilla 26.3 and Sodium 0.9.3-beta.1:** coloured lights show their colours, and so do the held torch, the blaze and dropped glowstone. Every preset rendered, and Dynamic Lights and Coloured Block Lights switch on and off live.
+- **Heavily modded instance (110 mods, including Create and Alex's Caves):** a copy of the mod list with this build loads on Metal 4 with no resource-reload failure, and every scripted scene renders.
+
 ## 0.1.0-alpha.22
 
 ### Added

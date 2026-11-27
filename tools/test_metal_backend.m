@@ -2694,7 +2694,17 @@ static void verify_p6b_colorlights(NSString *assetsDir, int32_t preferMetal4) {
         "fragment half4 cl_probe_fs(ClProbeOut in [[stage_in]], constant ShadeColorLights &H [[buffer(30)]],\n"
         "    texture3d<float> fine [[texture(26)]], texture3d<float> coarse [[texture(27)]]) {\n"
         "  int3 qi = in.uv.x < 0.5 ? int3(5, 8, 8) : int3(14, 8, 8);\n"
-        "  return half4(half3(shadeColorLightAt(H, fine, coarse, qi, float3(0.5), 12.0 / 15.0)), 1.0h); }\n", cl];
+        "  return half4(half3(shadeColorLightAt(H, fine, coarse, qi, float3(0.5), 12.0 / 15.0)), 1.0h); }\n"
+        "fragment half4 cl_probe_world_fs(ClProbeOut in [[stage_in]], constant ShadeColorLights &H [[buffer(30)]],\n"
+        "    texture3d<float> fine [[texture(26)]], texture3d<float> coarse [[texture(27)]]) {\n"
+        "  int3 qi = int3(994, 140, 1010);\n"
+        "  return half4(in.uv.x < 0.5 ? half3(shadeClSample(H, fine, qi, float3(0.5), false))\n"
+        "                             : half3(shadeColorLightAt(H, fine, coarse, qi, float3(0.5), 8.0 / 15.0)), 1.0h); }\n"
+        "fragment half4 cl_probe_smooth_fs(ClProbeOut in [[stage_in]], constant ShadeColorLights &H [[buffer(30)]],\n"
+        "    texture3d<float> lv [[texture(28)]]) {\n"
+        "  float v = in.uv.x < 0.5 ? shadeSmoothBlockAt(H, lv, int3(992 + 7, 128 + 3, 1008 + 9), float3(1.0, 0.5, 0.5), -1.0)\n"
+        "                          : shadeSmoothBlockAt(H, lv, int3(992 + 3, 128 + 12, 1008 + 4), float3(0.5, 0.5, 1.0), -1.0);\n"
+        "  return half4(half(v), 0.0h, 0.0h, 1.0h); }\n", cl];
     char err[4096] = {0};
     int64_t lib = cm_compile_msl_library(ctx, probeSrc.UTF8String, "P6b probe", 1, err, sizeof(err));
     if (!lib) { fprintf(stderr, "FAIL 2r compiling coloured-light probe: %s\n", err); exit(1); }
@@ -2748,7 +2758,7 @@ static void verify_p6b_colorlights(NSString *assetsDir, int32_t preferMetal4) {
     // 2. Clear + 24 spread steps converge the light (15 levels at one per block).
     double t0 = CFAbsoluteTimeGetCurrent();
     cm_cmd_begin(ctx);
-    cm_cl_frame(ctx, state, 0, FINE_SLOTS + COARSE_SLOTS, FINE_SLOTS, 0, 24);
+    cm_cl_frame(ctx, state, 0, FINE_SLOTS + COARSE_SLOTS, FINE_SLOTS, 0, 24, 0, 0);
     assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
     double floodMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0;
     CL_PROBE();
@@ -2767,6 +2777,88 @@ static void verify_p6b_colorlights(NSString *assetsDir, int32_t preferMetal4) {
     cm_cl_header(state, 1, header);
     CL_PROBE();
     assert(px[0] == 0.0f && px[2] == 0.0f);
+    // 4. The in-game layout: a 16 x 8 x 16-section window at section (55, 4, 54) with a 12 x 4 x 12 coarse one, a soul lantern
+    //    (level 10) at world (994, 140, 1012); only its slot spreads. The probe reads the volume one block in front of it.
+    {
+        cm_cl_free(ctx, state);
+        enum { FX = 16, FY = 8, FZ = 16, CX = 12, CY = 4, CZ = 12, FINE = FX * FY * FZ, COARSE = CX * CY * CZ };
+        state = cm_cl_new(ctx, kernels.UTF8String, FX * 16, FY * 16, FZ * 16, CX * 16, CY * 16, CZ * 16,
+                          (int64_t)(FINE + COARSE) * CELLS, 3 * (FINE + COARSE) + 64, 6, err, sizeof(err));
+        assert(state);
+        uint8_t *ids2 = (uint8_t *)(uintptr_t)cm_cl_ids(state);
+        int wx = 994, wy = 140, wz = 1012;
+        int sx = wx >> 4, sy = wy >> 4, sz = wz >> 4;
+        int slotL = (((sy % FY) + FY) % FY * FZ + ((sz % FZ) + FZ) % FZ) * FX + ((sx % FX) + FX) % FX;
+        ids2[(size_t)slotL * CELLS + (((wy & 15) * 16 + (wz & 15)) * 16 + (wx & 15))] = 16 + 1 * 16 + 10;
+        int32_t h2[20] = {0};
+        h2[0] = 55; h2[1] = 4; h2[2] = 54; h2[3] = 1;
+        h2[4] = FX; h2[5] = FY; h2[6] = FZ; h2[7] = 1;
+        h2[8] = (994 >> 6) - CX / 2; h2[9] = (140 >> 6) - CY / 2; h2[10] = (1012 >> 6) - CZ / 2; h2[11] = FINE * CELLS;
+        h2[12] = CX; h2[13] = CY; h2[14] = CZ; h2[15] = 0;
+        float *t2 = (float *)&h2[16];
+        t2[0] = 1.0f; t2[1] = 1.0f; t2[2] = 16.0f;
+        cm_cl_header(state, 0, h2);
+        uint32_t *l2 = (uint32_t *)(uintptr_t)cm_cl_list(state, 0);
+        int m = 0;
+        for (int i = 0; i < FINE; i++) l2[m++] = (uint32_t)i;
+        for (int i = 0; i < COARSE; i++) l2[m++] = 0x80000000u | (uint32_t)i;
+        l2[m++] = (uint32_t)slotL;
+        cm_cmd_begin(ctx);
+        cm_cl_frame(ctx, state, 0, FINE + COARSE, 1, 0, 24, 0, 0);
+        assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+        // probe: re-point the probe shader at (994, 140, 1010) through a second fragment entry
+        int64_t fs2 = cm_compile_function(lib, "cl_probe_world_fs", 0, 0, 0, err, sizeof(err));
+        assert(fs2);
+        int64_t pso2 = cm_render_pipeline_create(ctx, vs, fs2, NULL, 0, NULL, 0, &color, 1, -1, CM_TOPO_TRIANGLES,
+                                                 0, 0, 0, 0, 0, 0, 0, "cl probe world", err, sizeof(err));
+        assert(pso2);
+        cm_cmd_begin(ctx);
+        cm_shade_fullscreen_pass(ctx, pso2, target, NULL, 0, NULL, 0, NULL, 0);
+        cm_blit_copy_texture_to_buffer(ctx, target, 0, 0, 0, 0, 2, 1, read, 0, 16);
+        assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+        printf("[Backend %s] Test 2r in-game layout: raw (%g, %g, %g) add (%g, %g, %g)\n", api,
+               (double)px[0], (double)px[1], (double)px[2], (double)px[4], (double)px[5], (double)px[6]);
+        if (!(px[2] > 0.005f && px[6] > 0.05f)) { fprintf(stderr, "FAIL 2r in-game layout: no light in the volume\n"); exit(1); }
+        cm_pipeline_destroy(ctx, pso2);
+        cm_function_destroy(fs2);
+
+        // 5. Smooth block light: the soul lantern's section with level 10 for local x < 8, 6 beyond, one opaque row (y 12, z 5).
+        //    Halfway between cells 7 and 8 the filter gives 8 / 15; next to the opaque row only the open cells count (10 / 15).
+        uint8_t *lv = (uint8_t *)(uintptr_t)cm_cl_levels(state);
+        assert(lv);
+        for (int c = 0; c < CELLS; c++) {
+            int x = c & 15, z = (c >> 4) & 15, y = c >> 8;
+            bool open = !(y == 12 && z == 5);
+            lv[((size_t)slotL * CELLS + c) * 2] = open ? (uint8_t)((x < 8 ? 10 : 6) * 17) : 0;
+            lv[((size_t)slotL * CELLS + c) * 2 + 1] = open ? 255 : 0;
+        }
+        h2[19] = 0; t2[3] = 1.0f; // tune.w: smooth block light on
+        cm_cl_header(state, 1, h2);
+        uint32_t *l3 = (uint32_t *)(uintptr_t)cm_cl_list(state, 1);
+        l3[0] = (uint32_t)slotL;
+        cm_cmd_begin(ctx);
+        cm_cl_frame(ctx, state, 1, 0, 0, 0, 1, 0, 1);
+        assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+        int64_t fs3 = cm_compile_function(lib, "cl_probe_smooth_fs", 0, 0, 0, err, sizeof(err));
+        assert(fs3);
+        int64_t pso3 = cm_render_pipeline_create(ctx, vs, fs3, NULL, 0, NULL, 0, &color, 1, -1, CM_TOPO_TRIANGLES,
+                                                 0, 0, 0, 0, 0, 0, 0, "cl probe smooth", err, sizeof(err));
+        assert(pso3);
+        cm_cmd_begin(ctx);
+        cm_shade_fullscreen_pass(ctx, pso3, target, NULL, 0, NULL, 0, NULL, 0);
+        cm_blit_copy_texture_to_buffer(ctx, target, 0, 0, 0, 0, 2, 1, read, 0, 16);
+        assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+        float mid = px[0], wall = px[4];
+        printf("[Backend %s] Test 2r smooth block light: between levels 10 and 6 %.3f (want %.3f), beside an opaque row %.3f (want %.3f)\n",
+               api, (double)mid, 8.0 / 15.0, (double)wall, 10.0 / 15.0);
+        if (fabsf(mid - 8.0f / 15.0f) > 0.02f || fabsf(wall - 10.0f / 15.0f) > 0.02f) {
+            fprintf(stderr, "FAIL 2r smooth block light\n");
+            exit(1);
+        }
+        cm_pipeline_destroy(ctx, pso3);
+        cm_function_destroy(fs3);
+    }
+
     // Warm cost of the in-game step (one spread step a frame over the slots near coloured lights): 8 sections, best of 10.
     double stepMs = 1e9;
     for (int it = 0; it < 12; it++) {
@@ -2774,7 +2866,7 @@ static void verify_p6b_colorlights(NSString *assetsDir, int32_t preferMetal4) {
         for (int i = 0; i < FINE_SLOTS; i++) l2[i] = (uint32_t)i;
         double s0 = CFAbsoluteTimeGetCurrent();
         cm_cmd_begin(ctx);
-        cm_cl_frame(ctx, state, 2, 0, FINE_SLOTS, 0, 1);
+        cm_cl_frame(ctx, state, 2, 0, FINE_SLOTS, 0, 1, 0, 0);
         assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
         double ms = (CFAbsoluteTimeGetCurrent() - s0) * 1000.0;
         if (it >= 2 && ms < stepMs) stepMs = ms;

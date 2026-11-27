@@ -31,7 +31,8 @@ final class ColorLightNative {
     private static final MethodHandle LIST = MetalNative.shadeDowncall("cm_cl_list", FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_INT));
     private static final MethodHandle HEADER = MetalNative.shadeDowncall("cm_cl_header", FunctionDescriptor.ofVoid(JAVA_LONG, JAVA_INT, ADDRESS));
     private static final MethodHandle FRAME = MetalNative.shadeDowncall("cm_cl_frame", FunctionDescriptor.ofVoid(JAVA_LONG, JAVA_LONG,
-        JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT));
+        JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT));
+    private static final MethodHandle LEVELS = MetalNative.shadeDowncall("cm_cl_levels", FunctionDescriptor.of(JAVA_LONG, JAVA_LONG));
 
     private ColorLightNative() {
     }
@@ -99,9 +100,18 @@ final class ColorLightNative {
         }
     }
 
-    static void frame(long ctx, long state, int slot, int clears, int fine, int coarse, int fineSteps) {
+    /** The shared smooth-block-light buffer: 2 bytes a fine cell, a fine slot's 4096 cells at slot x 8192. */
+    static long levels(long state) {
         try {
-            FRAME.invokeExact(ctx, state, slot, clears, fine, coarse, fineSteps);
+            return (long) LEVELS.invokeExact(state);
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    static void frame(long ctx, long state, int slot, int clears, int fine, int coarse, int fineSteps, int uploadOffset, int uploads) {
+        try {
+            FRAME.invokeExact(ctx, state, slot, clears, fine, coarse, fineSteps, uploadOffset, uploads);
         } catch (Throwable t) {
             throw rethrow(t);
         }
