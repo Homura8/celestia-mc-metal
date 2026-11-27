@@ -3092,6 +3092,132 @@ static void verify_p6b_colorlights(NSString *assetsDir, int32_t preferMetal4) {
     cm_device_destroy(ctx);
 }
 
+static void verify_motion_blur(NSString *assetsDir, int32_t preferMetal4) {
+    const char *api = preferMetal4 ? "Metal 4" : "Metal 3";
+    int64_t ctx = cm_device_create(preferMetal4, 0, "");
+    assert(ctx);
+    NSString *ported = [assetsDir stringByAppendingPathComponent:@"shaders/ported"];
+    NSMutableString *source = [NSMutableString stringWithString:@"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n"];
+    for (NSString *fn in @[@"shade_slots.metal", @"shade_api.metal", @"shade_look.metal", @"shade_common.metal",
+                           @"shade_m2.metal", @"shade_dims.metal", @"shade_post.metal", @"motion_blur.metal"]) {
+        [source appendFormat:@"%@\n", read_file_str(shade_path(ported, fn))];
+    }
+    char err[4096] = {0};
+    int64_t lib = cm_compile_msl_library(ctx, source.UTF8String, "MotionBlur", 1, err, sizeof(err));
+    if (!lib) {
+        fprintf(stderr, "FAIL motion blur compile (%s): %s\n", api, err);
+        exit(1);
+    }
+    int64_t vs = cm_compile_function(lib, "shade_fs_vs", 0, 0, 0, err, sizeof(err));
+    int64_t fs = cm_compile_function(lib, "shade_motion_fs", 0, 0, 0, err, sizeof(err));
+    assert(vs && fs);
+    CMColorAttachmentDesc color = { CM_FMT_RGBA16_FLOAT, 0, 1, 0, 0, 1, 0, 0, 15 };
+    int64_t pso = cm_render_pipeline_create(ctx, vs, fs, NULL, 0, NULL, 0, &color, 1, -1, CM_TOPO_TRIANGLES,
+                                            0, 0, 0, 0, 0, 0, 0, "shade_motion_fs", err, sizeof(err));
+    assert(pso);
+
+    enum { W = 96, H = 64 };
+    float frame[256] = {0};
+    float look[284] = {0};
+    float gpu[128] = {0};
+    // Reversed-Z projection matching verify_p3b_atmosphere: w_world = 10 * z_ndc, z_world = -1.
+    const float inv[16] = {1,0,0,0, 0,1,0,0, 0,0,0,10, 0,0,-1,0};
+    const float sameProj[16] = {1,0,0,0, 0,1,0,0, 0,0,0,-1, 0,0,0.1f,0};
+    float panProj[16] = {1,0,0,0, 0,1,0,0, -0.04f,0,0,-1, 0,0,0.1f,0}; // +0.02 screen-U shift
+    memcpy(frame + 48, inv, sizeof(inv));
+    memcpy(look, sameProj, sizeof(sameProj));
+    memcpy(look + 16, sameProj, sizeof(sameProj));
+    look[196] = 1.0f / 120.0f; // dt
+    look[255] = 0.0f;          // cut flag
+
+    int64_t frameBuf = cm_buffer_create(ctx, sizeof(frame), frame, "MB frame");
+    int64_t lookBuf = cm_buffer_create(ctx, sizeof(look), look, "MB look");
+    int64_t gpuBuf = cm_buffer_create(ctx, sizeof(gpu), gpu, "MB gpu");
+    int64_t resBuf = cm_buffer_create(ctx, 256, NULL, "MB res");
+    int64_t scene = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "MB scene");
+    int64_t dst = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "MB dst");
+    int64_t depth = cm_texture_create(ctx, CM_FMT_D32_FLOAT, W, H, 1, 1, 0, 1, 1, 0, "MB depth");
+    int64_t shadow = cm_texture_create(ctx, CM_FMT_D32_FLOAT, 1, 1, 2, 1, 0, 1, 1, 0, "MB shadow");
+    int64_t lut = cm_texture_create(ctx, CM_FMT_RGBA16_FLOAT, 8, 8, 1, 1, 0, 1, 1, 0, "MB lut");
+    int64_t cmp = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 1, CM_CMP_GREATER_EQUAL);
+    int64_t lin = cm_sampler_create(ctx, 1, 1, 1, 1, 0, 1, 0, 0);
+    int64_t readBuf = cm_buffer_create(ctx, W * H * 8, NULL, "MB read");
+    assert(frameBuf && lookBuf && gpuBuf && resBuf && scene && dst && depth && shadow && lut && cmp && lin && readBuf);
+
+    // Upload half-black (x < 48) / half-white (x >= 48) RGBA16F scene + depth buffer.
+    static uint16_t scenePx[W * H * 4];
+    static float depthPx[W * H];
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            uint16_t c = (x >= W / 2) ? 0x3c00u : 0x0000u; // half(1.0) vs half(0.0)
+            size_t o = (size_t)(y * W + x) * 4;
+            scenePx[o] = c; scenePx[o + 1] = c; scenePx[o + 2] = c; scenePx[o + 3] = 0x3c00u;
+            depthPx[y * W + x] = 0.2f;
+        }
+    }
+    int64_t inputs[2] = { scene, depth };
+    float params[8] = { 2.0f, 1.0f, 1.0f, 0.0f, (float)W, (float)H, 0.0f, 0.0f };
+    const __fp16 *outPx = (const __fp16 *)(void *)cm_buffer_contents(readBuf);
+    float *lookMapped = (float *)(void *)cm_buffer_contents(lookBuf);
+
+    // 1. Stationary camera: edge stays sharp.
+    cm_cmd_begin(ctx);
+    cm_shade_set_globals(ctx, frameBuf, 0, lookBuf, 0, gpuBuf, 0, resBuf, 0, shadow, lut, cmp, lin);
+    cm_shade_set_enabled(ctx, 1);
+    cm_blit_write_texture(ctx, scene, scenePx, sizeof(scenePx), W * 8, 0, 0, 0, 0, W, H);
+    cm_blit_write_texture(ctx, depth, depthPx, sizeof(depthPx), W * 4, 0, 0, 0, 0, W, H);
+    cm_shade_fullscreen_pass(ctx, pso, dst, inputs, 2, NULL, 0, params, sizeof(params));
+    cm_blit_copy_texture_to_buffer(ctx, dst, 0, 0, 0, 0, W, H, readBuf, 0, W * 8);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    assert((float)outPx[(32 * W + 46) * 4] < 0.02f && (float)outPx[(32 * W + 49) * 4] > 0.98f);
+
+    // 2. Horizontal camera yaw pan with uniform depth: blurs across the x = 48 boundary.
+    memcpy(lookMapped + 16, panProj, sizeof(panProj));
+    cm_cmd_begin(ctx);
+    cm_shade_fullscreen_pass(ctx, pso, dst, inputs, 2, NULL, 0, params, sizeof(params));
+    cm_blit_copy_texture_to_buffer(ctx, dst, 0, 0, 0, 0, W, H, readBuf, 0, W * 8);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    float panLeft = (float)outPx[(32 * W + 47) * 4], panRight = (float)outPx[(32 * W + 48) * 4];
+    for (int i = 0; i < W * H * 4; i++) assert(isfinite((float)outPx[i]));
+    assert(panLeft > 0.08f && panRight < 0.92f);
+
+    // 3. Silhouette rejection: near foreground (x < 48, z = 0.5) must reject bright sky (x >= 48, z = 0.0).
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++)
+            depthPx[y * W + x] = (x < W / 2) ? 0.5f : 0.0f;
+    cm_cmd_begin(ctx);
+    cm_blit_write_texture(ctx, depth, depthPx, sizeof(depthPx), W * 4, 0, 0, 0, 0, W, H);
+    cm_shade_fullscreen_pass(ctx, pso, dst, inputs, 2, NULL, 0, params, sizeof(params));
+    cm_blit_copy_texture_to_buffer(ctx, dst, 0, 0, 0, 0, W, H, readBuf, 0, W * 8);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    float fgEdge = (float)outPx[(32 * W + 47) * 4];
+    assert(fgEdge < 0.05f);
+
+    // 4. Cut/teleport guard (exposureRef.w = 1): skips blur even with large velocity.
+    for (int i = 0; i < W * H; i++) depthPx[i] = 0.2f;
+    lookMapped[255] = 1.0f;
+    cm_cmd_begin(ctx);
+    cm_blit_write_texture(ctx, depth, depthPx, sizeof(depthPx), W * 4, 0, 0, 0, 0, W, H);
+    cm_shade_fullscreen_pass(ctx, pso, dst, inputs, 2, NULL, 0, params, sizeof(params));
+    cm_blit_copy_texture_to_buffer(ctx, dst, 0, 0, 0, 0, W, H, readBuf, 0, W * 8);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    assert((float)outPx[(32 * W + 47) * 4] < 0.02f && (float)outPx[(32 * W + 48) * 4] > 0.98f);
+
+    assert(cm_device_drain_errors(ctx, err, sizeof(err)) == 0);
+    printf("[Backend %s] Motion blur (stationary, yaw pan=%.2f/%.2f, silhouette=%.3f, cut guard) OK\n",
+           api, (double)panLeft, (double)panRight, (double)fgEdge);
+
+    cm_buffer_destroy(ctx, readBuf);
+    cm_sampler_destroy(ctx, lin); cm_sampler_destroy(ctx, cmp);
+    cm_texture_destroy(ctx, lut); cm_texture_destroy(ctx, shadow);
+    cm_texture_destroy(ctx, depth); cm_texture_destroy(ctx, dst); cm_texture_destroy(ctx, scene);
+    cm_buffer_destroy(ctx, resBuf); cm_buffer_destroy(ctx, gpuBuf); cm_buffer_destroy(ctx, lookBuf); cm_buffer_destroy(ctx, frameBuf);
+    cm_pipeline_destroy(ctx, pso);
+    cm_function_destroy(vs); cm_function_destroy(fs);
+    cm_library_destroy(lib);
+    cm_device_destroy(ctx);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <assetsDir>\n", argv[0]);
@@ -3131,6 +3257,8 @@ int main(int argc, char **argv) {
     verify_p6a_dynlights([NSString stringWithUTF8String:argv[1]], 0);
     verify_p6b_colorlights([NSString stringWithUTF8String:argv[1]], 1);
     verify_p6b_colorlights([NSString stringWithUTF8String:argv[1]], 0);
+    verify_motion_blur([NSString stringWithUTF8String:argv[1]], 1);
+    verify_motion_blur([NSString stringWithUTF8String:argv[1]], 0);
     printf("ALL CELESTIA METAL NATIVE GPU TESTS PASSED.\n");
     return 0;
 }

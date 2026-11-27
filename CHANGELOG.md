@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Camera motion blur.**
+  - **Post pass:** ported camera-velocity HDR motion blur (`motion_blur.metal`, `shade_motion_fs`) before bloom and tonemapping, using `invViewProj` / `prevViewProjNoJitter` reprojection with a `1/120 s` virtual shutter independent of frame rate, a `4%` trail cap, up to `12` adaptive dithered taps, depth silhouette rejection, cut/teleport guards, and zero GPU overhead on stationary frames (leaving sharp history intact for water reflections).
+  - **Options:** added **Motion Blur** (`MOTION_BLUR_ENABLED`, off by default) and **Motion Blur Strength** (`MOTION_BLUR_STRENGTH`, `0.25..2.0`, default `1.0`) under **Post-Processing**.
 - **Aurora Borealis.**
   - **Sky pass:** reduced-resolution (`0.36×`) volumetric aurora curtain pass (`shade_aurora_pass`, `aurora.metal`) rendered in `RG11B10Float` before world draws, sampled by the sky and screen-space water reflections (`ShadeResources.aurora`) so clouds naturally occlude curtains and opaque cloud cores skip the tap.
   - **Modes & palettes:** **Aurora Borealis** (`Off`, `Cold Biomes`, `Auto` — clear nights in cold biomes plus roughly one in three clear nights elsewhere, `Always`), **Aurora Brightness** (`0.2..2.5`), and **Aurora Palette** (`Daily` curated emerald/aqua/lavender/rose cycle keyed noon-to-noon, `Classic`, `Pastel`) under **Sky & Atmosphere**, plus a subtle night-sky ambient tint on snow and terrain. Off by default in Performance.

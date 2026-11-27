@@ -612,6 +612,27 @@
       "min": 0.5,
       "max": 1.5,
       "step": 0.05
+    },
+    {
+      "id": "MOTION_BLUR_ENABLED",
+      "label": "Motion Blur",
+      "description": "Adds shutter-timed directional blur during camera movement and turns, with depth silhouette protection.",
+      "category": "Post-Processing",
+      "type": "TOGGLE",
+      "default": "false",
+      "impact": "LOW"
+    },
+    {
+      "id": "MOTION_BLUR_STRENGTH",
+      "label": "Motion Blur Strength",
+      "description": "Controls the virtual shutter length (1.0 matches a 1/120 s shutter, independent of frame rate).",
+      "category": "Post-Processing",
+      "type": "FLOAT_SLIDER",
+      "default": "1.0",
+      "impact": "NEGLIGIBLE",
+      "min": 0.25,
+      "max": 2.0,
+      "step": 0.05
     }
   ]
 }
