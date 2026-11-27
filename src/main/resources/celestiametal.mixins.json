@@ -17,7 +17,8 @@
     "GameRendererMixin",
     "ViewAreaAccessor",
     "ShadeLevelRendererMixin",
-    "ShadeFaceShadeMixin"
+    "ShadeFaceShadeMixin",
+    "ShadeDimsFogMixin"
   ],
   "injectors": {
     "defaultRequire": 1

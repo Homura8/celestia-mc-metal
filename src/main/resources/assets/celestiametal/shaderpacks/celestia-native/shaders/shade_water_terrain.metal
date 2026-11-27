@@ -53,7 +53,8 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
 	float2 du = dfdx(uv), dv = dfdy(uv);
 	float waterFootprint = max(length(dpx), length(dpy));
 
-	if (f.flags.x != SHADE_DIM_OVERWORLD || shadeDev(f, SHADE_DEV_FLAT_LIGHT)) {
+	bool dimsLit = f.flags.x != SHADE_DIM_OVERWORLD && shadeDimsLit(f);
+	if ((f.flags.x != SHADE_DIM_OVERWORLD && !dimsLit) || shadeDev(f, SHADE_DEV_FLAT_LIGHT)) {
 		return float4(shadeVanillaOut(vanillaColor.rgb, L), vanillaColor.a);
 	}
 
@@ -70,8 +71,8 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
 		          an.x != amax && an.y != amax ? sign(n.z) : 0.0h);
 	}
 
-	int waterSprite = int(shadeQuadMax(float(shadeWaterSprite(uv, wp))));
-	bool waterFull = waterSprite > 0 && wp.state.x > 0.5 && !shadeDev(f, SHADE_DEV_NO_WATER);
+	int waterSprite = dimsLit ? 0 : int(shadeQuadMax(float(shadeWaterSprite(uv, wp))));
+	bool waterFull = !dimsLit && waterSprite > 0 && wp.state.x > 0.5 && !shadeDev(f, SHADE_DEV_NO_WATER);
 
 	// 12 (debug): which water fragments draw (red: full water, green: other water, e.g. glass and ice in this pass),
 	// blue: how coplanar the fragment is with the opaque surface behind it (1 = same plane; underwater only)
@@ -98,12 +99,25 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
 	block = half(shadeSmoothBlock(cl, clLevels, f, p, float3(n), float(block)));
 #endif
 	half sky = half(saturate(light.y));
-	half shadow = sky <= 0.3h ? half(1.0) : shadeShadow(shadowMap, shadowCmp, f, p, n, false);
+	half shadow = dimsLit
+		? (f.flags.x == SHADE_DIM_END ? shadeShadow(shadowMap, shadowCmp, f, p, n, false) : half(1.0))
+		: (sky <= 0.3h ? half(1.0) : shadeShadow(shadowMap, shadowCmp, f, p, n, false));
 	float ex = shadeExposure(f, g);
 	float alpha = vanillaColor.a;
 	float3 radiance;
 
-	if (waterFull) {
+	if (dimsLit) {
+		half3 albedo = f.flags.w == 3 ? half3(0.45h) : shadeToLinear(half3(saturate(texel.rgb * rawColor.rgb)));
+		radiance = shadeLit2(albedo, n, half(0.0), block, half(0.0), thin, false, f, L, shadeLook2Near(p, L))
+		         + shadeLitDimsExtra(albedo, n, shadow, thin, false, p, f, L)
+		         + shadeNetherEmissive(albedo, block, L);
+#ifdef SHADE_DYNLIGHT
+		radiance += float3(albedo) * f.ambientBlock.xyz * shadeDynamicLightsVol(dl, dlIrr, dlDir, p, float3(n), thin, block);
+#endif
+#ifdef SHADE_COLORLIGHT
+		radiance += float3(albedo) * f.ambientBlock.xyz * shadeColorLightFrag(cl, clFine, clCoarse, f, p, float3(n), float(block));
+#endif
+	} else if (waterFull) {
 		half3 up = half3(0.0h, 1.0h, 0.0h);
 		ShadeWaterIn wi;
 		wi.p = p;
@@ -179,15 +193,20 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
 		alpha = other.a;
 	}
 
-	float vanillaFog = shadeVanillaFog(p, fogRanges.xy, fogRanges.zw);
-	float chunkFade = saturate(1.0 - chunkVis);
-	if (!(waterFull && SHADE_WDEV_IS(f, SHADE_WDEV_NO_FOG))) {
-		float chunkEdge = shadeChunkEdgeFade(p, f, L);
-		// Water and glossy translucents use quad operations. Fade their depth only after the trace.
-		if (f.flags.w == 0 && shadeChunkEdgeDiscard(chunkEdge, fragCoord.xy)) discard_fragment();
-		radiance = shadeFogAir2(radiance, p, vanillaFog, chunkFade, skyLut, skyLutSmplr, f, L, sr, chunkEdge);
+	float3 rgb;
+	if (dimsLit) {
+		rgb = shadeOut(radiance, f, ex);
+	} else {
+		float vanillaFog = shadeVanillaFog(p, fogRanges.xy, fogRanges.zw);
+		float chunkFade = saturate(1.0 - chunkVis);
+		if (!(waterFull && SHADE_WDEV_IS(f, SHADE_WDEV_NO_FOG))) {
+			float chunkEdge = shadeChunkEdgeFade(p, f, L);
+			// Water and glossy translucents use quad operations. Fade their depth only after the trace.
+			if (f.flags.w == 0 && shadeChunkEdgeDiscard(chunkEdge, fragCoord.xy)) discard_fragment();
+			radiance = shadeFogAir2(radiance, p, vanillaFog, chunkFade, skyLut, skyLutSmplr, f, L, sr, chunkEdge);
+		}
+		rgb = shadeFinish2(radiance, vanillaFog, f, L, ex);
 	}
-	float3 rgb = shadeFinish2(radiance, vanillaFog, f, L, ex);
 	if (f.flags.w == 2) rgb = shadeVanillaOut(float3(n) * 0.5 + 0.5, L);
 	if (f.flags.w == 1) rgb = shadeVanillaOut(float3(0.25 + 0.75 * float(shadow)), L);
 	return float4(rgb, alpha);

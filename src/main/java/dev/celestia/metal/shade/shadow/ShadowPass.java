@@ -14,6 +14,7 @@ import com.mojang.renderpearl.api.textures.GpuTextureView;
 import dev.celestia.metal.backend.CelestiaTextureView;
 import dev.celestia.metal.backend.MetalConst;
 import dev.celestia.metal.backend.MetalNative;
+import dev.celestia.metal.shade.ShadeDims;
 import dev.celestia.metal.shade.ShadeFrame;
 import dev.celestia.metal.shade.ShadeSettings;
 import dev.celestia.metal.shade.ShadeSky;
@@ -143,7 +144,9 @@ public final class ShadowPass {
         active = false;
         draw[0] = false;
         draw[1] = false;
-        if (!options.enabled() || !isShadowsEnabled() || sky == null || sky.skybox != DimensionType.Skybox.OVERWORLD || camera == null) {
+        boolean end = sky != null && sky.skybox == DimensionType.Skybox.END && ShadeDims.endShadowsActive();
+        if (!options.enabled() || !isShadowsEnabled() || sky == null
+            || (sky.skybox != DimensionType.Skybox.OVERWORLD && !end) || camera == null) {
             cascades[1].valid = false;
             frame.shadowsEnabled = false;
             frame.cascades = 0;
@@ -172,7 +175,15 @@ public final class ShadowPass {
             }
         }
 
-        chooseLight(sky.sunAngle, sky.moonAngle);
+        if (end) {
+            float[] el = ShadeDims.endLight();
+            light[0] = el[0];
+            light[1] = el[1];
+            light[2] = el[2];
+            lightKey = 0x454E44_00000001L;
+        } else {
+            chooseLight(sky.sunAngle, sky.moonAngle);
+        }
         double x = camera.pos.x, y = camera.pos.y, z = camera.pos.z;
         this.camX = x;
         this.camY = y;

@@ -36,7 +36,8 @@
       "SSR_BUDGET": "28",
       "SSR_DISTANCE": "176",
       "CLOUD_STEPS": "18",
-      "VL_STEPS": "16"
+      "VL_STEPS": "16",
+      "NETHER_SHIMMER": "true"
     },
     "Ultra": {
       "SHADOW_RES": "4096",
@@ -46,7 +47,8 @@
       "SSR_BUDGET": "32",
       "SSR_DISTANCE": "224",
       "CLOUD_STEPS": "24",
-      "VL_STEPS": "20"
+      "VL_STEPS": "20",
+      "NETHER_SHIMMER": "true"
     }
   },
   "options": [
@@ -245,6 +247,33 @@
       "min": 0.25,
       "max": 2.0,
       "step": 0.05
+    },
+    {
+      "id": "NETHER_END_LOOKS",
+      "label": "Nether and End Looks",
+      "description": "Applies dimension lighting, layered fog, End sky and camera media effects.",
+      "category": "Sky & Atmosphere",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "LOW"
+    },
+    {
+      "id": "END_SHADOWS",
+      "label": "End Key Light Shadows",
+      "description": "Casts shadows from the End's violet key light.",
+      "category": "Sky & Atmosphere",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "MEDIUM"
+    },
+    {
+      "id": "NETHER_SHIMMER",
+      "label": "Nether Heat Shimmer",
+      "description": "Adds subtle heat distortion over distant Nether terrain.",
+      "category": "Sky & Atmosphere",
+      "type": "TOGGLE",
+      "default": "false",
+      "impact": "LOW"
     },
     {
       "id": "WATER_ENABLED",

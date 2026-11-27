@@ -22,11 +22,12 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
                                 constant ShadeResources &sr CEL_DL_PARAMS CEL_CL_PARAMS) {
 	// Always compute derivatives across the full 2x2 quad before any non-uniform early return.
 	float3 dpx = dfdx(p), dpy = dfdy(p);
-	if (f.flags.x != SHADE_DIM_OVERWORLD || shadeDev(f, SHADE_DEV_FLAT_LIGHT)) {
+	bool dimsLit = f.flags.x != SHADE_DIM_OVERWORLD && shadeDimsLit(f);
+	if ((f.flags.x != SHADE_DIM_OVERWORLD && !dimsLit) || shadeDev(f, SHADE_DEV_FLAT_LIGHT)) {
 		return float4(shadeVanillaOut(vanillaColor.rgb, L), vanillaColor.a);
 	}
 	float chunkEdge = shadeChunkEdgeFade(p, f, L);
-	if (f.flags.w == 0 && shadeChunkEdgeDiscard(chunkEdge, pixel)) discard_fragment();
+	if (!dimsLit && f.flags.w == 0 && shadeChunkEdgeDiscard(chunkEdge, pixel)) discard_fragment();
 	float3 nf = cross(dpx, dpy);
 	float3 n = nf * rsqrt(max(dot(nf, nf), 1e-30));
 	// Orient flat face normal toward the camera (gl_Position/view-ray convention).
@@ -47,15 +48,20 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
 	bool thin = isCutout && !axisAligned;
 	bool foliage = isCutout && axisAligned;
 
-	half shadow = shadeShadow(shadowMap, shadowCmp, f, p, hn, thin);
+	half shadow = (!dimsLit || f.flags.x == SHADE_DIM_END) ? shadeShadow(shadowMap, shadowCmp, f, p, hn, thin) : half(1.0);
 	float ex = shadeExposure(f, g);
 	float nearW = shadeLook2Near(p, L);
 	float2 wet = 0.0;
-	if (L.wet.x + L.wet.z > 0.005) wet = shadeWetSurface(albedo, p, hn, sky, foliage, f, L, sr.weatherNoise);
-	float3 radiance = shadeLit2(albedo, hn, sky, block, shadow, thin, foliage, f, L, nearW);
-	if (wet.x + wet.y > 0.005) radiance = shadeWetLight(radiance, wet, p, hn, shadow, f, skyLut, skyLutSmplr);
-	if (L.flash.w > 0.0) {
-		radiance += float3(albedo) * L.flash.w * saturate(dot(n, L.flash.xyz)) * float(shadeSkyCurve(sky));
+	if (!dimsLit && L.wet.x + L.wet.z > 0.005) wet = shadeWetSurface(albedo, p, hn, sky, foliage, f, L, sr.weatherNoise);
+	float3 radiance = shadeLit2(albedo, hn, dimsLit ? half(0.0) : sky, block, dimsLit ? half(0.0) : shadow, thin, foliage, f, L, nearW);
+	if (dimsLit) {
+		radiance += shadeLitDimsExtra(albedo, hn, shadow, thin, foliage, p, f, L);
+		radiance += shadeNetherEmissive(albedo, block, L);
+	} else {
+		if (wet.x + wet.y > 0.005) radiance = shadeWetLight(radiance, wet, p, hn, shadow, f, skyLut, skyLutSmplr);
+		if (L.flash.w > 0.0) {
+			radiance += float3(albedo) * L.flash.w * saturate(dot(n, L.flash.xyz)) * float(shadeSkyCurve(sky));
+		}
 	}
 #ifdef SHADE_DYNLIGHT
 	// Dynamic lights (P6a): the irradiance volume, two trilinear fetches half a block in front of the face.
@@ -65,10 +71,16 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
 	float3 clAdd = shadeColorLightFrag(cl, clFine, clCoarse, f, p, n, float(block));
 	radiance += float3(albedo) * f.ambientBlock.xyz * clAdd;
 #endif
-	float vanillaFog = shadeVanillaFog(p, fogRanges.xy, fogRanges.zw);
-	float chunkFade = saturate(1.0 - chunkVis);
-	radiance = shadeFogAir2(radiance, p, vanillaFog, chunkFade, skyLut, skyLutSmplr, f, L, sr, chunkEdge);
-	float3 rgb = shadeFinish2(radiance, vanillaFog, f, L, ex);
+	float vanillaFog = 0.0;
+	float3 rgb;
+	if (dimsLit) {
+		rgb = shadeOut(radiance, f, ex);
+	} else {
+		vanillaFog = shadeVanillaFog(p, fogRanges.xy, fogRanges.zw);
+		float chunkFade = saturate(1.0 - chunkVis);
+		radiance = shadeFogAir2(radiance, p, vanillaFog, chunkFade, skyLut, skyLutSmplr, f, L, sr, chunkEdge);
+		rgb = shadeFinish2(radiance, vanillaFog, f, L, ex);
+	}
 	if (debug == 2) rgb = shadeVanillaOut(n * 0.5 + 0.5, L);
 	if (debug == 1) rgb = shadeVanillaOut(float3(0.25 + 0.75 * float(shadow)), L);
 	// 11: lit as usual, solid-block pixels whose derivative normal is not axis-aligned in pure red (edge-on derivative check)

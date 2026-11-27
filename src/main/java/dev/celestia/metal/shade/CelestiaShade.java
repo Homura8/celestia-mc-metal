@@ -106,8 +106,8 @@ public final class CelestiaShade {
     private long linearClampSamp;
 
     private long lutLib, lutVsFn, lutFsFn, psoSkyLut;
-    private long postLib, fsVsFn, bloomDown0Fn, bloomDownFn, bloomUpFn, finalFn, histFn, expFn, milkyWayFn;
-    private long psoBloomDown0, psoBloomDown, psoBloomUp, psoFinalRgba8, psoFinalBgra8, psoHist, psoExp;
+    private long postLib, fsVsFn, bloomDown0Fn, bloomDownFn, bloomUpFn, finalFn, finalDimsFn, histFn, expFn, milkyWayFn;
+    private long psoBloomDown0, psoBloomDown, psoBloomUp, psoFinalRgba8, psoFinalBgra8, psoFinalDimsRgba8, psoFinalDimsBgra8, psoHist, psoExp;
 
     private long psoAo, aoTexture;
     private int aoW, aoH;
@@ -260,6 +260,7 @@ public final class CelestiaShade {
             bloomDownFn = MetalNative.compileFunction(postLib, "shade_bloom_down", false, 0, 0, err);
             bloomUpFn = MetalNative.compileFunction(postLib, "shade_bloom_up", false, 0, 0, err);
             finalFn = MetalNative.compileFunction(postLib, "shade_final", false, 0, 0, err);
+            finalDimsFn = MetalNative.compileFunction(postLib, "shade_final_dims", false, 0, 0, err);
             histFn = MetalNative.compileFunction(postLib, "shade_histogram", false, 0, 0, err);
             expFn = MetalNative.compileFunction(postLib, "shade_exposure", false, 0, 0, err);
             milkyWayFn = MetalNative.compileFunction(postLib, "shade_milkyway_bake", false, 0, 0, err);
@@ -269,6 +270,8 @@ public final class CelestiaShade {
             psoBloomUp = createFullscreenPso(ctx, fsVsFn, bloomUpFn, BLOOM_FORMAT, "CelestiaShade.BloomUp", err);
             psoFinalRgba8 = createFullscreenPso(ctx, fsVsFn, finalFn, MetalConst.FMT_RGBA8_UNORM, "CelestiaShade.FinalRGBA8", err);
             psoFinalBgra8 = createFullscreenPso(ctx, fsVsFn, finalFn, MetalConst.FMT_BGRA8_UNORM, "CelestiaShade.FinalBGRA8", err);
+            psoFinalDimsRgba8 = createFullscreenPso(ctx, fsVsFn, finalDimsFn, MetalConst.FMT_RGBA8_UNORM, "CelestiaShade.FinalDimsRGBA8", err);
+            psoFinalDimsBgra8 = createFullscreenPso(ctx, fsVsFn, finalDimsFn, MetalConst.FMT_BGRA8_UNORM, "CelestiaShade.FinalDimsBGRA8", err);
             if (SSAO) {
                 long aoFn = MetalNative.compileFunction(postLib, "shade_ambient_occlusion", false, 0, 0, err);
                 try {
@@ -442,7 +445,6 @@ public final class CelestiaShade {
         var lightmap = game.lightmapRenderState;
         frame.nightVision = lightmap.nightVisionEffectIntensity;
         frame.minAmbient = 0.0025f + 0.02f * lightmap.brightness + 0.25f * frame.nightVision;
-        shadowPass.prepare(device.handle(), camera, sky, frame, applied.shadows());
 
         frame.frameIndex = ++frameCounter;
         long now = System.nanoTime();
@@ -466,6 +468,8 @@ public final class CelestiaShade {
         }
         look.setHasPrevScene(hasPrevHdrWorld && prevHdrWorldTex != 0L);
         look.update(frame, moonPhaseIndex, (float) clampedDt);
+        ShadeDims.update(frame, look, level, sky, camera.blockPos, (float) clampedDt, snap, applied.dimensions());
+        shadowPass.prepare(device.handle(), camera, sky, frame, applied.shadows());
         // The fog colour in HDR once per frame (was shadeLdrToHdr per fragment: ~13 pow per pixel on every surface and the sky
         // whenever fog applies, ~8 ms of the sky pass alone underwater at 3024x1742 on an M1 Pro)
         float[] fogHdr = look.ldrToHdr(frame.fogColor[0], frame.fogColor[1], frame.fogColor[2]);
@@ -477,7 +481,9 @@ public final class CelestiaShade {
         ByteBuffer slotBb = ringSeg.asSlice((long) ringSlot * RING_SLOT_STRIDE, RING_SLOT_STRIDE)
             .asByteBuffer().order(ByteOrder.nativeOrder());
         frame.pack(slotBb);
-        look.pack(slotBb.slice(LOOK_OFFSET, ShadeLook.SIZE).order(ByteOrder.nativeOrder()), frame);
+        ByteBuffer lookBb = slotBb.slice(LOOK_OFFSET, ShadeLook.SIZE).order(ByteOrder.nativeOrder());
+        look.pack(lookBb, frame);
+        ShadeDims.pack(lookBb, slotBb, frame, applied.dimensions(), applied.post().exposureEv());
 
         publishGlobals(ringSlot);
         MetalNative.shadeSetEnabled(device.handle(), true);
@@ -510,10 +516,9 @@ public final class CelestiaShade {
             ShadeSettings.Lights lights = settings.lights();
             boolean colour = lights.colored() && lights.coloredStrength() > 0f;
             if (colour || lights.smoothBlock()) {
-                // Coloured block light (P6b) and smooth block light: reads, spread and uploads before the world passes. Only the
-                // Overworld terrain shading reads them today (the Nether / End keep vanilla shading), so elsewhere the module idles.
-                boolean overworld = frame.dimension == ShadeFrame.DIM_OVERWORLD;
-                ColorLights.applyLive(colour && overworld, lights.coloredStrength(), lights.coloredGlow(), lights.smoothBlock() && overworld);
+                // Coloured block light (P6b) and smooth block light: reads, spread and uploads before the world passes.
+                boolean activeDim = frame.dimension == ShadeFrame.DIM_OVERWORLD || ShadeDims.isLit();
+                ColorLights.applyLive(colour && activeDim, lights.coloredStrength(), lights.coloredGlow(), lights.smoothBlock() && activeDim);
                 ColorLights.frame(device.handle(), level, camera.pos.x, camera.pos.y, camera.pos.z);
             } else {
                 ColorLights.disable(device.handle());
@@ -638,7 +643,12 @@ public final class CelestiaShade {
 
         texArgSeg.set(ValueLayout.JAVA_LONG, 40, ao != 0L ? ao : hdrWorldTex);
         int outFmt = MetalConst.toNativeFormat(outTex.getFormat());
-        long psoFinal = (outFmt == MetalConst.FMT_BGRA8_UNORM) ? psoFinalBgra8 : psoFinalRgba8;
+        boolean useDimsFinal = ShadeDims.isLit()
+            || frame.fogType == ShadeFrame.FOG_LAVA
+            || frame.fogType == ShadeFrame.FOG_POWDER_SNOW;
+        long psoFinal = useDimsFinal
+            ? ((outFmt == MetalConst.FMT_BGRA8_UNORM) ? psoFinalDimsBgra8 : psoFinalDimsRgba8)
+            : ((outFmt == MetalConst.FMT_BGRA8_UNORM) ? psoFinalBgra8 : psoFinalRgba8);
         MetalNative.shadeFullscreenPass(ctx, psoFinal, ct.handle(),
             texArgSeg, 6, MemorySegment.NULL, 0, pushSeg, 96);
 
@@ -658,7 +668,7 @@ public final class CelestiaShade {
     }
 
     private long renderAo(long ctx, long depth) {
-        if (psoAo == 0L || frame.dimension != ShadeFrame.DIM_OVERWORLD
+        if (psoAo == 0L || (frame.dimension != ShadeFrame.DIM_OVERWORLD && !ShadeDims.isLit())
             || !settings.shadows().ssao() || settings.shadows().ssaoStrength() == 0f) return 0L;
         int w = (hdrWidth + 1) / 2, h = (hdrHeight + 1) / 2;
         if (aoTexture == 0L || aoW != w || aoH != h) {
@@ -846,6 +856,8 @@ public final class CelestiaShade {
             if (psoBloomUp != 0L) MetalNative.pipelineDestroy(ctx, psoBloomUp);
             if (psoFinalRgba8 != 0L) MetalNative.pipelineDestroy(ctx, psoFinalRgba8);
             if (psoFinalBgra8 != 0L) MetalNative.pipelineDestroy(ctx, psoFinalBgra8);
+            if (psoFinalDimsRgba8 != 0L) MetalNative.pipelineDestroy(ctx, psoFinalDimsRgba8);
+            if (psoFinalDimsBgra8 != 0L) MetalNative.pipelineDestroy(ctx, psoFinalDimsBgra8);
             if (psoHist != 0L) MetalNative.computePipelineDestroy(ctx, psoHist);
             if (psoExp != 0L) MetalNative.computePipelineDestroy(ctx, psoExp);
             if (dummyShadowTex != 0L) MetalNative.textureDestroy(ctx, dummyShadowTex);
@@ -865,14 +877,15 @@ public final class CelestiaShade {
         if (bloomDownFn != 0L) MetalNative.functionDestroy(bloomDownFn);
         if (bloomUpFn != 0L) MetalNative.functionDestroy(bloomUpFn);
         if (finalFn != 0L) MetalNative.functionDestroy(finalFn);
+        if (finalDimsFn != 0L) MetalNative.functionDestroy(finalDimsFn);
         if (histFn != 0L) MetalNative.functionDestroy(histFn);
         if (expFn != 0L) MetalNative.functionDestroy(expFn);
         if (milkyWayFn != 0L) MetalNative.functionDestroy(milkyWayFn);
         if (postLib != 0L) MetalNative.libraryDestroy(postLib);
-        psoSkyLut = psoBloomDown0 = psoBloomDown = psoBloomUp = psoFinalRgba8 = psoFinalBgra8 = psoHist = psoExp = 0L;
+        psoSkyLut = psoBloomDown0 = psoBloomDown = psoBloomUp = psoFinalRgba8 = psoFinalBgra8 = psoFinalDimsRgba8 = psoFinalDimsBgra8 = psoHist = psoExp = 0L;
         dummyShadowTex = skyLutTex = milkyWayTex = shadowCompareSamp = linearClampSamp = 0L;
         ringBuf = resBuf = gpuBuf = 0L;
-        lutVsFn = lutFsFn = lutLib = fsVsFn = bloomDown0Fn = bloomDownFn = bloomUpFn = finalFn = histFn = expFn = milkyWayFn = postLib = 0L;
+        lutVsFn = lutFsFn = lutLib = fsVsFn = bloomDown0Fn = bloomDownFn = bloomUpFn = finalFn = finalDimsFn = histFn = expFn = milkyWayFn = postLib = 0L;
         initialized = false;
     }
 }

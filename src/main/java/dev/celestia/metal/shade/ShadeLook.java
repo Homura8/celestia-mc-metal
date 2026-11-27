@@ -24,8 +24,8 @@ public final class ShadeLook {
         SUN_GEOM = 256, SUN_ART = 272, AMBIENT_ART = 288, BOUNCE = 304,
         GRADE0 = 320, GRADE1 = 336, GRADE2 = 352, GRADE3 = 368, TONEMAP = 384, OUTPUT = 400, BLOOM = 416,
         FOG_R = 432, FOG_M = 448, FOG_MISC = 464, VL = 480, WET = 496, WIND = 512, CLOUDS0 = 528, CLOUDS1 = 544,
-        WATER_SHADOW = 560, WATER = 576, WATER_ABS = 592, TINT_RECT = 608, EYE = 624, SKY_GOLD_H = 640, SKY_GOLD_Z = 656,
-        NIGHT = 672, SSR = 688, CLOCK2 = 704, RENDER_SCALE = 720, EXPOSURE_CFG = 736, DIM_TINT = 752, FLASH = 768, DT = 784,
+        WATER_SHADOW = 560, WATER = 576, DIM_TINT = 592, TINT_RECT = 608, EYE = 624, SKY_GOLD_H = 640, SKY_GOLD_Z = 656,
+        NIGHT = 672, SSR = 688, CLOCK2 = 704, RENDER_SCALE = 720, EXPOSURE_CFG = 736, WEATHER_B = 752, FLASH = 768, DT = 784,
         TIER = 800, GRADE_IN = 816, GRADE_OUT = 864, GRADE_IN_INV = 912, GRADE_OUT_INV = 960, EXPOSURE_REF = 1008,
         USER0 = 1024, USER1 = 1040, USER2 = 1056, USER3 = 1072, USER4 = 1088, LOOK2A = 1104, LOOK2B = 1120;
 
@@ -307,7 +307,7 @@ public final class ShadeLook {
         putMat(this.scratchMat.identity(), b, CLOUD_SHADOW_VP);
         put4(b, WATER_SHADOW, 0f, 0f, 0f, 0f);
         put4(b, WATER, 0f, 0f, 0f, 0f);
-        put4(b, WATER_ABS, 0f, 0f, 0f, 0f);
+        put4(b, DIM_TINT, 0f, 0f, 0f, 0f);
         put4(b, TINT_RECT, 1f, 1f, -1f, -1f);
         put4(b, SUN_GEOM, (float) Math.toRadians(ShadeSky.SUN_TILT), SUN_RADIUS, MOON_RADIUS, (float) Math.toRadians(this.elevation));
         float[] l = f.sky.light;
@@ -349,7 +349,7 @@ public final class ShadeLook {
         put4(b, SSR, this.hasPrevScene ? 1f : 0f, 0f, 0f, 0f);
         float nightUp = EV_UP - (EV_UP - EV_UP_NIGHT) * (1f - smooth(-10f, -2f, this.elevation)) * this.outdoor;
         put4(b, EXPOSURE_CFG, EV_DOWN, nightUp, TAU_UP, TAU_DOWN);
-        put4(b, DIM_TINT, w[4], w[5], w[6], w[7]);
+        put4(b, WEATHER_B, w[4], w[5], w[6], w[7]);
         put4(b, FLASH, flashX, flashY, flashZ, flashStrength);
         put4(b, RENDER_SCALE, f.renderScale, (float) (Math.log(Math.max(f.mipScale, 1e-4f)) / Math.log(2.0)), f.width, f.height);
         put4(b, DT, this.dt, f.gameTimeSeconds, 0f, this.rising);
@@ -547,6 +547,17 @@ public final class ShadeLook {
 
     private static float linearStep(float e0, float e1, float x) {
         return Math.min(Math.max((x - e0) / (e1 - e0), 0f), 1f);
+    }
+
+    /** Recomputes Lottes tonemap parameters for a custom contrast and writes TONEMAP + OUTPUT.w. */
+    static void writeTonemap(ByteBuffer L, float contrast) {
+        double wa = Math.pow(WHITE, contrast), ma = Math.pow(MID_IN, contrast);
+        double wad = Math.pow(WHITE, contrast * SHOULDER), mad = Math.pow(MID_IN, contrast * SHOULDER);
+        float toneB = (float) ((wa / 1.0 - ma / MID_OUT) / (wad - mad));
+        float toneBeta = (float) (ma / MID_OUT - mad * toneB);
+        float inverseMax = Math.min(0.80f, 0.95f / (toneB * SHOULDER));
+        put4(L, TONEMAP, contrast, SHOULDER, toneB, toneBeta);
+        L.putFloat(OUTPUT + 12, inverseMax);
     }
 
     private static void putMat(Matrix4f m, ByteBuffer b, int at) {

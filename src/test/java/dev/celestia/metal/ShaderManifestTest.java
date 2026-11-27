@@ -29,7 +29,7 @@ class ShaderManifestTest {
 
         assertEquals(ShaderPackManifest.PackKind.WORLD_MSL, nativePack.kind);
         assertEquals(List.of("Performance", "Balanced", "Quality", "Ultra"), List.copyOf(nativePack.presets.keySet()));
-        assertEquals(44, nativePack.options.size());
+        assertEquals(47, nativePack.options.size());
         assertTrue(nativePack.passes.isEmpty());
     }
 

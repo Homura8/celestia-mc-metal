@@ -4,14 +4,20 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.level.Level;
 
 /**
  * The comparison scenes (the same for any renderer: Celestia, or Iris + a reference pack) and the screenshot mode. Positions are
  * around the QA world's pond (Qa.buildScene): its water spans y 141-147 (surface ~147.9), pillars at z 10-15.
  */
 final class Shots {
-    /** name, time of day, weather, tp command (feet position, yaw, pitch). */
-    record Scene(String name, int time, String weather, String tp) {}
+    /** name, time of day, weather, dimension, tp command (feet position, yaw, pitch). */
+    record Scene(String name, int time, String weather, ResourceKey<Level> dimension, String tp) {
+        Scene(String name, int time, String weather, String tp) {
+            this(name, time, weather, Level.OVERWORLD, tp);
+        }
+    }
 
     static final List<Scene> SCENES = List.of(
         new Scene("pond-morning", 1500, "clear", "tp @a 0.5 149.3 -14.5 0 -8"),
@@ -23,7 +29,9 @@ final class Shots {
         new Scene("vista-sunset", 12300, "clear", "tp @a 40.5 210 40.5 135 12"),
         new Scene("vista-up", 6000, "clear", "tp @a 40.5 210 40.5 135 -35"),
         new Scene("vista-night", 18000, "clear", "tp @a 40.5 210 40.5 135 -10"),
-        new Scene("vista-rain", 6000, "rain", "tp @a 40.5 210 40.5 135 12")); // (last: rain and wetness take long to clear)
+        new Scene("vista-rain", 6000, "rain", "tp @a 40.5 210 40.5 135 12"), // (last Overworld: rain and wetness take long to clear)
+        new Scene("nether", 6000, "clear", Level.NETHER, "execute in minecraft:the_nether run tp @a 0.5 52 0.5 45 8"),
+        new Scene("end", 6000, "clear", Level.END, "execute in minecraft:the_end run tp @a 0.5 76 -48.5 0 8"));
 
     private Shots() {}
 
@@ -39,16 +47,24 @@ final class Shots {
     /** Sets the time, weather and camera of a scene (the settle step after it waits for the result). */
     static Qa.Step enter(Scene sc) {
         return Qa.once(mc -> {
-            Qa.cmd(mc, "time set " + sc.time());
-            Qa.cmd(mc, "weather " + sc.weather());
-            Qa.cmd(mc, sc.tp());
+            if (sc.dimension() == Level.OVERWORLD) {
+                Qa.cmd(mc, "time set " + sc.time());
+                Qa.cmd(mc, "weather " + sc.weather());
+                String tp = sc.tp().startsWith("tp ") ? "execute in minecraft:overworld run " + sc.tp() : sc.tp();
+                Qa.cmd(mc, tp);
+            } else {
+                Qa.cmd(mc, sc.tp());
+            }
         });
     }
 
     /** Waits for a scene: the common settle, plus the rain at its target (and, in rain, time for surfaces to get wet). */
     static Qa.Step settle(Scene sc) {
-        boolean rain = "rain".equals(sc.weather());
-        return Qa.settle(rain ? 240 : 40, 600, mc -> {
+        boolean overworld = sc.dimension() == Level.OVERWORLD;
+        boolean rain = overworld && "rain".equals(sc.weather());
+        return Qa.settle(rain ? 240 : (overworld ? 40 : 80), 600, mc -> {
+            if (mc.level == null || mc.level.dimension() != sc.dimension()) return false;
+            if (!overworld) return true;
             float r = mc.level.getRainLevel(1f);
             return rain ? r >= 0.99f : r <= 0.01f;
         });
@@ -71,8 +87,10 @@ final class Shots {
                 s.add(Qa.ticks(k + 1 < repeat ? every : 2));
             }
         }
-        s.add(Qa.once(mc -> Qa.cmd(mc, "weather clear")));
-        s.add(Qa.settle(20, 600, mc -> mc.level.getRainLevel(1f) <= 0.01f));
+        if (selected().stream().anyMatch(sc -> "rain".equals(sc.weather()))) {
+            s.add(Qa.once(mc -> Qa.cmd(mc, "execute in minecraft:overworld run weather clear")));
+            s.add(Qa.settle(20, 600, mc -> mc.level == null || mc.level.dimension() != Level.OVERWORLD || mc.level.getRainLevel(1f) <= 0.01f));
+        }
     }
 
     static Scene byName(String name) {
