@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Aurora Borealis.**
+  - **Sky pass:** reduced-resolution (`0.36×`) volumetric aurora curtain pass (`shade_aurora_pass`, `aurora.metal`) rendered in `RG11B10Float` before world draws, sampled by the sky and screen-space water reflections (`ShadeResources.aurora`) so clouds naturally occlude curtains and opaque cloud cores skip the tap.
+  - **Modes & palettes:** **Aurora Borealis** (`Off`, `Cold Biomes`, `Auto` — clear nights in cold biomes plus roughly one in three clear nights elsewhere, `Always`), **Aurora Brightness** (`0.2..2.5`), and **Aurora Palette** (`Daily` curated emerald/aqua/lavender/rose cycle keyed noon-to-noon, `Classic`, `Pastel`) under **Sky & Atmosphere**, plus a subtle night-sky ambient tint on snow and terrain. Off by default in Performance.
 - **Nether and End dimension looks, plus camera media.**
   - **Nether:** 5-biome blended ambient and layered drifting fog (Wastes, Crimson Forest, Warped Forest, Soul Sand Valley, Basalt Deltas), warm flickering lava up-light from the lava sea, lifted Nether particle motes so warped spores and ash don't read as dark specks, and optional distant **Nether Heat Shimmer** (on in Quality/Ultra).
   - **The End:** fixed violet key light with 2-cascade shadows (**End Key Light Shadows**), violet ambient, thin haze, procedural End sky (`minecraft:pipeline/end_sky` with indigo gradient, turning nebula, crisp stars, void horizon beams, and End flash), and dragon-fight boss-fog fallback in the final pass.

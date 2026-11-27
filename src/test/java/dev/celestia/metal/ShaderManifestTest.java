@@ -29,7 +29,7 @@ class ShaderManifestTest {
 
         assertEquals(ShaderPackManifest.PackKind.WORLD_MSL, nativePack.kind);
         assertEquals(List.of("Performance", "Balanced", "Quality", "Ultra"), List.copyOf(nativePack.presets.keySet()));
-        assertEquals(47, nativePack.options.size());
+        assertEquals(50, nativePack.options.size());
         assertTrue(nativePack.passes.isEmpty());
     }
 
@@ -63,10 +63,18 @@ class ShaderManifestTest {
         assertTrue(applied.lights().colored());
         assertEquals(1f, applied.lights().coloredGlow());
         assertTrue(applied.lights().smoothBlock());
+        assertEquals(0, applied.sky().auroraMode());
+
+        ShaderOptionState balanced = new ShaderOptionState(nativePack);
+        ShadeSettings balancedSettings = ShadeSettings.from(balanced);
+        assertEquals(2, balancedSettings.sky().auroraMode());
+        assertEquals(1f, balancedSettings.sky().auroraBrightness(), 1e-6f);
+        assertEquals(0, balancedSettings.sky().auroraPalette());
 
         ShaderOptionState draft = state.copy();
         draft.applyPreset("Ultra");
         assertEquals(4096, ShadeSettings.from(draft).shadows().resolution());
+        assertEquals(2, ShadeSettings.from(draft).sky().auroraMode());
         assertEquals(1024, ShadeSettings.from(state).shadows().resolution());
         draft.set("EXPOSURE", "NaN");
         assertEquals(0f, ShadeSettings.from(draft).post().exposureEv());

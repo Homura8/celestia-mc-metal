@@ -23,6 +23,7 @@ final class Shots {
         new Scene("pond-morning", 1500, "clear", "tp @a 0.5 149.3 -14.5 0 -8"),
         new Scene("pond-noon", 6000, "clear", "tp @a 0.5 149.3 -14.5 0 -8"),
         new Scene("pond-sunset", 12300, "clear", "tp @a 0.5 149.3 -14.5 -90 -6"),
+        new Scene("pond-night", 18000, "clear", "tp @a 0.5 149.3 -14.5 0 -10"),
         new Scene("underwater", 1500, "clear", "tp @a 0.5 144.0 -14.5 0 -4"),
         new Scene("underwater-noon", 6000, "clear", "tp @a 0.5 143.0 -14.5 0 0"), // (sun overhead: the shafts come down)
         new Scene("vista-noon", 6000, "clear", "tp @a 40.5 210 40.5 135 12"),

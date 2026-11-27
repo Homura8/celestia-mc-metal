@@ -2268,7 +2268,7 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
         @"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n#define SHADE_WX_NOISE_BAKE 1\n"
          "#define CELESTIA_VL_MARCH 1\n#define CELESTIA_VL_COMPOSITE 1\n#define CELESTIA_SSAO 1\n"];
     for (NSString *fn in @[@"shade_slots.metal", @"shade_api.metal", @"shade_look.metal", @"shade_common.metal", @"shade_m2.metal", @"shade_dims.metal", @"vl.metal",
-                           @"ssao.metal", @"shade_post.metal", @"clouds.metal", @"weather_surface.metal"]) {
+                           @"ssao.metal", @"shade_post.metal", @"clouds.metal", @"weather_surface.metal", @"aurora.metal"]) {
         [source appendFormat:@"%@\n", read_file_str(shade_path(ported, fn))];
     }
     [source appendString:
@@ -2293,15 +2293,16 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
     assert(vs);
 
     // (alpha.25) the Photon-style clouds: a quarter-rate trace (48x32) resolved into the half-resolution image (96x64)
-    enum { TRACE, CLOUDS, DOME, VOLUME, WEATHER, FINAL, AO, PASSES };
+    enum { TRACE, CLOUDS, DOME, VOLUME, WEATHER, FINAL, AO, AURORA, PASSES };
     const char *entries[PASSES] = {
         "shade_cloud_trace", "shade_cloud_resolve", "shade_cloud_dome", "shade_vl_march", "shade_wx_noise_fs", "shade_final",
-        "shade_ambient_occlusion"
+        "shade_ambient_occlusion", "shade_aurora_pass"
     };
-    const int widths[PASSES] = {48, 96, 160, 96, 1024, 96, 48};
-    const int heights[PASSES] = {32, 64, 64, 64, 1024, 64, 32};
+    const int widths[PASSES] = {48, 96, 160, 96, 1024, 96, 48, 96};
+    const int heights[PASSES] = {32, 64, 64, 64, 1024, 64, 32, 64};
     const int formats[PASSES] = {CM_FMT_RGBA16_FLOAT, CM_FMT_RGBA16_FLOAT, CM_FMT_RGBA16_FLOAT,
-                                 CM_FMT_RGBA16_FLOAT, CM_FMT_RG16_FLOAT, CM_FMT_RGBA8_UNORM, CM_FMT_RG16_FLOAT};
+                                 CM_FMT_RGBA16_FLOAT, CM_FMT_RG16_FLOAT, CM_FMT_RGBA8_UNORM, CM_FMT_RG16_FLOAT,
+                                 CM_FMT_RG11B10_FLOAT};
     int64_t pso[PASSES], tex[PASSES];
     for (int i = 0; i < PASSES; i++) {
         int64_t fs = cm_compile_function(lib, entries[i], 0, 0, 0, err, sizeof(err));
@@ -2511,6 +2512,55 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
     waterLook[120] = waterLook[121] = waterLook[122] = waterLook[159] = 0.0f;
     assert(cm_device_drain_errors(ctx, err, sizeof(err)) == 0);
     printf("[Backend %s] Underwater shafts, depth and shadow occlusion, and Snell angles OK\n",
+           cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3");
+
+    // Aurora pass: positive finite emission in the upper sky, zero below the horizon, zero when strength is 0.
+    static uint8_t auroraNoisePx[64 * 64 * 4];
+    for (int y = 0; y < 64; y++)
+        for (int x = 0; x < 64; x++) {
+            uint8_t *t = auroraNoisePx + (y * 64 + x) * 4;
+            t[0] = (uint8_t)(96 + ((x * 5) & 63));
+            t[1] = (uint8_t)(165 + ((x + y) & 63)); // Worley channel > 0.5 so curtains overlap and emit
+            t[2] = 128;
+            t[3] = (uint8_t)(96 + ((y * 5) & 63));
+        }
+    int64_t auroraNoise = cm_texture_create(ctx, CM_FMT_RGBA8_UNORM, 64, 64, 1, 1, 0, 0, 1, 0, "2o aurora noise");
+    int64_t auroraRead = cm_buffer_create(ctx, 96 * 64 * 4, NULL, "2o aurora read");
+    assert(auroraNoise && auroraRead);
+    float auroraPush[12] = {
+        0.05f, 1.00f, 0.35f, 1.50f,      // colorBottom + strength
+        0.48f, 0.35f, 1.00f, 0.000032f,  // colorTop + freq
+        24.0f, 0.0f, 0.0f, 0.0f          // steps, rays=0 (deterministic), pad
+    };
+    cm_cmd_begin(ctx);
+    cm_blit_write_texture(ctx, auroraNoise, auroraNoisePx, sizeof(auroraNoisePx), 64 * 4, 0, 0, 0, 0, 64, 64);
+    cm_shade_fullscreen_pass(ctx, pso[AURORA], tex[AURORA], &auroraNoise, 1, NULL, 0, auroraPush, sizeof(auroraPush));
+    cm_shade_set_resource(ctx, 11, tex[AURORA]);
+    cm_blit_copy_texture_to_buffer(ctx, tex[AURORA], 0, 0, 0, 0, 96, 64, auroraRead, 0, 96 * 4);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    const uint32_t *auroraPx = (const uint32_t *)(void *)cm_buffer_contents(auroraRead);
+    int skyLitCount = 0;
+    for (int x = 0; x < 96; x++) {
+        // y = 4 is below the horizon (dir.y < 0); y = 56 is high in the upper sky (dir.y > 0)
+        assert(auroraPx[4 * 96 + x] == 0u);
+        uint32_t v = auroraPx[56 * 96 + x];
+        if (v != 0u) skyLitCount++;
+        // RG11B10Float NaN/Inf exponent is all-ones: R (11..6 -> 31<<6), G (21..17 -> 31<<17), B (31..27 -> 31<<27)
+        assert(((v >> 6) & 0x1f) != 0x1f && ((v >> 17) & 0x1f) != 0x1f && ((v >> 27) & 0x1f) != 0x1f);
+    }
+    assert(skyLitCount > 16);
+
+    auroraPush[3] = 0.0f; // strength = 0 must short-circuit to black
+    cm_cmd_begin(ctx);
+    cm_shade_fullscreen_pass(ctx, pso[AURORA], tex[AURORA], &auroraNoise, 1, NULL, 0, auroraPush, sizeof(auroraPush));
+    cm_blit_copy_texture_to_buffer(ctx, tex[AURORA], 0, 0, 0, 0, 96, 64, auroraRead, 0, 96 * 4);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    for (int i = 0; i < 96 * 64; i++) assert(auroraPx[i] == 0u);
+    cm_shade_set_resource(ctx, 11, 0);
+    cm_buffer_destroy(ctx, auroraRead);
+    cm_texture_destroy(ctx, auroraNoise);
+    assert(cm_device_drain_errors(ctx, err, sizeof(err)) == 0);
+    printf("[Backend %s] Aurora pass (upper-sky emission, horizon cutoff, zero strength) OK\n",
            cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3");
 
     // Time the recurring atmosphere passes at the owner test resolution.

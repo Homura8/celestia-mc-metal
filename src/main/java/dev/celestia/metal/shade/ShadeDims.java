@@ -226,6 +226,12 @@ public final class ShadeDims {
     /** Packs dimension flags, feature bits, fog/lava tint, lift/EV overrides and End flash. */
     public static void pack(ByteBuffer look, ByteBuffer frame, ShadeFrame f, ShadeSettings.Dimensions options,
                             float userExposureEv) {
+        pack(look, frame, f, options, userExposureEv, false);
+    }
+
+    /** Packs dimension flags, feature bits, fog/lava tint, lift/EV overrides, End flash, and aurora texture bit. */
+    public static void pack(ByteBuffer look, ByteBuffer frame, ShadeFrame f, ShadeSettings.Dimensions options,
+                            float userExposureEv, boolean auroraTexActive) {
         ByteBuffer L = look.duplicate().order(ByteOrder.LITTLE_ENDIAN);
         ByteBuffer F = frame.duplicate().order(ByteOrder.LITTLE_ENDIAN);
         int features = L.getInt(ShadeLook.TIER + 4);
@@ -235,7 +241,8 @@ public final class ShadeDims {
         if (on && options != null && options.netherShimmer()) features |= FEATURE_SHIMMER;
         L.putInt(ShadeLook.TIER + 4, features);
 
-        int dimBits = (!"false".equalsIgnoreCase(System.getProperty("celestiametal.shade.dims.motes", "true")) ? 1 : 0);
+        int dimBits = (!"false".equalsIgnoreCase(System.getProperty("celestiametal.shade.dims.motes", "true")) ? 1 : 0)
+            | (auroraTexActive ? 2 : 0);
         if (dimsLit) {
             boolean nether = dimension == ShadeFrame.DIM_NETHER;
             int bits = (int) F.getFloat(ShadeFrame.SUN_PATH + 8) | FLAG_DIMS_LIT;

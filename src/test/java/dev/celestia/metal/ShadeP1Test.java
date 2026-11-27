@@ -370,7 +370,8 @@ class ShadeP1Test {
             StringBuilder err = new StringBuilder();
             long lib = MetalNative.compileMslLibrary(ctx, ShadeShaderPatcher.atmosphereSource(), "test.atmosphere", true, err);
             assertNotEquals(0L, lib, () -> err.toString());
-            for (String entry : List.of("shade_cloud_trace", "shade_cloud_resolve", "shade_cloud_dome", "shade_vl_march", "shade_wx_noise_fs")) {
+            for (String entry : List.of("shade_cloud_trace", "shade_cloud_resolve", "shade_cloud_dome", "shade_vl_march",
+                    "shade_wx_noise_fs", "shade_aurora_pass")) {
                 long fn = MetalNative.compileFunction(lib, entry, false, 0, 0, err);
                 assertNotEquals(0L, fn, () -> entry + ": " + err);
                 MetalNative.functionDestroy(fn);
@@ -424,5 +425,56 @@ class ShadeP1Test {
         dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(5L * 24000L + 5999L, 0f, 1f, -1, a);
         dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(5L * 24000L + 6001L, 0f, 1f, -1, b);
         for (int i = 0; i < 8; i++) assertEquals(a[i], b[i], 0.02f, "jump at noon in value " + i);
+    }
+
+    @Test
+    void auroraModesPalettesAndUniformPackingWork() {
+        var Aurora = dev.celestia.metal.shade.atmosphere.ShadeAurora.class;
+        assertNotNull(Aurora);
+        // Night curve ramps smoothly from dusk into full night; rain and day quench it.
+        assertEquals(0f, dev.celestia.metal.shade.atmosphere.ShadeAurora.nightFactor(0.1f), 1e-6f);
+        assertEquals(1f, dev.celestia.metal.shade.atmosphere.ShadeAurora.nightFactor(-0.5f), 1e-6f);
+        assertEquals(0f, dev.celestia.metal.shade.atmosphere.ShadeAurora.computeWant(
+            dev.celestia.metal.shade.atmosphere.ShadeAurora.MODE_OFF, 1f, 0L, -0.5f, 0f), 1e-6f);
+        assertEquals(1f, dev.celestia.metal.shade.atmosphere.ShadeAurora.computeWant(
+            dev.celestia.metal.shade.atmosphere.ShadeAurora.MODE_ALWAYS, 0f, 0L, -0.5f, 0f), 1e-6f);
+        assertEquals(0f, dev.celestia.metal.shade.atmosphere.ShadeAurora.computeWant(
+            dev.celestia.metal.shade.atmosphere.ShadeAurora.MODE_ALWAYS, 0f, 0L, -0.5f, 1f), 1e-6f);
+        assertEquals(0.6f, dev.celestia.metal.shade.atmosphere.ShadeAurora.computeWant(
+            dev.celestia.metal.shade.atmosphere.ShadeAurora.MODE_COLD_BIOMES, 0.6f, 0L, -0.5f, 0f), 1e-6f);
+
+        // Noon-to-noon day boundary stays constant across midnight (17999 vs 18001).
+        long beforeMidnight = dev.celestia.metal.shade.atmosphere.ShadeAurora.noonDayIndex(24000L + 17999L);
+        long afterMidnight = dev.celestia.metal.shade.atmosphere.ShadeAurora.noonDayIndex(24000L + 18001L);
+        assertEquals(beforeMidnight, afterMidnight);
+
+        // All palettes produce valid positive linear RGB.
+        float[] bot = new float[3], top = new float[3];
+        for (int p : new int[] {
+                dev.celestia.metal.shade.atmosphere.ShadeAurora.PALETTE_DAILY,
+                dev.celestia.metal.shade.atmosphere.ShadeAurora.PALETTE_CLASSIC,
+                dev.celestia.metal.shade.atmosphere.ShadeAurora.PALETTE_PASTEL}) {
+            dev.celestia.metal.shade.atmosphere.ShadeAurora.selectPalette(p, 7L, bot, top);
+            for (int c = 0; c < 3; c++) {
+                assertTrue(bot[c] > 0f && bot[c] <= 1f);
+                assertTrue(top[c] > 0f && top[c] <= 1f);
+            }
+        }
+
+        // ShadeLook.NIGHT.z carries auroraStrength and ShadeDims sets SHADE_DIMS_AURORA_TEX bit (2) in dimTint.w.
+        ShadeFrame frame = new ShadeFrame();
+        frame.dimension = ShadeFrame.DIM_OVERWORLD;
+        ShadeLook look = new ShadeLook();
+        look.auroraStrength = 1.25f;
+        look.auroraTexActive = true;
+        ByteBuffer fb = ByteBuffer.allocateDirect(ShadeFrame.SIZE).order(ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer lb = ByteBuffer.allocateDirect(ShadeLook.SIZE).order(ByteOrder.LITTLE_ENDIAN);
+        frame.pack(fb);
+        look.pack(lb, frame);
+        ShadeDims.pack(lb, fb, frame, new ShadeSettings.Dimensions(true, true, true), 0f, true);
+        assertEquals(1.25f, lb.getFloat(ShadeLook.NIGHT + 8), 1e-6f);
+        assertNotEquals(0, (((int) lb.getFloat(ShadeLook.DIM_TINT + 12)) >> 2) & 2);
+        ShadeDims.pack(lb, fb, frame, new ShadeSettings.Dimensions(true, true, true), 0f, false);
+        assertEquals(0, (((int) lb.getFloat(ShadeLook.DIM_TINT + 12)) >> 2) & 2);
     }
 }

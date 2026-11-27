@@ -25,7 +25,8 @@
       "WATER_CAUSTICS": "0",
       "CLOUD_STEPS": "8",
       "GOD_RAYS": "false",
-      "BLOOM_STRENGTH": "0.75"
+      "BLOOM_STRENGTH": "0.75",
+      "AURORA_MODE": "OFF"
     },
     "Balanced": {},
     "Quality": {
@@ -247,6 +248,47 @@
       "min": 0.25,
       "max": 2.0,
       "step": 0.05
+    },
+    {
+      "id": "AURORA_MODE",
+      "label": "Aurora Borealis",
+      "description": "Draws luminous night-sky aurora curtains. Auto shows every clear night in cold biomes and roughly every third night elsewhere.",
+      "category": "Sky & Atmosphere",
+      "type": "ENUM",
+      "default": "AUTO",
+      "impact": "LOW",
+      "values": [
+        "OFF",
+        "COLD_BIOMES",
+        "AUTO",
+        "ALWAYS"
+      ]
+    },
+    {
+      "id": "AURORA_BRIGHTNESS",
+      "label": "Aurora Brightness",
+      "description": "Adjusts the radiance of aurora curtains and their faint night-sky ambient tint.",
+      "category": "Sky & Atmosphere",
+      "type": "FLOAT_SLIDER",
+      "default": "1.0",
+      "impact": "NEGLIGIBLE",
+      "min": 0.2,
+      "max": 2.5,
+      "step": 0.1
+    },
+    {
+      "id": "AURORA_PALETTE",
+      "label": "Aurora Palette",
+      "description": "Daily rotates across emerald, aqua, lavender and rose palettes per night; Classic uses emerald and violet; Pastel uses mint and orchid.",
+      "category": "Sky & Atmosphere",
+      "type": "ENUM",
+      "default": "DAILY",
+      "impact": "NEGLIGIBLE",
+      "values": [
+        "DAILY",
+        "CLASSIC",
+        "PASTEL"
+      ]
     },
     {
       "id": "NETHER_END_LOOKS",

@@ -35,6 +35,8 @@ public final class ShadeLook {
     public boolean cloudsEnabled;
     public int cloudSteps;
     public float cloudPhase;
+    public float auroraStrength;
+    public boolean auroraTexActive;
     private ShadeSettings options;
     public float cloudBase, wetness, puddles, snow;
     public float waterShaftSurface;
@@ -345,7 +347,7 @@ public final class ShadeLook {
         put4(b, EYE, 0.5f, 0.5f, 1f, this.eyeSky);
         put4(b, SKY_GOLD_H, this.skyGold[0], this.skyGold[1], this.skyGold[2], 1f);
         put4(b, SKY_GOLD_Z, this.skyGold[3], this.skyGold[4], this.skyGold[5], this.skyRose);
-        put4(b, NIGHT, this.starBrightness, 1f, 0f, this.moonPhaseAngle);
+        put4(b, NIGHT, this.starBrightness, 1f, this.auroraStrength, this.moonPhaseAngle);
         put4(b, SSR, this.hasPrevScene ? 1f : 0f, 0f, 0f, 0f);
         float nightUp = EV_UP - (EV_UP - EV_UP_NIGHT) * (1f - smooth(-10f, -2f, this.elevation)) * this.outdoor;
         put4(b, EXPOSURE_CFG, EV_DOWN, nightUp, TAU_UP, TAU_DOWN);

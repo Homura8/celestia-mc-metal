@@ -35,6 +35,20 @@ static inline float4 shadeCloudsScreen(float3 dir, constant ShadeLook &L, textur
 	}
 	return float4(0.0, 0.0, 0.0, 1.0);
 }
+
+static inline float3 shadeAuroraScreen(float3 dir, constant ShadeLook &L, texture2d<half> tex) {
+	if (L.night.z > 0.002 && ((int(L.dimTint.w) >> 2) & 2) != 0 && dir.y > 0.015) {
+		float4 clip = L.viewProjNoJitter * float4(dir, 0.0);
+		if (clip.w > 1e-4) {
+			float2 uv = clip.xy / clip.w * 0.5 + 0.5;
+			if (all(uv >= 0.0) && all(uv <= 1.0)) {
+				constexpr sampler linear(filter::linear, address::clamp_to_edge);
+				return float3(tex.sample(linear, uv, level(0.0)).rgb);
+			}
+		}
+	}
+	return float3(0.0);
+}
 static inline float4 shadeCloudsDome(float3 dir, constant ShadeLook &L, texture2d<half> tex) {
 	if (L.clouds1.x > 0.5 && dir.y >= 0.0) {
 		constexpr sampler linear(filter::linear, s_address::repeat, t_address::clamp_to_edge);
@@ -571,6 +585,7 @@ static float3 shadeSkyBackground(float3 dir, texture2d<half> lut, sampler s, con
 	if (clouds.a > 0.001) {
 		float pixelAngle = 2.0 * atan(1.0 / max(abs(f.proj[1][1]), 1e-3)) * f.screen.w;
 		float3 back = shadeSkyRadiance2(dir, lut, s, f, L, R.milkyWay, pixelAngle);
+		if (L.night.z > 0.002 && !shadeDev(f, SHADE_DEV_FLAT_SKY)) back += shadeAuroraScreen(dir, L, R.aurora);
 		sky += back * clouds.a;
 	}
 	if (L.flash.w > 0.0) {
