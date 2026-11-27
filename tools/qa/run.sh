@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat <<'USAGE'
-Usage: tools/qa/run.sh <shots,profile,perf,lights,frames> [Gradle options]
+Usage: tools/qa/run.sh <shots,profile,perf,lights,frames,packs> [Gradle options]
 Set QA_LABEL to name the output folder or QA_VERBOSE=1 to stream client logs.
 See docs/QA.md for presets, filters, profiling and the Iris/Photon reference.
 USAGE
@@ -13,7 +13,7 @@ if [[ ${1:-} == --help || ${1:-} == -h ]]; then usage; exit 0; fi
 if [[ $# == 0 ]]; then usage >&2; exit 2; fi
 modes=$1
 shift
-if [[ ! $modes =~ ^(shots|profile|perf|lights|frames)(,(shots|profile|perf|lights|frames))*$ ]]; then
+if [[ ! $modes =~ ^(shots|profile|perf|lights|frames|packs)(,(shots|profile|perf|lights|frames|packs))*$ ]]; then
     usage >&2
     exit 2
 fi
@@ -57,6 +57,10 @@ else
     # Leave the Metal binary archive and Fabric's processed mods on disk.
     mkdir -p "$run/config"
     cp tools/qa/template/config/celestia-metal.json "$run/config/celestia-metal.json"
+    # The example world pack, fresh each run (with no saved options), for the packs mode and manual switching.
+    mkdir -p "$run/shaderpacks"
+    rm -rf "$run/shaderpacks/celestia-example-world" "$run/shaderpacks/user_celestia-example-world".celestia*.json
+    cp -R examples/shaderpacks/celestia-example-world "$run/shaderpacks/"
 fi
 
 mkdir -p "$run/saves"

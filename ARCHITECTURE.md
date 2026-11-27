@@ -46,6 +46,7 @@ Plugs directly into Minecraft 26.3's `com.mojang.renderpearl` abstraction via `P
 
 ## 4. Shader Pack System (`dev.celestia.metal.shader`)
 
+- **World packs**: `"kind": "world"` packs supply the world renderer's MSL by file name over Celestia Native's (`shaderpacks/celestia-native/shaders/`) and the engine-owned ABI (`shaders/engine/`); `ShadeShaderPatcher` resolves sources and bumps an epoch on a switch, which rebuilds `CelestiaShade` and every pipeline's HDR variants live (`SHADER_PACK_SPEC.md` §5).
 - **Native MSL Packs (`dev.celestia.metal.shader.pack`)**: Reads `celestia-shader.json` manifests from bundled classpath resources or `shaderpacks/` directories/ZIPs, generates deterministic `#define` preludes from user options, compiles with `celestia_common.metal` via `MTL4Compiler`/`MTLDevice`, and records non-fatal diagnostics on errors.
 - **Iris / OptiFine Bridge (`dev.celestia.metal.shader.iris`)**: `IrisPackParser` parses `shaders.properties`, `en_us.lang`, and `#define` option comments into the unified option model (persisting to standard Iris `.txt` files), while `IrisGlslBridge` translates GLSL → SPIR-V → MSL via LWJGL `Shaderc` + `Spvc` on demand.
 

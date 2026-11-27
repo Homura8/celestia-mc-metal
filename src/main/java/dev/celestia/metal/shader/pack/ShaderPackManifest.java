@@ -124,7 +124,8 @@ public final class ShaderPackManifest {
                 double min = o.has("min") ? o.get("min").getAsDouble() : 0.0;
                 double max = o.has("max") ? o.get("max").getAsDouble() : 1.0;
                 double step = o.has("step") ? o.get("step").getAsDouble() : 1.0;
-                opts.add(new ShaderOptionDef(oId, oLabel, oDesc, oCat, kind, def, vals, min, max, step, impact));
+                boolean recompile = o.has("recompile") && o.get("recompile").getAsBoolean();
+                opts.add(new ShaderOptionDef(oId, oLabel, oDesc, oCat, kind, def, vals, min, max, step, impact, recompile));
             }
         }
 
@@ -159,7 +160,11 @@ public final class ShaderPackManifest {
             }
         }
 
-        return new ShaderPackManifest(id, name, author, version, desc, api, builtin ? PackKind.WORLD_MSL : PackKind.NATIVE_MSL,
+        // "kind": "world" replaces the whole world renderer's MSL (shaders/*.metal over Celestia Native's); "post" (the default
+        // for user packs) is the legacy fullscreen/compute pass format of SHADER_PACK_SPEC.md section 2.
+        String kindName = str(root, "kind", builtin ? "world" : "post").toLowerCase(java.util.Locale.ROOT);
+        PackKind packKind = kindName.equals("world") ? PackKind.WORLD_MSL : PackKind.NATIVE_MSL;
+        return new ShaderPackManifest(id, name, author, version, desc, api, packKind,
             builtin, sourcePath, resourceRoot, categories, opts, presets, passes);
     }
 

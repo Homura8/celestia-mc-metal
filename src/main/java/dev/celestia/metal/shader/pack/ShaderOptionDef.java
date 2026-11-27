@@ -16,8 +16,18 @@ public record ShaderOptionDef(
     double min,
     double max,
     double step,
-    Impact impact
+    Impact impact,
+    boolean recompile
 ) {
+    /**
+     * An option read at run time (ShadeSettings uniforms, Iris defines, legacy pass defines). {@code recompile} options of a world
+     * pack are compiled into its MSL as {@code #define}s instead, and changing one rebuilds the world shaders.
+     */
+    public ShaderOptionDef(String id, String label, String description, String category, Kind kind, String defaultValue,
+                           List<String> values, double min, double max, double step, Impact impact) {
+        this(id, label, description, category, kind, defaultValue, values, min, max, step, impact, false);
+    }
+
     public enum Kind {
         TOGGLE,
         ENUM,

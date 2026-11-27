@@ -51,6 +51,8 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
     private final Map<ShadeShaderPatcher.Variant, CompiledStages> variantStages = new EnumMap<>(ShadeShaderPatcher.Variant.class);
     private final Map<PsoKey, Long> psoCache = new ConcurrentHashMap<>();
     private volatile boolean closed;
+    /** ShadeShaderPatcher.epoch() the HDR variants in variantStages / psoCache were built from. */
+    private volatile int variantEpoch = ShadeShaderPatcher.epoch();
 
     private CelestiaPipeline(CelestiaMetalDevice device, BackendRenderPipeline.CreateInfo info,
                              List<MetalShaderTranslator.SlotBinding> bindings,
@@ -161,6 +163,7 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
     public long getOrCreatePso(int colorFormatOverride, int nativeDepthFormat, ShadeShaderPatcher.Variant variant) {
         if (closed) return 0L;
         ShadeShaderPatcher.Variant v = variant != null ? variant : ShadeShaderPatcher.Variant.BASE;
+        if (v != ShadeShaderPatcher.Variant.BASE && variantEpoch != ShadeShaderPatcher.epoch()) dropVariants();
         PsoKey key = new PsoKey(colorFormatOverride, nativeDepthFormat, v);
         return psoCache.computeIfAbsent(key, this::buildPso);
     }
@@ -353,6 +356,42 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
         }
     }
 
+    /**
+     * The world pack's sources changed (ShadeShaderPatcher.epoch): forget the HDR variants so the next use patches and compiles
+     * them from the new pack. The BASE stages are RenderPearl's own and stay. Destroying a PSO retires it natively, so one still
+     * referenced by an in-flight command buffer stays alive until that buffer completes.
+     */
+    private void dropVariants() {
+        synchronized (variantStages) {
+            int now = ShadeShaderPatcher.epoch();
+            if (variantEpoch == now) return;
+            psoCache.entrySet().removeIf(e -> {
+                if (e.getKey().variant() == ShadeShaderPatcher.Variant.BASE) return false;
+                Long pso = e.getValue();
+                if (pso != null && pso != 0L) MetalNative.pipelineDestroy(device.handle(), pso);
+                return true;
+            });
+            destroyVariantStages();
+            variantEpoch = now;
+        }
+    }
+
+    private void destroyVariantStages() {
+        for (CompiledStages st : variantStages.values()) {
+            if (st.ownsHandles()) {
+                if (st.vsLib() != 0L) {
+                    if (st.vsFn() != 0L) MetalNative.functionDestroy(st.vsFn());
+                    MetalNative.libraryDestroy(st.vsLib());
+                }
+                if (st.fsLib() != 0L) {
+                    if (st.fsFn() != 0L) MetalNative.functionDestroy(st.fsFn());
+                    MetalNative.libraryDestroy(st.fsLib());
+                }
+            }
+        }
+        variantStages.clear();
+    }
+
     @Override
     public boolean isClosed() {
         return closed;
@@ -367,19 +406,7 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
         }
         psoCache.clear();
         synchronized (variantStages) {
-            for (CompiledStages st : variantStages.values()) {
-                if (st.ownsHandles()) {
-                    if (st.vsLib() != 0L) {
-                        if (st.vsFn() != 0L) MetalNative.functionDestroy(st.vsFn());
-                        MetalNative.libraryDestroy(st.vsLib());
-                    }
-                    if (st.fsLib() != 0L) {
-                        if (st.fsFn() != 0L) MetalNative.functionDestroy(st.fsFn());
-                        MetalNative.libraryDestroy(st.fsLib());
-                    }
-                }
-            }
-            variantStages.clear();
+            destroyVariantStages();
         }
         if (vsFunction != 0L) MetalNative.functionDestroy(vsFunction);
         if (fsFunction != 0L) MetalNative.functionDestroy(fsFunction);

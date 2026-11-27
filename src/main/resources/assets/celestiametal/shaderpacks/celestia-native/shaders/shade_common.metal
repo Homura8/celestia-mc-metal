@@ -12,55 +12,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-struct ShadeFrame {
-	float4x4 view;              //   0
-	float4x4 proj;              //  64
-	float4x4 viewProj;          // 128
-	float4x4 invViewProj;       // 192
-	float4x4 prevViewProj;      // 256
-	float4x4 shadowViewProj[2]; // 320
-	float4 cameraBlock;         // 448
-	float4 cameraFract;         // 464
-	float4 sunDirWorld;         // 480
-	float4 sunDirView;          // 496
-	float4 moonDirWorld;        // 512
-	float4 lightDirWorld;       // 528
-	float4 sunColor;            // 544
-	float4 ambientSky;          // 560
-	float4 ambientGround;       // 576
-	float4 ambientBlock;        // 592
-	float4 fogColor;            // 608
-	float4 fogRange;            // 624
-	float4 fogSky;              // 640
-	float4 fogColorHdr;         // 656 fogColor.rgb as shadeLdrToHdr gives it (per frame, CelestiaShade), w 1 - rain
-	float4 zenithColor;         // 672
-	float4 horizon[8];          // 688
-	float4 cascadeSplits;       // 816
-	float4 shadowParams;        // 832: inverse resolution, resolution, depth bias, filter spread scale
-	float4 screen;              // 848
-	float4 time;                // 864
-	float4 weather;             // 880
-	float4 jitter;              // 896
-	float4 atmosphere;          // 912
-	float4 ambientToward;       // 928
-	float4 ambientAway;         // 944
-	int4 flags;                 // 960
-	int4 flags2;                // 976
-	float4 sunPath;             // 992
-	float4 wxLine;              // 1008
-};
 
-static_assert(sizeof(ShadeFrame) == 1024, "ShadeFrame size must be 1024 bytes");
-
-#define SHADE_DEV_NO_FOG_LUT 1
-#define SHADE_DEV_NO_SHADOW 2
-#define SHADE_DEV_FLAT_SKY 4
-#define SHADE_DEV_NO_WATER 8
-#define SHADE_DEV_FLAT_LIGHT 16
-#define SHADE_DEV_LEGACY_CHUNK_EDGE 32
-#define SHADE_DEV_LEGACY_SNELL 64
-
-static inline bool shadeDev(constant ShadeFrame &f, int bit) { return (int(f.sunPath.z) & bit) != 0; }
 #ifdef SHADE_LEAN_ABOVE
 #define SHADE_CAMERA_UNDERWATER(f) false
 #else

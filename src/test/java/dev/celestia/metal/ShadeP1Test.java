@@ -289,7 +289,7 @@ class ShadeP1Test {
         // (alpha.24) shadeLdrToHdr(fogColor) per fragment cost ~8 ms of the sky pass alone underwater at 3024x1742 (M1 Pro)
         for (String name : List.of("shade_m2.metal", "shade_water_terrain.metal", "shade_terrain.metal", "sky.fs.metal",
                 "water.metal", "shade_entity.metal", "clouds.fs.metal", "celestial.fs.metal")) {
-            try (var in = ShadeP1Test.class.getResourceAsStream("/assets/celestiametal/shaders/ported/" + name)) {
+            try (var in = ShadeP1Test.class.getResourceAsStream(dev.celestia.metal.shade.ShadeShaderPatcher.DEFAULT_PACK_SHADERS + name)) {
                 assertNotNull(in, name);
                 String src = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
                 assertFalse(src.matches("(?s).*shadeLdrToHdr\\(\\s*s?f\\.fogColor.*"), name + " converts the fog colour per pixel");

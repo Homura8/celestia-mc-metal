@@ -24,6 +24,7 @@ The runner prints a compact summary and saves it to `summary.txt`. Set `QA_VERBO
 | `profile` | Metal 4 per-encoder timing for each scene and debug token. The runner disables pass merging for these measurements. | `profile.tsv` with the last full `[GPU]` report from each marker window. |
 | `perf` | Ultra versus 12 feature overrides, the other three presets and pack off. Each option change settles for 70 ticks, followed by 100 GPU samples. | `perf.txt` with the comparison median, the average of the surrounding Ultra medians and the signed delta, plus an Ultra PNG per scene. |
 | `lights` | Six coloured block emitters, a held torch, blaze and dropped glowstone, light toggles, debug views and preset comparisons in sealed rooms. | `lights-*.png` and FPS, average GPU time and active light counts in the log. |
+| `packs` | Live world-pack switching on `vista-up` with clouds off: Celestia Native, then the example world pack (`examples/shaderpacks/celestia-example-world`, copied into the run's `shaderpacks/`), a `recompile` option change, back to Native, and one more round once Metal's cache is warm. Fails if the world renderer is not ready after any switch. | `packs-*.png` and `[PACKS]` lines with each switch's rebuild time in the log. |
 | `frames` | Spectator descent from above the pond surface, lowering the camera 0.012 blocks per rendered frame. | 180 sequential PNGs by default. |
 
 `profile` defaults to pond morning, underwater and vista sunset, as does `perf`. Profiling waits `2 * every + 5` rendered frames per token. The first report can include submits from before the switch, so the table uses the last report before the next marker. Run `perf` separately for production timing with normal encoder settings. Adjacent A/B/A comparisons share the intervening Ultra window. Both sides of every comparison still use locally measured Ultra medians.
@@ -36,6 +37,7 @@ QA_LABEL=clouds tools/qa/run.sh profile -PqaProfile=120 \
 QA_LABEL=water-perf tools/qa/run.sh perf -PqaJvm=celestiaqa.scenes=underwater
 QA_LABEL=light-rooms tools/qa/run.sh lights
 QA_LABEL=descent tools/qa/run.sh frames -PqaJvm=celestiaqa.frames=180
+QA_LABEL=packs tools/qa/run.sh packs
 ```
 
 Use `celestiaqa.repeat=N` (and `celestiaqa.repeatTicks`, default 10) for a burst of N shots per scene, for animated effects such as waves, caustics and underwater shafts. Use `celestiaqa.scenes` to select comma-separated scene names in their declared order. The ten names are `pond-morning`, `pond-noon`, `pond-sunset`, `underwater`, `underwater-noon`, `vista-noon`, `vista-sunset`, `vista-up`, `vista-night` and `vista-rain`. Other JVM properties include `celestiaqa.preset` (default Ultra), `celestiaqa.pack=off`, `celestiaqa.debug=<view>` and `celestiaqa.prefix=<name>`. Pass shader overrides with a dedicated Gradle property, for example `-PqaOptions=GOD_RAYS=false,BLOOM_ENABLED=false`.

@@ -223,7 +223,7 @@ public final class Qa {
         for (String token : System.getProperty("celestiaqa.modes", "shots").split(",", -1)) {
             String mode = token.trim();
             if (!modes.add(mode)) throw new IllegalArgumentException("Repeated mode " + mode);
-            if (!CELESTIA && List.of("profile", "perf", "lights").contains(mode)) {
+            if (!CELESTIA && List.of("profile", "perf", "lights", "packs").contains(mode)) {
                 throw new IllegalArgumentException(mode + " requires Celestia Metal");
             }
             s.add(once(mc -> log("mode " + mode)));
@@ -232,6 +232,7 @@ public final class Qa {
                 case "profile" -> Modes.profile(s);
                 case "perf" -> Modes.perf(s);
                 case "lights" -> Modes.lights(s);
+                case "packs" -> Modes.packs(s);
                 case "frames" -> Modes.frames(s);
                 default -> throw new IllegalArgumentException("Unknown mode " + mode);
             }

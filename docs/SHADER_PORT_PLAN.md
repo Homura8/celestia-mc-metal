@@ -231,7 +231,7 @@ P6a status (branch `feat/shader-port-p6a-alpha.21`, based on main after the P5 m
       irradiance 3D textures, zeroed fallback, `cm_dl_*` C ABI (ABI 8), bound per render encoder at buffer 29 / textures
       23-25 via `cm_dynlight_bind_render_encoder`. Removed dead `CM_SHADE_BUF_BLOOM` (it collided with slot 29). Metal 4
       compute has no `setBytes`: kernel parameters go through a per-ring-slot params buffer + producer barriers.
-- [x] MSL: `dynlight.metal`, `dynlight_vis.metal` in `shaders/ported/` (upstream's `shade_dynlight.metal` m3 seam is not
+- [x] MSL: `dynlight.metal`, `dynlight_vis.metal` in `shaders/ported/` (now `shaders/engine/`) (upstream's `shade_dynlight.metal` m3 seam is not
       needed: `ShadeShaderPatcher` appends `DynLightMsl.module()` and passes `CEL_DL_PARAMS` / `CEL_DL_ARGS`).
 - [x] Java in `dev.celestia.metal.shade.light`: `DynLightNative` on `cm_dl_*` via `MetalNative.shadeDowncall`, config as
       `celestiametal.shade.dynLights.*` + `applyLive`, occupancy through vanilla `PalettedContainer.get` (Sodium optional),
@@ -296,10 +296,13 @@ Next, in order:
       `celestiaqa.repeat` bursts in `underwater` and `underwater-noon`. Open question: the shafts take the warm low sun and the
       Pastel grade's rose (lilac at morning), where Photon's read cyan-white.
 Owner priorities (2026-11-28), in order:
-- [ ] Multiple native MSL shader packs. Each pack ships its own MSL in its folder or zip, behind a stable engine interface:
-      the ShadeFrame / ShadeLook / ShadeGpu / ShadeResources structs, slot numbers and entry points, documented in
-      `SHADER_PACK_SPEC.md`. Celestia Native moves its shaders into its pack folder; the engine stays pack-agnostic. Hide
-      Iris/OptiFine packs from the pack list until the pipeline is mature (owner: MSL only for now).
+- [x] Multiple native MSL shader packs (Unreleased, `feat/multi-pack`). `"kind": "world"` packs override Celestia Native's
+      `shaders/*.metal` by file name over the engine ABI in `shaders/engine/` (`shade_api.metal`: ShadeFrame / ShadeLook /
+      ShadeGpu / ShadeResources / ShadeWaterParams; slots; light and TAA kernels), with `"recompile"` options as `#define`s and
+      live switching (`ShadeShaderPatcher.epoch`). Iris/OptiFine packs hidden. Spec: `SHADER_PACK_SPEC.md` section 5; example:
+      `examples/shaderpacks/celestia-example-world`; QA: `tools/qa/run.sh packs`. Open: the first compile of a new pack
+      stalls the game ~7 s on an M1 Pro (a loading overlay or background compile would hide it); a pack can't yet change
+      the engine-side passes (pass list, targets, bindings) or the dynamic-light shading.
 - [ ] Nether and End looks.
 - [ ] Aurora.
 - [ ] Motion blur.

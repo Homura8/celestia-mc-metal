@@ -42,8 +42,25 @@ public final class ShadeShaderPatcher {
 
     public record PatchedStages(String vsSource, String vsEntry, String fsSource, String fsEntry, boolean patched) {}
 
-    private static final String RESOURCE_BASE = "/assets/celestiametal/shaders/ported/";
+    /** Engine-owned MSL: the world-pack ABI (buffer layouts, slots), vanilla uniform blocks and the engine's own kernels. */
+    private static final String ENGINE_BASE = "/assets/celestiametal/shaders/engine/";
+    private static final Set<String> ENGINE_FILES = Set.of(
+        "shade_slots.metal", "shade_api.metal", "vanilla_uniforms.metal",
+        "taa.metal", "dynlight.metal", "dynlight_vis.metal", "colorlight.metal");
+    /** Celestia Native's sources: the reference world pack, and the fallback for any file a world pack does not provide. */
+    public static final String DEFAULT_PACK_SHADERS = "/assets/celestiametal/shaderpacks/celestia-native/shaders/";
     private static final Map<String, String> RESOURCE_CACHE = new ConcurrentHashMap<>();
+
+    /** Reads one file of the active world pack ({@code shaders/<name>} relative to the pack root); null when it has none. */
+    @FunctionalInterface
+    public interface PackSource {
+        String read(String name);
+    }
+
+    private static volatile PackSource worldPack;
+    private static volatile String worldPackKey = "builtin:celestia-native";
+    private static volatile String worldPackDefines = "";
+    private static volatile int epoch;
 
     private static final Map<String, Integer> ENTITY_PIPELINES = Map.ofEntries(
         Map.entry("minecraft:pipeline/entity_solid", 0),
@@ -83,17 +100,64 @@ public final class ShadeShaderPatcher {
 
     private ShadeShaderPatcher() {}
 
+    /**
+     * Selects the world pack whose MSL the world renderer compiles from. {@code key} identifies the source set (pack id plus
+     * anything that changes its generated defines): when it changes, every cached source is dropped and {@link #epoch()}
+     * moves on, so {@code CelestiaShade} and every {@code CelestiaPipeline} rebuild their world shaders on next use.
+     *
+     * @param source  reads {@code shaders/<name>} from the pack, or null for Celestia Native
+     * @param defines {@code #define} lines from the pack's {@code "recompile"} options, put in front of every world prelude
+     * @return true when the source set changed
+     */
+    public static synchronized boolean setWorldPack(String key, PackSource source, String defines) {
+        String d = defines == null ? "" : defines;
+        if (key.equals(worldPackKey) && d.equals(worldPackDefines)) return false;
+        worldPack = source;
+        worldPackKey = key;
+        worldPackDefines = d;
+        RESOURCE_CACHE.clear();
+        epoch++;
+        return true;
+    }
+
+    /** Bumped whenever the world pack's sources change (pack switch, recompile option, reload). */
+    public static int epoch() {
+        return epoch;
+    }
+
+    public static String worldPackKey() {
+        return worldPackKey;
+    }
+
+    /** Drops cached sources and moves the epoch on without changing the pack (shader reload of a pack under development). */
+    public static synchronized void invalidate() {
+        RESOURCE_CACHE.clear();
+        epoch++;
+    }
+
     public static String resource(String name) {
-        return RESOURCE_CACHE.computeIfAbsent(name, key -> {
-            try (InputStream in = ShadeShaderPatcher.class.getResourceAsStream(RESOURCE_BASE + key)) {
-                if (in == null) {
-                    throw new IllegalStateException("Missing ported shader resource: " + RESOURCE_BASE + key);
-                }
-                return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
+        return RESOURCE_CACHE.computeIfAbsent(name, ShadeShaderPatcher::load);
+    }
+
+    private static String load(String name) {
+        if (ENGINE_FILES.contains(name)) return classpath(ENGINE_BASE + name);
+        PackSource pack = worldPack;
+        if (pack != null) {
+            String own = pack.read(name);
+            if (own != null) return own;
+        }
+        return classpath(DEFAULT_PACK_SHADERS + name);
+    }
+
+    private static String classpath(String path) {
+        try (InputStream in = ShadeShaderPatcher.class.getResourceAsStream(path)) {
+            if (in == null) {
+                throw new IllegalStateException("Missing shader resource: " + path);
             }
-        });
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     public static String prelude(boolean hdr, boolean hand, String extraDefines) {
@@ -113,7 +177,9 @@ public final class ShadeShaderPatcher {
             sb.append(extraDefines);
             if (!extraDefines.endsWith("\n")) sb.append('\n');
         }
+        sb.append(worldPackDefines);
         sb.append(resource("shade_slots.metal")).append('\n');
+        sb.append(resource("shade_api.metal")).append('\n');
         sb.append(resource("shade_look.metal")).append('\n');
         sb.append(resource("shade_common.metal")).append('\n');
         sb.append(resource("shade_m2.metal")).append('\n');
@@ -126,8 +192,9 @@ public final class ShadeShaderPatcher {
     }
 
     public static String lookOnlyPrelude() {
-        return "#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n"
+        return "#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n" + worldPackDefines
             + resource("shade_slots.metal") + "\n"
+            + resource("shade_api.metal") + "\n"
             + resource("shade_look.metal") + "\n";
     }
 
