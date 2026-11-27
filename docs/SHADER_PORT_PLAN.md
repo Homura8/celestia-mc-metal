@@ -340,7 +340,7 @@ Owner priorities (2026-11-28), in order:
       the engine-side passes (pass list, targets, bindings) or the dynamic-light shading.
 - [x] Nether and End looks.
 - [x] Aurora.
-- [ ] Motion blur.
+- [x] Motion blur.
 - [ ] A real cumulus congestus layer (days 2 and 4 currently stand in a thicker cumulus).
 - [ ] labPBR (carried over from P6b).
 

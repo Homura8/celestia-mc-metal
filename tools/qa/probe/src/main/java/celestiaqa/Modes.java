@@ -20,6 +20,7 @@ final class Modes {
         "celestiametal.shade.dev", "celestiametal.shade.cloudDev"
     };
     private static int frameCount, frameLimit;
+    private static float panYaw;
     private static final double START_Y = 147.2;
     private static final double FRAME_X = 0.5, FRAME_Z = -14.5;
 
@@ -178,16 +179,20 @@ final class Modes {
     static void frames(List<Step> steps) {
         int count = Integer.getInteger("celestiaqa.frames", 180);
         if (count < 1) throw new IllegalArgumentException("celestiaqa.frames must be positive");
-        var scene = new Shots.Scene("descent", 1500, "clear", fmt("tp @a %.1f %.1f %.1f 0 -4", FRAME_X, START_Y, FRAME_Z));
+        panYaw = Float.parseFloat(System.getProperty("celestiaqa.panYaw", "0"));
+        var scene = panYaw != 0f
+            ? new Shots.Scene("pan", 6000, "clear", "tp @a 0.5 149.3 -14.5 0 -8")
+            : new Shots.Scene("descent", 1500, "clear", fmt("tp @a %.1f %.1f %.1f 0 -4", FRAME_X, START_Y, FRAME_Z));
         steps.add(Shots.enter(scene));
         steps.add(Shots.settle(scene));
         steps.add(once(mc -> {
             frameCount = 0;
             frameLimit = count;
-            log("capturing " + count + " descent frames");
+            log(panYaw != 0f ? "capturing " + count + " pan frames (" + panYaw + " deg/frame)"
+                : "capturing " + count + " descent frames");
         }));
         steps.add(mc -> frameCount == frameLimit);
-        steps.add(once(mc -> log("captured " + frameCount + " descent frames")));
+        steps.add(once(mc -> log("captured " + frameCount + (panYaw != 0f ? " pan frames" : " descent frames"))));
     }
 
     static void onFrame(Minecraft mc) {
@@ -199,10 +204,15 @@ final class Modes {
         captureFrame(mc, fmt("%s-frame-%03d", prefix(), frameCount));
         frameCount++;
         if (frameCount < frameLimit) {
-            // Move the local spectator between renders to avoid quantizing the descent to server ticks.
-            double y = Math.max(141.1, START_Y - 0.012 * frameCount);
-            mc.player.setPos(FRAME_X, y, FRAME_Z);
-            mc.player.setOldPosAndRot();
+            if (panYaw != 0f) {
+                mc.player.setYRot(mc.player.getYRot() + panYaw);
+                mc.player.setOldPosAndRot();
+            } else {
+                // Move the local spectator between renders to avoid quantizing the descent to server ticks.
+                double y = Math.max(141.1, START_Y - 0.012 * frameCount);
+                mc.player.setPos(FRAME_X, y, FRAME_Z);
+                mc.player.setOldPosAndRot();
+            }
         }
     }
 }

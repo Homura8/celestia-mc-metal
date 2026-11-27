@@ -201,7 +201,8 @@ public final class ShadeShaderPatcher {
 
     public static String postSource() {
         return prelude(true, false, "#define CELESTIA_VL_COMPOSITE 1\n#define CELESTIA_SSAO 1")
-            + resource("vl.metal") + "\n" + resource("ssao.metal") + "\n" + resource("shade_post.metal") + "\n";
+            + resource("vl.metal") + "\n" + resource("ssao.metal") + "\n"
+            + resource("shade_post.metal") + "\n" + resource("motion_blur.metal") + "\n";
     }
 
     public static String atmosphereSource() {

@@ -16,7 +16,8 @@ public record ShadeSettings(Shadows shadows, Lights lights, Sky sky, Water water
                         boolean snellWindow) {}
     public record Atmosphere(boolean clouds, int cloudSteps, float cloudCoverage, float cloudDensity, float cloudSpeed,
                              boolean volumetrics, int lightSteps, float lightStrength, boolean weather) {}
-    public record Post(int look, boolean bloom, float bloomStrength, float exposureEv, float saturation, float pastel) {}
+    public record Post(int look, boolean bloom, float bloomStrength, float exposureEv, float saturation, float pastel,
+                       boolean motionBlur, float motionBlurStrength) {}
     public record Dimensions(boolean enabled, boolean endShadows, boolean netherShimmer) {}
 
     public static ShadeSettings from(ShaderOptionState s) {
@@ -56,7 +57,7 @@ public record ShadeSettings(Shadows shadows, Lights lights, Sky sky, Water water
                 case "PASTEL" -> 3;
                 default -> 0;
             }, s.getBoolean("BLOOM_ENABLED"), value(s, "BLOOM_STRENGTH"), value(s, "EXPOSURE"), value(s, "SATURATION"),
-                value(s, "PASTEL_STRENGTH")),
+                value(s, "PASTEL_STRENGTH"), s.getBoolean("MOTION_BLUR_ENABLED"), value(s, "MOTION_BLUR_STRENGTH")),
             new Dimensions(s.getBoolean("NETHER_END_LOOKS"), s.getBoolean("END_SHADOWS"), s.getBoolean("NETHER_SHIMMER"))
         );
     }

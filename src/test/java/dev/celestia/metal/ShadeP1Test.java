@@ -352,7 +352,7 @@ class ShadeP1Test {
         // (alpha.24) shadeLdrToHdr(fogColor) per fragment cost ~8 ms of the sky pass alone underwater at 3024x1742 (M1 Pro)
         for (String name : List.of("shade_m2.metal", "shade_dims.metal", "shade_water_terrain.metal", "shade_terrain.metal",
                 "sky.fs.metal", "end_sky.fs.metal", "water.metal", "shade_entity.metal", "clouds.fs.metal",
-                "celestial.fs.metal", "shade_post.metal")) {
+                "celestial.fs.metal", "shade_post.metal", "motion_blur.metal")) {
             try (var in = ShadeP1Test.class.getResourceAsStream(dev.celestia.metal.shade.ShadeShaderPatcher.DEFAULT_PACK_SHADERS + name)) {
                 assertNotNull(in, name);
                 String src = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
@@ -377,6 +377,14 @@ class ShadeP1Test {
                 MetalNative.functionDestroy(fn);
             }
             MetalNative.libraryDestroy(lib);
+            long postLib = MetalNative.compileMslLibrary(ctx, ShadeShaderPatcher.postSource(), "test.post", true, err);
+            assertNotEquals(0L, postLib, () -> err.toString());
+            for (String entry : List.of("shade_fs_vs", "shade_final", "shade_final_dims", "shade_motion_fs")) {
+                long fn = MetalNative.compileFunction(postLib, entry, false, 0, 0, err);
+                assertNotEquals(0L, fn, () -> entry + ": " + err);
+                MetalNative.functionDestroy(fn);
+            }
+            MetalNative.libraryDestroy(postLib);
         } finally {
             MetalNative.deviceDestroy(ctx);
         }
