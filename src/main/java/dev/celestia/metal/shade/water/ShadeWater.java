@@ -194,7 +194,7 @@ public final class ShadeWater {
         // mirror: x mirrorAA, y reflFilter, z reflPano, w causticGain
         p.putFloat(128, 0f).putFloat(132, 1f).putFloat(136, 0f).putFloat(140, 2.5f);
         // far: x dist, y band, z dev, w baked swell ready
-        p.putFloat(144, 176f).putFloat(148, 64f).putFloat(152, 0f).putFloat(156, swellReady ? 1f : 0f);
+        p.putFloat(144, 176f).putFloat(148, 64f).putFloat(152, (float) Integer.getInteger("celestiametal.shade.water.devSsr", 0)).putFloat(156, swellReady ? 1f : 0f);
         int budget = Math.clamp(Integer.getInteger("celestiametal.shade.water.ssrBudget", options.ssrBudget()), 8, 32);
         p.putInt(160, budget).putInt(164, 0).putInt(168, 0).putInt(172, 0);
     }

@@ -147,7 +147,7 @@ static inline float3 shadeFinish2(float3 radiance, float vanillaFog, constant Sh
 	float a = vanillaFog * f.fogColor.a;
 	if (a <= 0.0) return c;
 	float3 t = f.flags.y == 1 ? pow(1.0 - a, float3(2.6, 1.25, 1.0)) : float3(1.0 - a);
-	return c * t + shadeLdrToHdr(f.fogColor.rgb, L) * (1.0 - t);
+	return c * t + f.fogColorHdr.rgb * (1.0 - t); // (the fog colour in HDR: converted once per frame on the CPU)
 #else
 	return shadeFinish(radiance, vanillaFog, f);
 #endif

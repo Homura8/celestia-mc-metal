@@ -35,6 +35,7 @@ void cm_ensure_cmd_begun(CMContext *ctx) {
             }
             ctx.activeM4AllocatorIdx = idx;
             ctx.activeM4CmdBuf = cb;
+            cm_prof_begin(cb);
             ctx.pushRingOffset = (idx * (ctx.pushRingSize / CM_INFLIGHT_SLOTS));
         }
     } else {
@@ -142,6 +143,7 @@ uint64_t cm_cmd_submit(int64_t ctxPtr, int32_t maxInFlight) {
             if (@available(macOS 26.0, *)) {
                 id<MTL4CommandBuffer> cb = (id<MTL4CommandBuffer>)ctx.activeM4CmdBuf;
                 ctx.activeM4CmdBuf = nil;
+                int profSlot = cm_prof_end(cb);
                 [cb endCommandBuffer];
 
                 id<MTL4CommandQueue> q = (id<MTL4CommandQueue>)ctx.m4Queue;
@@ -155,6 +157,7 @@ uint64_t cm_cmd_submit(int64_t ctxPtr, int32_t maxInFlight) {
                     if (dt > 0.0) {
                         atomic_store(&weakCtx->_lastGpuFrameNs, (uint64_t)(dt * 1e9));
                     }
+                    cm_prof_done(profSlot);
                 }];
                 [q commit:&cb count:1 options:opts];
                 [q signalEvent:ctx.submitEvent value:serial];

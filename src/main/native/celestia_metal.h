@@ -436,6 +436,11 @@ void cm_shade_bind_render_encoder(CMContext *ctx, const int64_t *colorViewPtrs, 
 void cm_water_bind_render_encoder(CMContext *ctx, const int64_t *colorViewPtrs, int32_t colorCount);
 void cm_dynlight_bind_render_encoder(CMContext *ctx);
 void cm_colorlight_bind_render_encoder(CMContext *ctx);
+// Opt-in Metal 4 GPU pass profiler (cm_profiler.m; CELESTIA_GPU_PROFILE=1).
+void cm_prof_init(CMContext *ctx);
+void cm_prof_begin(id cb);
+int cm_prof_end(id cb);
+void cm_prof_done(int slot);
 // Waits for submit `serial`; the blocked time is accounted to *waitUs (may be NULL). timeoutNs == 0 only polls.
 int32_t cm_wait_submit_accounted(CMContext *ctx, uint64_t serial, uint64_t timeoutNs, _Atomic int64_t *waitUs);
 NSUInteger cm_bytes_per_pixel(MTLPixelFormat fmt);

@@ -293,6 +293,7 @@ int64_t cm_device_create(int32_t preferMetal4, int32_t debugLabels, const char *
             }
         }
 
+        cm_prof_init(ctx);
         return (int64_t)(__bridge_retained void *)ctx;
     }
 }

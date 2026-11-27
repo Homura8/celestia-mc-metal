@@ -32,7 +32,7 @@ struct ShadeFrame {
 	float4 fogColor;            // 608
 	float4 fogRange;            // 624
 	float4 fogSky;              // 640
-	float4 skyColor;            // 656
+	float4 fogColorHdr;         // 656 fogColor.rgb as shadeLdrToHdr gives it (per frame, CelestiaShade), w 1 - rain
 	float4 zenithColor;         // 672
 	float4 horizon[8];          // 688
 	float4 cascadeSplits;       // 816

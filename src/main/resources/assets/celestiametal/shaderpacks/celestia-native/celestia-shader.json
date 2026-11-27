@@ -19,6 +19,7 @@
       "SSAO_ENABLED": "false",
       "DYNAMIC_LIGHT_COUNT": "16",
       "WATER_SWELL": "0",
+      "WATER_REFLECTIONS": "SKY_ONLY",
       "SSR_BUDGET": "16",
       "SSR_DISTANCE": "96",
       "WATER_CAUSTICS": "0",

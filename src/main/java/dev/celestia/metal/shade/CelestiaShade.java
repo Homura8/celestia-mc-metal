@@ -44,7 +44,6 @@ import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.material.FogType;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
-import org.joml.Vector3fc;
 import org.joml.Vector4f;
 import org.slf4j.Logger;
 
@@ -381,12 +380,6 @@ public final class CelestiaShade {
             moonPhaseIndex = phase;
             frame.starBrightness = sky.starBrightness;
             frame.dayTime = (float) (sunAngle / (2.0 * Math.PI) - Math.floor(sunAngle / (2.0 * Math.PI)));
-            Vector3fc skyColor = sky.skyColor;
-            if (skyColor != null) {
-                frame.skyColor[0] = skyColor.x();
-                frame.skyColor[1] = skyColor.y();
-                frame.skyColor[2] = skyColor.z();
-            }
         } else {
             frame.sunDir.set(0f, 1f, 0f);
             frame.moonDir.set(0f, -1f, 0f);
@@ -444,6 +437,10 @@ public final class CelestiaShade {
         }
         look.setHasPrevScene(hasPrevHdrWorld && prevHdrWorldTex != 0L);
         look.update(frame, moonPhaseIndex, (float) clampedDt);
+        // The fog colour in HDR once per frame (was shadeLdrToHdr per fragment: ~13 pow per pixel on every surface and the sky
+        // whenever fog applies, ~8 ms of the sky pass alone underwater at 3024x1742 on an M1 Pro)
+        float[] fogHdr = look.ldrToHdr(frame.fogColor[0], frame.fogColor[1], frame.fogColor[2]);
+        System.arraycopy(fogHdr, 0, frame.fogColorHdr, 0, 3);
         atmosphere.prepare(device.handle(), level, camera, frame, look, mc.options.getCloudStatus(), state.cloudHeight,
             (float) clampedDt, w, h, settings.atmosphere());
 

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.0-alpha.24
+
+### Performance
+- **Underwater and fog frames are faster.** Every sky, terrain and water pixel used to convert the vanilla fog colour into HDR itself, whenever fog applied. That colour is the same for the whole frame, and the conversion runs the tonemap backwards: an sRGB decode, two colour matrices and three Newton steps, about 13 `pow` calls per pixel. It is now done once per frame on the CPU (`ShadeLook.ldrToHdr`) and passed in `ShadeFrame.fogColorHdr`, which reuses the unused `skyColor` slot. Measured underwater on Ultra at 3024×1742 on an M1 Pro, the sky pass alone fell from 10.2 ms to 2.0 ms and the whole frame from 46.5 ms to 39.1 ms. The image is unchanged (median difference 1/255).
+- **The Performance preset now uses sky-only water reflections.** Screen-space water reflections are the most expensive feature: 9 ms of a 25.5 ms frame over the test pond and 15 ms underwater. The Performance preset barely changed water cost before. Now it is 10.3 ms faster than Ultra at the pond (was 3.0 ms) and 15.8 ms faster underwater (was 3.0 ms). Ultra, Quality and Balanced keep screen-space reflections.
+
+### Added
+- **Opt-in Metal 4 GPU pass profiler** (`cm_profiler.m`), switched on with `CELESTIA_GPU_PROFILE=1` in the environment (`CELESTIA_GPU_PROFILE_EVERY` sets the report interval, 240 submits by default).
+  - **How:** it timestamps every encoder a command buffer opens and prints the average milliseconds per encoder label to stderr as `[GPU] …`.
+  - **Labels:** while profiling, RenderPearl's pass names (Sky, Main and so on) are sent as encoder labels. Add `-Dcelestiametal.noPassMerge=true` for a per-pass split.
+  - **When off:** nothing changes.
+- `-Dcelestiametal.shade.water.devSsr` is now read live, every frame, and also applies to the underwater reflection:
+  - 1: no march.
+  - 2: only the coarsest level.
+  - 3: no resolve or panorama.
+  - 4: no panorama.
+- Water debug views:
+  - 12: which water fragments draw and how coplanar they are with the opaque surface.
+  - 13: water-pass overdraw, one quarter of white per layer over a black scene.
+  - 14: which water shading runs on the front layer.
+- Terrain debug view 11: red where a solid block's derived normal isn't axis-aligned.
+
 ## 0.1.0-alpha.23
 
 ### Added

@@ -28,6 +28,9 @@ import org.joml.Vector4fc;
 import org.slf4j.Logger;
 
 public final class CelestiaCommandEncoder implements CommandEncoderBackend {
+    /** CELESTIA_GPU_PROFILE=1 (cm_profiler.m): pass labels are sent so the profiler can split RenderPearl's passes by name. */
+    private static final boolean GPU_PROFILE = "1".equals(System.getenv("CELESTIA_GPU_PROFILE"));
+
     private static final Logger LOGGER = LogUtils.getLogger();
     private record Deferred(long submitSerial, Runnable action) {}
 
@@ -284,7 +287,7 @@ public final class CelestiaCommandEncoder implements CommandEncoderBackend {
             }
 
             // Labels are only consumed natively when debug labels are on; skip the string + arena otherwise.
-            String lbl = device.isDebuggingEnabled()
+            String lbl = device.isDebuggingEnabled() || GPU_PROFILE
                 ? (desc.label() != null ? desc.label().get() : "RenderPass")
                 : null;
             int ax = area != null ? area.x() : 0;
