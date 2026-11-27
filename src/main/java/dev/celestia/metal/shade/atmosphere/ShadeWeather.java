@@ -22,8 +22,8 @@ public final class ShadeWeather {
         {0.35f, 0.45f, 0.20f, 0.30f, 0.23f, 0.50f, 0.00f, 0.00f},
         {0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f},
     };
-    /** Celestia has no separate cumulus congestus layer yet: congestus days draw a taller, denser cumulus (this coverage). */
-    static final float[] CONGESTUS_AS_CUMULUS = {0.45f, 0.65f};
+    /** Fallback cumulus coverage when the dedicated cumulus congestus toggle is disabled. */
+    static final float[] CONGESTUS_FALLBACK_CUMULUS = {0.40f, 0.55f};
 
     private ShadeWeather() {}
 
@@ -50,6 +50,19 @@ public final class ShadeWeather {
      * @param fixedDay -1 for the daily cycle, else always that sky (0..11)
      */
     public static void compute(long dayTime, float rain, float coverage, int fixedDay, float[] out) {
+        compute(dayTime, rain, coverage, fixedDay, true, out);
+    }
+
+    /**
+     * out[0..7] = cumulus min, max, altocumulus min, max, cirrus, cirrocumulus, congestus, stratus.
+     *
+     * @param dayTime           the level's day time (ticks, unbounded)
+     * @param rain              rain strength 0..1 (Photon's wetness)
+     * @param coverage          the Cloud Coverage option (scales every layer)
+     * @param fixedDay          -1 for the daily cycle, else always that sky (0..11)
+     * @param congestusEnabled  whether days 2 and 4 use the distant cumulus congestus layer instead of fallback cumulus
+     */
+    public static void compute(long dayTime, float rain, float coverage, int fixedDay, boolean congestusEnabled, float[] out) {
         long day = Math.floorDiv(dayTime, 24000L), t = Math.floorMod(dayTime, 24000L);
         float[] a, b;
         float m;
@@ -64,10 +77,12 @@ public final class ShadeWeather {
             m = x * x * (3f - 2f * x);
         }
         for (int i = 0; i < 8; i++) out[i] = a[i] + (b[i] - a[i]) * m;
-        // congestus days: a taller, denser cumulus stands in (out[6] keeps the amount for the layer's thickness)
-        float con = out[6];
-        out[0] += (CONGESTUS_AS_CUMULUS[0] - out[0]) * con;
-        out[1] += (CONGESTUS_AS_CUMULUS[1] - out[1]) * con;
+        if (!congestusEnabled && out[6] > 0f) {
+            float con = out[6];
+            out[0] += (CONGESTUS_FALLBACK_CUMULUS[0] - out[0]) * con;
+            out[1] += (CONGESTUS_FALLBACK_CUMULUS[1] - out[1]) * con;
+            out[6] = 0f;
+        }
         // weather influence (Photon's clouds_weather_variation)
         out[0] += (0.6f - out[0]) * rain;
         out[1] += (0.8f - out[1]) * rain;

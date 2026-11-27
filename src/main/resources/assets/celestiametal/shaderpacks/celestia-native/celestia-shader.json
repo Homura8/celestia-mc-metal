@@ -500,6 +500,15 @@
       "step": 0.1
     },
     {
+      "id": "CLOUD_CONGESTUS",
+      "label": "Cumulus Congestus",
+      "description": "Replaces cumulus clouds on clear convective weather days with towering distant cumulus congestus thunderheads.",
+      "category": "Clouds & Weather",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "LOW"
+    },
+    {
       "id": "GOD_RAYS",
       "label": "Volumetric Light Shafts",
       "description": "Shows shafts of sunlight and moonlight through air, and shafts of sunlight through water.",

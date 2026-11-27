@@ -5,11 +5,11 @@
 // http://www.apache.org/licenses/LICENSE-2.0. Unless required by applicable law or agreed to in writing, software distributed
 // under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 //
-// The cumulus layer's density model, light and sky optical depth marches, multiple-scattering octaves, powder term and phase
-// lobes are adapted from Photon Shaders (https://github.com/sixthsurge/photon) include/sky/clouds/{common,cumulus}.glsl at
-// commit 26c2906e, Copyright (c) 2025 Benjamin Stott ("sixthsurge"), MIT License (LICENSES/MIT-Photon.txt), as are the noise
-// textures it reads (assets/celestiametal/textures/clouds). Photon's later releases are under a different licence and are not
-// used here.
+// The cumulus, cumulus congestus, altocumulus and cirrus layers' density models, light and sky optical depth marches,
+// multiple-scattering octaves, powder term and phase lobes are adapted from Photon Shaders (https://github.com/sixthsurge/photon)
+// include/sky/clouds/{common,cumulus,cumulus_congestus,clouds}.glsl at commit 26c2906e, Copyright (c) 2025 Benjamin Stott ("sixthsurge"),
+// MIT License (LICENSES/MIT-Photon.txt), as are the noise textures it reads (assets/celestiametal/textures/clouds).
+// Photon's later releases are under a different licence and are not used here.
 //
 // Apple GPU notes (what differs from upstream):
 // - The 3D noises live in tiled 2D atlases (ShadeCloudNoise): two bilinear taps per lookup, no 3D texture state.
@@ -34,8 +34,13 @@ constexpr sampler cloudClamp(filter::linear, address::clamp_to_edge);
 static inline float cloudLinearStep(float a, float b, float x) { return saturate((x - a) / (b - a)); }
 static inline float cloudDampen(float x) { x = saturate(x); return x * (2.0 - x); }
 
-#define CLOUD_CU 0 // the cumulus layer (with stratus and, as a stand-in, cumulus congestus)
+#define CLOUD_CU 0 // the cumulus layer (with stratus)
 #define CLOUD_AC 1 // the altocumulus layer
+#define CLOUD_CG 2 // distant towering cumulus congestus layer (days 2 and 4)
+#define CLOUD_CG_ALT 400.0
+#define CLOUD_CG_THICK (CLOUD_CG_ALT * 24.0)
+#define CLOUD_CG_DIST 10000.0
+#define CLOUD_CG_END 50000.0
 
 struct CloudLayer {
 	float radius, top, thickness; // the shell's inner and outer radius and its thickness (m)
@@ -65,8 +70,7 @@ static CloudLayer cloudLayer(constant ShadeFrame &f, constant ShadeLook &L) {
 	float2 camXZ = fmod(f.cameraBlock.xz + f.cameraFract.xz, 50000.0) * CLOUD_SCALE;
 	float windAngle, windSpeed;
 	if (K == CLOUD_CU) {
-		float con = L.weatherB.z; // cumulus congestus days: a taller layer stands in
-		c.thickness = cu * (1.0 + 0.8 * con);
+		c.thickness = cu;
 		c.radius = CLOUD_PLANET_R + cu;
 		c.coverage = L.weatherA.xy;
 		c.stratus = L.weatherB.w;
@@ -430,6 +434,154 @@ static inline CloudHit cloudBlend(CloudHit a, CloudHit b) {
 	return o;
 }
 
+static inline float2 cloudCylShell(float3 o, float3 d, float rIn, float rOut) {
+	float lenO = length(o.xz);
+	float rLenD = 1.0 / max(length(d.xz), 1e-6);
+	return float2((rIn - lenO) * rLenD, (rOut - lenO) * rLenD);
+}
+
+static float cloudCongestusDensity(float3 pos, float2 offset, float2 windVel, float3 wind3, float amount, float covScale,
+                                   texture2d<half> n2d, texture2d<half> worley, texture2d<half> curl, bool detail) {
+	const float rIn = CLOUD_PLANET_R + CLOUD_CG_ALT;
+	const float rOut = rIn + CLOUD_CG_THICK;
+	float r = length(pos);
+	if (r < rIn || r > rOut) return 0.0;
+	float alt = (r - rIn) * (1.0 / CLOUD_CG_THICK);
+	float distFrac = cloudLinearStep(CLOUD_CG_DIST, CLOUD_CG_END, length(pos.xz));
+	float2 xz = pos.xz + offset + windVel * (50.0 * alt * alt);
+
+	float noise = float(n2d.sample(cloudWrap, 0.000002 * xz).a);
+	float d = 1.2 * cloudLinearStep(0.2, 1.0, noise * noise) * cloudLinearStep(0.5, 0.75, amount) * saturate(covScale);
+	float egg = cloudLinearStep(0.2, 1.0, alt);
+	d -= egg * sqrt(egg) * 0.6;
+	d *= smoothstep(0.0, 0.1, alt) * smoothstep(0.0, 0.1, 1.0 - alt);
+	d *= 4.0 * distFrac * (1.0 - distFrac);
+	if (d < 1e-4) return 0.0;
+
+	float3 p = float3(xz.x, r - CLOUD_PLANET_R, xz.y);
+	float3 cl = detail ? 0.181 * cloudCurl(curl, 0.0002 * p) * smoothstep(0.4, 1.0, 1.0 - alt) : float3(0.0);
+	float w0 = cloudWorley(worley, (p + 0.2 * wind3) * 0.00016 + cl);
+	float w1 = detail ? cloudWorley(worley, (p + 0.4 * wind3) * 0.0010 + cl * 3.0) : 0.5;
+	float fade = 0.20 * smoothstep(0.85, 1.0, 1.0 - alt) - 0.35 * smoothstep(0.05, 0.5, alt) + 0.6;
+	d -= 0.25 * w0 * w0 * cloudDampen(1.0 - d);
+	d -= 0.10 * w1 * w1 * cloudDampen(1.0 - d) * fade;
+	d = max(d, 0.0);
+	d = 1.0 - pow(1.0 - d, mix(2.0, 7.0, alt));
+	float low = cloudLinearStep(0.0, 0.5, alt);
+	return d * (low * low);
+}
+
+static float cloudCongestusOpticalDepth(float3 o, float3 dir, float2 offset, float2 windVel, float3 wind3, float amount,
+                                        float covScale, texture2d<half> n2d, texture2d<half> worley, texture2d<half> curl,
+                                        float dither, int steps) {
+	float4 st = float4(dir, 1.0) * (0.1 * CLOUD_CG_THICK / float(steps));
+	float3 pos = o;
+	float od = 0.0;
+	for (int i = 0; i < steps; i++) {
+		st *= 2.0;
+		od += cloudCongestusDensity(pos + st.xyz * dither, offset, windVel, wind3, amount, covScale, n2d, worley, curl, false) * st.w;
+		pos += st.xyz;
+	}
+	return od;
+}
+
+static float2 cloudCongestusScattering(float density, float lightOd, float skyOd, float groundOd, float extinction,
+                                       float scattering, float stepT, float nu, float bounced) {
+	float2 s = 0.0;
+	float scatter = scattering, extinct = extinction;
+	float integral = (1.0 - stepT) / max(extinction, 1e-6);
+	float pd = 2.0 * density;
+	float powder = M_PI_F * pd / (pd + 0.15);
+	powder = mix(powder, 1.0, 0.8 * (nu * 0.5 + 0.5) * (nu * 0.5 + 0.5));
+	float phase = cloudPhaseSingle(nu);
+	float3 g = pow(float3(0.6, 0.9, 0.3), float3(1.0 + lightOd));
+	float spread = 0.55 * mix(cloudLift(saturate(scattering / 0.1), 0.33), 1.0, nu * 0.5 + 0.5);
+	for (int i = 0; i < 6; i++) {
+		s.x += scatter * exp(-extinct * lightOd * 0.33) * phase;
+		s.x += scatter * exp(-extinct * groundOd * 0.33) * CLOUD_ISO * bounced;
+		s.y += scatter * exp(-extinct * skyOd * 0.33) * CLOUD_ISO;
+		scatter *= spread * powder;
+		extinct *= 0.5;
+		g *= 0.5;
+		powder = mix(powder, sqrt(powder), 0.5);
+		phase = cloudPhaseMulti(nu, g);
+	}
+	return s * integral;
+}
+
+static CloudHit cloudCongestusMarch(float3 o, float3 dir, float dither, int steps, int lightSteps, thread const CloudLight &cl,
+                                    constant ShadeFrame &f, constant ShadeLook &L, texture2d<half> n2d, texture2d<half> worley,
+                                    texture2d<half> curl, float3 clear) {
+	float amount = L.weatherB.z;
+	float covScale = L.clouds0.y;
+	if (amount < 0.5 || covScale <= 0.0) return cloudMiss;
+
+	const float rIn = CLOUD_PLANET_R + CLOUD_CG_ALT;
+	const float rOut = rIn + CLOUD_CG_THICK;
+	float2 sphereDists = cloudShell(o, dir, rIn, rOut);
+	float2 cylDists = cloudCylShell(o, dir, CLOUD_CG_DIST, CLOUD_CG_END);
+	float2 dists = float2(max(sphereDists.x, cylDists.x), min(sphereDists.y, cylDists.y));
+	if (dists.y < 0.0 || dists.x >= dists.y) return cloudMiss;
+
+	float r = o.y;
+	float bp = dot(o, dir), dp = bp * bp - r * r + (r - 10.0) * (r - 10.0);
+	if (r < rIn && dp >= 0.0 && -bp + sqrt(dp) >= 0.0) return cloudMiss;
+
+	const float angle = 30.0 * M_PI_F / 180.0;
+	float2 windVel = 20.0 * float2(cos(angle), sin(angle));
+	float2 wind = windVel * L.clouds1.w;
+	float2 camXZ = fmod(f.cameraBlock.xz + f.cameraFract.xz, 50000.0) * CLOUD_SCALE;
+	float2 offset = camXZ + wind;
+	float3 wind3 = float3(wind.x, 0.0, wind.y);
+
+	float rain = saturate(f.weather.x);
+	float extinction = 0.08 * L.clouds1.z;
+	float scattering = extinction * (1.0 - 0.33 * rain);
+
+	int primary = clamp(int(float(steps) * 1.667), 12, 40);
+	float len = dists.y - dists.x;
+	float stepLen = len / float(primary);
+	float3 rayStep = dir * stepLen;
+	float3 start = o + dir * (dists.x + stepLen * dither);
+	float bounced = 0.4 * max(cl.dir.y, 0.0) / M_PI_F;
+
+	float2 scat = 0.0;
+	float T = 1.0, dSum = 0.0, wSum = 0.0;
+	float lightOd = 0.0, skyOd = 0.0;
+	int lit = 0;
+	int skySteps = max(2, lightSteps / 2);
+	for (int i = 0; i < primary && T > CLOUD_MIN_T; i++) {
+		float3 p = start + rayStep * float(i);
+		float density = cloudCongestusDensity(p, offset, windVel, wind3, amount, covScale, n2d, worley, curl, true);
+		if (density < 1e-4) continue;
+		float dist = stepLen * float(i);
+		float stepT = exp(-density * extinction * stepLen);
+		float altFrac = (length(p) - rIn) * (1.0 / CLOUD_CG_THICK);
+		if ((lit++ & 1) == 0) {
+			float2 h = fract(float2(dither * 7.13 + float(i) * 0.618, dither * 3.71 + float(i) * 0.382));
+			lightOd = cloudCongestusOpticalDepth(p, cl.dir, offset, windVel, wind3, amount, covScale, n2d, worley, curl, h.x, lightSteps);
+			skyOd = cloudCongestusOpticalDepth(p, float3(0.0, 1.0, 0.0), offset, windVel, wind3, amount, covScale, n2d, worley, curl, h.y, skySteps);
+		}
+		float groundOd = mix(density, 1.0, saturate(altFrac * 2.0 - 1.0)) * altFrac * CLOUD_CG_THICK;
+		scat += cloudCongestusScattering(density, lightOd, skyOd, groundOd, extinction, scattering, stepT, cl.nu, bounced) * T;
+		T *= stepT;
+		dSum += dist * density;
+		wSum += density;
+	}
+	if (T >= 0.999) return cloudMiss;
+
+	CloudHit hit;
+	hit.s = scat.x * cl.light + scat.y * cl.sky;
+	hit.T = cloudLinearStep(CLOUD_MIN_T, 1.0, T);
+	hit.d = (wSum > 0.0 ? dSum / wSum : 0.0) + dists.x;
+	hit = cloudAerial(hit, clear, rain);
+
+	float horizonFade = mix(cloudDampen(cloudLinearStep(0.0, 0.08, dir.y)), 1.0,
+		smoothstep(rIn * rIn, (rIn + 0.1 * CLOUD_CG_THICK) * (rIn + 0.1 * CLOUD_CG_THICK), dot(o, o)));
+	hit.s = mix(clear * (1.0 - hit.T), hit.s, horizonFade);
+	return hit;
+}
+
 // The whole cloud sky along dir: rgb in-scattered radiance (aerial perspective toward clear applied), a transmittance.
 static half4 cloudSky(float3 dir, float dither, int steps, int lightSteps, constant ShadeFrame &f, constant ShadeLook &L,
                       texture2d<half> n2d, texture2d<half> worley, texture2d<half> curl, float3 clear, float3 zenith) {
@@ -451,10 +603,13 @@ static half4 cloudSky(float3 dir, float dither, int steps, int lightSteps, const
 
 	int dev = int(L.clouds0.z);
 	if ((dev & 8) != 0) return half4(0.0h, 0.0h, 0.0h, 1.0h);
+	bool congestus = L.weatherB.z >= 0.5;
 	CloudHit res = (dev & 4) != 0 ? cloudMiss
-	             : cloudAerial(cloudVolumeMarch<CLOUD_CU>(o, dir, dither, steps, lightSteps, cl, f, L, n2d, worley, curl), clear, rain);
+	             : (congestus
+	                ? cloudCongestusMarch(o, dir, dither, steps, lightSteps, cl, f, L, n2d, worley, curl, clear)
+	                : cloudAerial(cloudVolumeMarch<CLOUD_CU>(o, dir, dither, steps, lightSteps, cl, f, L, n2d, worley, curl), clear, rain));
 	bool belowCu = o.y < CLOUD_PLANET_R + cloudCuBase(L);
-	if (!(res.T < 1e-3 && belowCu)) {
+	if (!(res.T < 1e-3 && (congestus || belowCu))) {
 		int acLight = max(lightSteps - 2, 3);
 		if ((dev & 1) == 0)
 			res = cloudBlend(res, cloudAerial(cloudVolumeMarch<CLOUD_AC>(o, dir, dither, max(steps / 2, 4), acLight, cl, f, L, n2d,
