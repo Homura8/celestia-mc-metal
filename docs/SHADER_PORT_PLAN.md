@@ -338,7 +338,7 @@ Owner priorities (2026-11-28), in order:
       `examples/shaderpacks/celestia-example-world`; QA: `tools/qa/run.sh packs`. Open: the first compile of a new pack
       stalls the game ~7 s on an M1 Pro (a loading overlay or background compile would hide it); a pack can't yet change
       the engine-side passes (pass list, targets, bindings) or the dynamic-light shading.
-- [ ] Nether and End looks.
+- [x] Nether and End looks.
 - [ ] Aurora.
 - [ ] Motion blur.
 - [ ] A real cumulus congestus layer (days 2 and 4 currently stand in a thicker cumulus).

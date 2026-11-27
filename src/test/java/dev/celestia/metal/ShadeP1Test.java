@@ -5,8 +5,10 @@ import com.mojang.renderpearl.api.pipeline.UniformType;
 import dev.celestia.metal.backend.MetalConst;
 import dev.celestia.metal.backend.MetalNative;
 import dev.celestia.metal.backend.MetalShaderTranslator;
+import dev.celestia.metal.shade.ShadeDims;
 import dev.celestia.metal.shade.ShadeFrame;
 import dev.celestia.metal.shade.ShadeLook;
+import dev.celestia.metal.shade.ShadeSettings;
 import dev.celestia.metal.shade.ShadeShaderPatcher;
 import dev.celestia.metal.shade.ShadeSky;
 import java.nio.ByteBuffer;
@@ -150,6 +152,12 @@ class ShadeP1Test {
         assertTrue(skyRes.vsSource().contains("shadeViewRay"));
         assertTrue(skyRes.fsSource().contains("shadeSkyPixel"));
 
+        var endSkyRes = ShadeShaderPatcher.patch("minecraft:pipeline/end_sky", dummyVs, "main0", dummyFs, "main0",
+            uniforms, bindings, ShadeShaderPatcher.Variant.HDR_WORLD);
+        assertTrue(endSkyRes.patched());
+        assertTrue(endSkyRes.vsSource().contains("EndSkyOut"));
+        assertTrue(endSkyRes.fsSource().contains("shadeEndSky("));
+
         // Vanilla terrain patching
         String vanillaTerrainVs = """
             #include <metal_stdlib>
@@ -279,16 +287,72 @@ class ShadeP1Test {
             assertNotEquals(0L, MetalNative.compileMslLibrary(ctx, entRes.fsSource(), "test.ent.fs", true, err), () -> err.toString());
             assertNotEquals(0L, MetalNative.compileMslLibrary(ctx, handRes.vsSource(), "test.hand.vs", true, err), () -> err.toString());
             assertNotEquals(0L, MetalNative.compileMslLibrary(ctx, handRes.fsSource(), "test.hand.fs", true, err), () -> err.toString());
+            long endVsLib = MetalNative.compileMslLibrary(ctx, endSkyRes.vsSource(), "test.endsky.vs", true, err);
+            assertNotEquals(0L, endVsLib, () -> err.toString());
+            MetalNative.libraryDestroy(endVsLib);
+            long endFsLib = MetalNative.compileMslLibrary(ctx, endSkyRes.fsSource(), "test.endsky.fs", true, err);
+            assertNotEquals(0L, endFsLib, () -> err.toString());
+            MetalNative.libraryDestroy(endFsLib);
+            long postLib = MetalNative.compileMslLibrary(ctx, ShadeShaderPatcher.postSource(), "test.post.dims", true, err);
+            assertNotEquals(0L, postLib, () -> err.toString());
+            long finalDimsFn = MetalNative.compileFunction(postLib, "shade_final_dims", false, 0, 0, err);
+            assertNotEquals(0L, finalDimsFn, () -> err.toString());
+            MetalNative.functionDestroy(finalDimsFn);
+            MetalNative.libraryDestroy(postLib);
         } finally {
             MetalNative.deviceDestroy(ctx);
         }
     }
 
     @Test
+    void shadeDimsUpdatesAndPacksNetherAndEndState() {
+        ShadeSettings.Dimensions opts = new ShadeSettings.Dimensions(true, true, true);
+        ShadeFrame frame = new ShadeFrame();
+        frame.view.identity();
+        frame.proj.perspective((float) Math.toRadians(70.0), 16f / 9f, 0.05f, 256f);
+        frame.proj.mul(frame.view, frame.viewProj);
+        frame.viewProj.invert(frame.invViewProj);
+        frame.updateAtmosphere(0.016f, true);
+        ShadeLook look = new ShadeLook();
+        look.update(frame, 0, 0.016f);
+
+        ByteBuffer fb = ByteBuffer.allocateDirect(ShadeFrame.SIZE).order(ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer lb = ByteBuffer.allocateDirect(ShadeLook.SIZE).order(ByteOrder.LITTLE_ENDIAN);
+
+        frame.dimension = ShadeFrame.DIM_NETHER;
+        frame.fogRenderStart = 32f;
+        frame.fogRenderEnd = 128f;
+        ShadeDims.update(frame, look, null, null, null, 0.016f, true, opts);
+        assertTrue(ShadeDims.isLit());
+        assertFalse(ShadeDims.endShadowsActive());
+        frame.pack(fb);
+        look.pack(lb, frame);
+        ShadeDims.pack(lb, fb, frame, opts);
+        assertNotEquals(0, ((int) fb.getFloat(ShadeFrame.SUN_PATH + 8)) & ShadeDims.FLAG_DIMS_LIT);
+        assertNotEquals(0, lb.getInt(ShadeLook.TIER + 4) & ShadeDims.FEATURE_DIMS);
+        assertNotEquals(0, lb.getInt(ShadeLook.TIER + 4) & ShadeDims.FEATURE_SHIMMER);
+        assertTrue(lb.getFloat(ShadeLook.DIM_TINT) > 0f);
+        assertEquals(1, ((int) lb.getFloat(ShadeLook.DIM_TINT + 12)) & 3);
+
+        frame.dimension = ShadeFrame.DIM_END;
+        ShadeDims.update(frame, look, null, null, null, 0.016f, true, opts);
+        assertTrue(ShadeDims.isLit());
+        assertTrue(ShadeDims.endShadowsActive());
+        assertTrue(frame.sky.sunLight);
+        assertTrue(frame.sky.light[0] > 0f);
+        frame.pack(fb);
+        look.pack(lb, frame);
+        ShadeDims.pack(lb, fb, frame, opts);
+        assertEquals(2, ((int) lb.getFloat(ShadeLook.DIM_TINT + 12)) & 3);
+        assertEquals(frame.exposure, lb.getFloat(ShadeLook.EXPOSURE_REF), 1e-6f);
+    }
+
+    @Test
     void noShaderInvertsTheFogColourPerPixel() throws Exception {
         // (alpha.24) shadeLdrToHdr(fogColor) per fragment cost ~8 ms of the sky pass alone underwater at 3024x1742 (M1 Pro)
-        for (String name : List.of("shade_m2.metal", "shade_water_terrain.metal", "shade_terrain.metal", "sky.fs.metal",
-                "water.metal", "shade_entity.metal", "clouds.fs.metal", "celestial.fs.metal")) {
+        for (String name : List.of("shade_m2.metal", "shade_dims.metal", "shade_water_terrain.metal", "shade_terrain.metal",
+                "sky.fs.metal", "end_sky.fs.metal", "water.metal", "shade_entity.metal", "clouds.fs.metal",
+                "celestial.fs.metal", "shade_post.metal")) {
             try (var in = ShadeP1Test.class.getResourceAsStream(dev.celestia.metal.shade.ShadeShaderPatcher.DEFAULT_PACK_SHADERS + name)) {
                 assertNotNull(in, name);
                 String src = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);

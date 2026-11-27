@@ -49,7 +49,7 @@ struct ShadeLook {
 	float4 clouds1;    // 544  x reflection dome enabled, y samples, z density scale, w drift phase
 	float4 waterShadow;// 560  water soft shadow / DH direct / contact / torch caustics
 	float4 water;      // 576  wet-all look / film roughness / veg roughness / gate
-	float4 waterAbs;   // 592  wet film look parameters
+	float4 dimTint;    // 592  x fog extinction (1/block), y lava sea y, z border fog radius (0 off), w kind + 4*bits
 	float4 tintRect;   // 608  coloured-shadow casters rect
 	float4 eye;        // 624  x cave air glow, y cave water sky, z cave water ripples, w smoothed eye sky light
 	float4 skyGoldH;   // 640  rgb golden-hour gain toward horizon, w M3 sunset art toggle
@@ -87,6 +87,10 @@ static_assert(sizeof(ShadeLook) == 1136, "ShadeLook size must be 1136 bytes");
 #define SHADE_FEATURE_HAZE 32
 #define SHADE_FEATURE_LIGHT_V2 64
 #define SHADE_FEATURE_CLOUDS 4096
+#define SHADE_FEATURE_DIMS (1 << 20)
+#define SHADE_FEATURE_MEDIA (1 << 21)
+#define SHADE_FEATURE_SHIMMER (1 << 22)
+#define SHADE_FLAG_DIMS_LIT (1 << 23)
 
 struct ShadeGpu {
 	float4 sh[9];          //   0

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Nether and End dimension looks, plus camera media.**
+  - **Nether:** 5-biome blended ambient and layered drifting fog (Wastes, Crimson Forest, Warped Forest, Soul Sand Valley, Basalt Deltas), warm flickering lava up-light from the lava sea, lifted Nether particle motes so warped spores and ash don't read as dark specks, and optional distant **Nether Heat Shimmer** (on in Quality/Ultra).
+  - **The End:** fixed violet key light with 2-cascade shadows (**End Key Light Shadows**), violet ambient, thin haze, procedural End sky (`minecraft:pipeline/end_sky` with indigo gradient, turning nebula, crisp stars, void horizon beams, and End flash), and dragon-fight boss-fog fallback in the final pass.
+  - **Camera media & post:** glowing churning orange inside lava, crystalline frost in powder snow, and a dedicated `shade_final_dims` pass so Overworld frames pay zero extra cost.
+  - **Options:** new **Nether and End Looks**, **End Key Light Shadows**, and **Nether Heat Shimmer** controls under **Sky & Atmosphere**.
 - **Multiple native MSL world packs.**
   - **Change:** a pack whose manifest says `"kind": "world"` replaces the world renderer's MSL. It overrides Celestia Native's `shaders/*.metal` by file name, and the files it leaves out stay Celestia Native's. Options marked `"recompile"` are compiled in as `#define`s. Engine options a pack does not declare keep Celestia Native's defaults.
   - **Layout:** Celestia Native's shaders now live in its pack folder (`shaderpacks/celestia-native/shaders/`). The buffer layouts, slots and light/TAA kernels moved to the engine-owned `shaders/engine/`, which packs cannot override.

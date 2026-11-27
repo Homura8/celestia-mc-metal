@@ -183,6 +183,7 @@ public final class ShadeShaderPatcher {
         sb.append(resource("shade_look.metal")).append('\n');
         sb.append(resource("shade_common.metal")).append('\n');
         sb.append(resource("shade_m2.metal")).append('\n');
+        sb.append(resource("shade_dims.metal")).append('\n');
         if (dynLights) sb.append(dev.celestia.metal.shade.light.DynLightMsl.module()).append('\n');
         if (colorLights) sb.append(resource("colorlight.metal")).append('\n');
         if (includeVanillaUniforms) {
@@ -297,6 +298,10 @@ public final class ShadeShaderPatcher {
         if ("minecraft:pipeline/celestial".equals(lower) && hasUniforms(uniforms, CELESTIAL_UNIFORMS) && baseFs != null) {
             String pre = prelude(true, false, slotDefines);
             return new PatchedStages(pre + resource("celestial.vs.metal"), "main0", pre + resource("celestial.fs.metal"), "main0", true);
+        }
+        if ("minecraft:pipeline/end_sky".equals(lower) && hasUniforms(uniforms, CELESTIAL_UNIFORMS) && baseFs != null) {
+            String pre = prelude(true, false, slotDefines);
+            return new PatchedStages(pre + resource("end_sky.vs.metal"), "main0", pre + resource("end_sky.fs.metal"), "main0", true);
         }
         if ("minecraft:pipeline/sunrise_sunset".equals(lower) && hasUniforms(uniforms, MATRIX_UNIFORMS)) {
             String pre = prelude(true, false, slotDefines);

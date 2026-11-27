@@ -823,14 +823,16 @@ static void verify_backend_ops(int32_t preferMetal4) {
         NSString *lookSrc = read_file_str(shade_path(portedDir, @"shade_look.metal"));
         NSString *commonSrc = read_file_str(shade_path(portedDir, @"shade_common.metal"));
         NSString *m2Src = read_file_str(shade_path(portedDir, @"shade_m2.metal"));
+        NSString *dimsSrc = read_file_str(shade_path(portedDir, @"shade_dims.metal"));
         NSString *vuniSrc = read_file_str(shade_path(portedDir, @"vanilla_uniforms.metal"));
-        NSString *prelude = [NSString stringWithFormat:@"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n%@\n%@\n%@\n%@\n%@\n%@\n",
-                             slots, apiSrc, lookSrc, commonSrc, m2Src, vuniSrc];
+        NSString *prelude = [NSString stringWithFormat:@"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n%@\n%@\n%@\n%@\n%@\n%@\n%@\n",
+                             slots, apiSrc, lookSrc, commonSrc, m2Src, dimsSrc, vuniSrc];
 
         // Compile-verify every ported P1 & P2 .metal file on both Metal 4 and Metal 3
         NSString *dummyDefines = @"#define CELESTIA_BUF_Fog 0\n#define CELESTIA_BUF_DynamicTransforms 1\n#define CELESTIA_BUF_Projection 2\n#define CELESTIA_BUF_CloudInfo 0\n#define CELESTIA_TEX_Sampler0 0\n#define CELESTIA_SAMP_Sampler0 0\n";
         NSArray<NSString *> *portedShaders = @[
             @"sky_lut.metal", @"sky.vs.metal", @"sky.fs.metal",
+            @"end_sky.vs.metal", @"end_sky.fs.metal",
             @"celestial.vs.metal", @"celestial.fs.metal", @"stars.vs.metal",
             @"sunrise_sunset.vs.metal", @"clouds.fs.metal", @"shade_post.metal",
             @"shade_terrain.metal", @"shade_entity.metal"
@@ -872,9 +874,10 @@ static void verify_backend_ops(int32_t preferMetal4) {
         int64_t fnBd = cm_compile_function(lPost, "shade_bloom_down", 0, 0, 0, serr, sizeof(serr));
         int64_t fnBu = cm_compile_function(lPost, "shade_bloom_up", 0, 0, 0, serr, sizeof(serr));
         int64_t fnFin = cm_compile_function(lPost, "shade_final", 0, 0, 0, serr, sizeof(serr));
+        int64_t fnFinDims = cm_compile_function(lPost, "shade_final_dims", 0, 0, 0, serr, sizeof(serr));
         int64_t fnHist = cm_compile_function(lPost, "shade_histogram", 0, 0, 0, serr, sizeof(serr));
         int64_t fnExp = cm_compile_function(lPost, "shade_exposure", 0, 0, 0, serr, sizeof(serr));
-        assert(fnLutVs && fnLutFs && fnFsVs && fnMw && fnBd0 && fnBd && fnBu && fnFin && fnHist && fnExp);
+        assert(fnLutVs && fnLutFs && fnFsVs && fnMw && fnBd0 && fnBd && fnBu && fnFin && fnFinDims && fnHist && fnExp);
 
         CMColorAttachmentDesc f16Desc = { CM_FMT_RGBA16_FLOAT, 0, 1, 0, 0, 1, 0, 0, 15 };
         CMColorAttachmentDesc bloomDesc = { CM_FMT_RG11B10_FLOAT, 0, 1, 0, 0, 1, 0, 0, 15 };
@@ -885,9 +888,10 @@ static void verify_backend_ops(int32_t preferMetal4) {
         int64_t pBd = cm_render_pipeline_create(ctx, fnFsVs, fnBd, NULL, 0, NULL, 0, &bloomDesc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2l_bd", serr, sizeof(serr));
         int64_t pBu = cm_render_pipeline_create(ctx, fnFsVs, fnBu, NULL, 0, NULL, 0, &bloomDesc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2l_bu", serr, sizeof(serr));
         int64_t pFin = cm_render_pipeline_create(ctx, fnFsVs, fnFin, NULL, 0, NULL, 0, &u8Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2l_fin", serr, sizeof(serr));
+        int64_t pFinDims = cm_render_pipeline_create(ctx, fnFsVs, fnFinDims, NULL, 0, NULL, 0, &u8Desc, 1, -1, CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "2l_findims", serr, sizeof(serr));
         int64_t cHist = cm_compute_pipeline_create(ctx, fnHist, "2l_hist", serr, sizeof(serr));
         int64_t cExp = cm_compute_pipeline_create(ctx, fnExp, "2l_exp", serr, sizeof(serr));
-        assert(pLut && pMw && pBd0 && pBd && pBu && pFin && cHist && cExp);
+        assert(pLut && pMw && pBd0 && pBd && pBu && pFin && pFinDims && cHist && cExp);
 
         uint8_t frameBytes[1024] = {0}, lookBytes[1136] = {0}, gpuBytes[512] = {0};
         float *ff = (float *)frameBytes;
@@ -1054,9 +1058,9 @@ static void verify_backend_ops(int32_t preferMetal4) {
         cm_texture_destroy(ctx, mwTex); cm_texture_destroy(ctx, lutTex); cm_texture_destroy(ctx, dumShd);
         cm_buffer_destroy(ctx, rBuf); cm_buffer_destroy(ctx, gBuf); cm_buffer_destroy(ctx, lBuf); cm_buffer_destroy(ctx, fBuf);
         cm_compute_pipeline_destroy(ctx, cExp); cm_compute_pipeline_destroy(ctx, cHist);
-        cm_pipeline_destroy(ctx, pFin); cm_pipeline_destroy(ctx, pBu); cm_pipeline_destroy(ctx, pBd);
+        cm_pipeline_destroy(ctx, pFinDims); cm_pipeline_destroy(ctx, pFin); cm_pipeline_destroy(ctx, pBu); cm_pipeline_destroy(ctx, pBd);
         cm_pipeline_destroy(ctx, pBd0); cm_pipeline_destroy(ctx, pMw); cm_pipeline_destroy(ctx, pLut);
-        cm_function_destroy(fnExp); cm_function_destroy(fnHist); cm_function_destroy(fnFin);
+        cm_function_destroy(fnExp); cm_function_destroy(fnHist); cm_function_destroy(fnFinDims); cm_function_destroy(fnFin);
         cm_function_destroy(fnBu); cm_function_destroy(fnBd); cm_function_destroy(fnBd0);
         cm_function_destroy(fnMw); cm_function_destroy(fnFsVs); cm_function_destroy(fnLutFs); cm_function_destroy(fnLutVs);
         cm_library_destroy(lPost); cm_library_destroy(lLut);
@@ -1743,9 +1747,10 @@ static void benchmark_p1_hdr_post(NSString *assetsDir, int32_t preferMetal4) {
     NSString *lookSrc = read_file_str(shade_path(portedDir, @"shade_look.metal"));
     NSString *commonSrc = read_file_str(shade_path(portedDir, @"shade_common.metal"));
     NSString *m2Src = read_file_str(shade_path(portedDir, @"shade_m2.metal"));
+    NSString *dimsSrc = read_file_str(shade_path(portedDir, @"shade_dims.metal"));
     NSString *vuniSrc = read_file_str(shade_path(portedDir, @"vanilla_uniforms.metal"));
-    NSString *prelude = [NSString stringWithFormat:@"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n%@\n%@\n%@\n%@\n%@\n%@\n",
-                         slots, apiSrc, lookSrc, commonSrc, m2Src, vuniSrc];
+    NSString *prelude = [NSString stringWithFormat:@"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n%@\n%@\n%@\n%@\n%@\n%@\n%@\n",
+                         slots, apiSrc, lookSrc, commonSrc, m2Src, dimsSrc, vuniSrc];
 
     char err[2048] = {0};
     NSString *lutSrc = [NSString stringWithFormat:@"%@\n%@", prelude, read_file_str(shade_path(portedDir, @"sky_lut.metal"))];
@@ -1979,6 +1984,8 @@ static NSString *build_water_bake_msl(NSString *portedDir) {
     [s appendString:read_file_str(shade_path(portedDir, @"shade_common.metal"))];
     [s appendString:@"\n"];
     [s appendString:read_file_str(shade_path(portedDir, @"shade_m2.metal"))];
+    [s appendString:@"\n"];
+    [s appendString:read_file_str(shade_path(portedDir, @"shade_dims.metal"))];
     [s appendString:@"\n"];
     [s appendString:read_file_str(shade_path(portedDir, @"shade_post.metal"))];
     [s appendString:@"\n"];
@@ -2260,7 +2267,7 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
     NSMutableString *source = [NSMutableString stringWithString:
         @"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n#define SHADE_WX_NOISE_BAKE 1\n"
          "#define CELESTIA_VL_MARCH 1\n#define CELESTIA_VL_COMPOSITE 1\n#define CELESTIA_SSAO 1\n"];
-    for (NSString *fn in @[@"shade_slots.metal", @"shade_api.metal", @"shade_look.metal", @"shade_common.metal", @"shade_m2.metal", @"vl.metal",
+    for (NSString *fn in @[@"shade_slots.metal", @"shade_api.metal", @"shade_look.metal", @"shade_common.metal", @"shade_m2.metal", @"shade_dims.metal", @"vl.metal",
                            @"ssao.metal", @"shade_post.metal", @"clouds.metal", @"weather_surface.metal"]) {
         [source appendFormat:@"%@\n", read_file_str(shade_path(ported, fn))];
     }

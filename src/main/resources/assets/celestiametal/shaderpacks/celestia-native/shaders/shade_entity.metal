@@ -29,8 +29,10 @@ static float4 shadeEntityShade(float4 vanilla, float4 albedoSrgb, float4 overlay
 	float3 dpx = dfdx(p), dpy = dfdy(p);
 #ifdef MCOPT_HAND
 	if (f.flags.x != SHADE_DIM_OVERWORLD || shadeDev(f, SHADE_DEV_FLAT_LIGHT)) return vanilla;
+	const bool dimsLit = false;
 #else
-	if (f.flags.x != SHADE_DIM_OVERWORLD || shadeDev(f, SHADE_DEV_FLAT_LIGHT)) return float4(shadeVanillaOut(vanilla.rgb, L), vanilla.a);
+	bool dimsLit = f.flags.x != SHADE_DIM_OVERWORLD && shadeDimsLit(f);
+	if ((f.flags.x != SHADE_DIM_OVERWORLD && !dimsLit) || shadeDev(f, SHADE_DEV_FLAT_LIGHT)) return float4(shadeVanillaOut(vanilla.rgb, L), vanilla.a);
 #endif
 	float3 n;
 	bool thin = kind == SHADE_ENT_PARTICLE;
@@ -44,6 +46,9 @@ static float4 shadeEntityShade(float4 vanilla, float4 albedoSrgb, float4 overlay
 	}
 	half3 c = half3(saturate(mix(overlay.rgb, albedoSrgb.rgb, overlay.a)));
 	half3 albedo = shadeToLinear(c);
+#ifndef MCOPT_HAND
+	if (kind == SHADE_ENT_PARTICLE && dimsLit && shadeDimKind(L) == 1 && shadeDimsBit(L, SHADE_DIMS_MOTES)) albedo = shadeDimsMote(albedo);
+#endif
 	int debug = f.flags.w;
 	if (debug == 3) albedo = half3(0.45h);
 	half block = half(saturate(light.x)), sky = half(saturate(light.y));
@@ -53,24 +58,31 @@ static float4 shadeEntityShade(float4 vanilla, float4 albedoSrgb, float4 overlay
 		return shadeEntityOut(shadeFinish2(rad, 0.0, f, L, ex), vanilla.a, L);
 	}
 	half3 hn = half3(n);
+	half shadow;
+	float3 radiance;
+	if (dimsLit) {
+		shadow = f.flags.x == SHADE_DIM_END ? shadeShadow(shadowMap, cmp, f, p, hn, thin) : half(1.0);
+		radiance = shadeLitDims(albedo, hn, block, shadow, thin, false, p, f, L);
+	} else {
 #ifndef MCOPT_HAND
-	float3 ps = p + f.lightDirWorld.xyz * 0.1;
+		float3 ps = p + f.lightDirWorld.xyz * 0.1;
 #else
-	float3 ps = p;
+		float3 ps = p;
 #endif
-	half shadow = sky <= 0.3h ? half(1.0) : shadeShadow(shadowMap, cmp, f, ps, hn, thin);
+		shadow = sky <= 0.3h ? half(1.0) : shadeShadow(shadowMap, cmp, f, ps, hn, thin);
 #ifndef MCOPT_HAND
-	if (sky > 0.3h) shadow *= half(shadeCloudShadow(p, L, R.cloudShadow));
+		if (sky > 0.3h) shadow *= half(shadeCloudShadow(p, L, R.cloudShadow));
 #endif
-	float3 radiance = shadeLit2(albedo, hn, sky, block, shadow, thin, false, f, L);
-	if (L.flash.w > 0.0) {
-		half gk = shadeSkyCurve(sky);
+		radiance = shadeLit2(albedo, hn, sky, block, shadow, thin, false, f, L);
+		if (L.flash.w > 0.0) {
+			half gk = shadeSkyCurve(sky);
 #ifdef MCOPT_HAND
-		float ndl = 0.65;
+			float ndl = 0.65;
 #else
-		float ndl = saturate(dot(n, L.flash.xyz)) * 0.65 + 0.35;
+			float ndl = saturate(dot(n, L.flash.xyz)) * 0.65 + 0.35;
 #endif
-		radiance += float3(albedo) * float3(0.78, 0.86, 1.0) * (L.flash.w * ndl * float(gk * gk));
+			radiance += float3(albedo) * float3(0.78, 0.86, 1.0) * (L.flash.w * ndl * float(gk * gk));
+		}
 	}
 	int dynKind = kind == SHADE_ENT_PARTICLE ? SHADE_DYN_PARTICLE : kind == SHADE_ENT_HAND ? SHADE_DYN_HAND : SHADE_DYN_ENTITY;
 	radiance += shadeDynamicLights(shadeDynIn(p, n, float3(albedo), frag.xy, sky, block, dynKind), f, L, &R);
@@ -84,11 +96,18 @@ static float4 shadeEntityShade(float4 vanilla, float4 albedoSrgb, float4 overlay
 #endif
 #ifdef MCOPT_HAND
 	float vanillaFog = 0.0;
-#else
-	float vanillaFog = shadeVanillaFog(p, fog.xy, fog.zw);
-	radiance = shadeFogAir2(radiance, p, vanillaFog, 0.0, lut, lutS, f, L, R, shadeChunkEdgeFade(p, f, L));
-#endif
 	float3 rgb = shadeFinish2(radiance, vanillaFog, f, L, ex);
+#else
+	float vanillaFog = 0.0;
+	float3 rgb;
+	if (dimsLit) {
+		rgb = shadeOut(radiance, f, ex);
+	} else {
+		vanillaFog = shadeVanillaFog(p, fog.xy, fog.zw);
+		radiance = shadeFogAir2(radiance, p, vanillaFog, 0.0, lut, lutS, f, L, R, shadeChunkEdgeFade(p, f, L));
+		rgb = shadeFinish2(radiance, vanillaFog, f, L, ex);
+	}
+#endif
 	if (debug == 2) rgb = shadeVanillaOut(n * 0.5 + 0.5, L);
 	if (debug == 1) rgb = shadeVanillaOut(float3(0.25 + 0.75 * float(shadow)), L);
 	return shadeEntityOut(rgb, vanilla.a, L);

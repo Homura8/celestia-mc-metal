@@ -45,32 +45,6 @@ static inline float4 shadeCloudsDome(float3 dir, constant ShadeLook &L, texture2
 }
 #endif
 
-#ifndef MCOPT_SHADE_DIMS
-#define SHADE_FEATURE_DIMS 0
-#define SHADE_FEATURE_MEDIA 0
-#define SHADE_FEATURE_SHIMMER 0
-#define SHADE_DIMS_AURORA_TEX 1
-#define SHADE_DIMS_MOTES 2
-#define SHADE_DIMS_DH_SKY 4
-static inline bool shadeDimsLit(constant ShadeFrame &f) { (void)f; return false; }
-static inline bool shadeDimsBit(constant ShadeLook &L, int bit) { (void)L; (void)bit; return false; }
-static inline int shadeDimKind(constant ShadeLook &L) { (void)L; return 0; }
-static inline half3 shadeDimsMote(half3 a) { return a; }
-static inline float3 shadeLitDims(half3 albedo, half3 n, half block, half shadow, bool thin, bool foliage, float3 p, constant ShadeFrame &f, constant ShadeLook &L) {
-	(void)n; (void)block; (void)shadow; (void)thin; (void)foliage; (void)p; (void)f; (void)L;
-	return float3(albedo);
-}
-static inline float3 shadeAurora(float3 dir, constant ShadeFrame &f, constant ShadeLook &L, texture2d<half> mw, float2 px) { (void)dir; (void)f; (void)L; (void)mw; (void)px; return float3(0.0); }
-static inline float3 shadeAuroraTex(float3 dir, constant ShadeFrame &f, constant ShadeResources &sr, float2 px) { (void)dir; (void)f; (void)sr; (void)px; return float3(0.0); }
-static inline float2 shadeShimmer(float2 uv, float dist, constant ShadeFrame &f, texture2d<half> mw) { (void)uv; (void)dist; (void)f; (void)mw; return float2(0.0); }
-static inline float3 shadeEndSky(float3 dir, constant ShadeFrame &f, constant ShadeLook &L, texture2d<half> mw, float pa) { (void)dir; (void)f; (void)L; (void)mw; (void)pa; return float3(0.0); }
-static inline float3 shadeDimsFog(float3 c, float3 wp, bool hasD, constant ShadeFrame &f, constant ShadeLook &L, float ex, bool dh, texture2d<half> mw) {
-	(void)wp; (void)hasD; (void)f; (void)L; (void)ex; (void)dh; (void)mw; return c;
-}
-static inline float3 shadeMedia(float3 c, float2 uv, float dist, constant ShadeFrame &f, texture2d<half> mw) { (void)uv; (void)dist; (void)f; (void)mw; return c; }
-static inline float shadeDimsBakeNoise(float2 uv) { (void)uv; return 0.5; }
-#endif
-
 #ifndef MCOPT_SHADE_DYNLIGHT
 #define SHADE_DYN_TERRAIN 0
 #define SHADE_DYN_WATER 1

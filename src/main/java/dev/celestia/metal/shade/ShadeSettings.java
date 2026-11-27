@@ -3,7 +3,7 @@ package dev.celestia.metal.shade;
 import dev.celestia.metal.shader.pack.ShaderOptionState;
 
 /** The options applied to a complete world frame. The options editor keeps its own mutable copy. */
-public record ShadeSettings(Shadows shadows, Lights lights, Sky sky, Water water, Atmosphere atmosphere, Post post) {
+public record ShadeSettings(Shadows shadows, Lights lights, Sky sky, Water water, Atmosphere atmosphere, Post post, Dimensions dimensions) {
     public record Shadows(boolean enabled, int resolution, int distance, int farInterval, float softness,
                           boolean ssao, float ssaoStrength) {}
     /** Dynamic lights (P6a) and coloured block light (P6b): the modules are startup switches, these are read every frame. */
@@ -16,6 +16,7 @@ public record ShadeSettings(Shadows shadows, Lights lights, Sky sky, Water water
     public record Atmosphere(boolean clouds, int cloudSteps, float cloudCoverage, float cloudDensity, float cloudSpeed,
                              boolean volumetrics, int lightSteps, float lightStrength, boolean weather) {}
     public record Post(int look, boolean bloom, float bloomStrength, float exposureEv, float saturation, float pastel) {}
+    public record Dimensions(boolean enabled, boolean endShadows, boolean netherShimmer) {}
 
     public static ShadeSettings from(ShaderOptionState s) {
         String reflections = s.get("WATER_REFLECTIONS");
@@ -42,7 +43,8 @@ public record ShadeSettings(Shadows shadows, Lights lights, Sky sky, Water water
                 case "PASTEL" -> 3;
                 default -> 0;
             }, s.getBoolean("BLOOM_ENABLED"), value(s, "BLOOM_STRENGTH"), value(s, "EXPOSURE"), value(s, "SATURATION"),
-                value(s, "PASTEL_STRENGTH"))
+                value(s, "PASTEL_STRENGTH")),
+            new Dimensions(s.getBoolean("NETHER_END_LOOKS"), s.getBoolean("END_SHADOWS"), s.getBoolean("NETHER_SHIMMER"))
         );
     }
 

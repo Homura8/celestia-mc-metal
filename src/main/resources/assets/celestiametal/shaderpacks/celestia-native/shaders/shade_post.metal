@@ -107,27 +107,36 @@ static inline half3 shadeLinearToSrgbFast(half3 y) {
 	return select(hi, y * 12.92h, y <= 0.0031308h);
 }
 
-fragment float4 shade_final(ShadeFsOut in [[stage_in]],
-                            texture2d<half> scene [[texture(0)]],
-                            texture2d<half> bloom [[texture(1)]],
-                            depth2d<float> depth [[texture(2)]],
-                            texture2d<half> bloom0 [[texture(3)]],
+template <bool DIMS>
+static float4 shadeFinalMain(ShadeFsOut in,
+                             texture2d<half> scene,
+                             texture2d<half> bloom,
+                             depth2d<float> depth,
+                             texture2d<half> bloom0,
 #ifdef CELESTIA_VL_COMPOSITE
-                            texture2d<half> volume [[texture(4)]],
+                             texture2d<half> volume,
 #endif
 #ifdef CELESTIA_SSAO
-                            texture2d<half> ambientOcclusion [[texture(5)]],
+                             texture2d<half> ambientOcclusion,
 #endif
-                            constant ShadeFinalParams &P [[buffer(0)]],
-                            constant ShadeFrame &f [[buffer(CM_SHADE_BUF_FRAME)]],
-                            constant ShadeLook &L [[buffer(CM_SHADE_BUF_LOOK)]],
-                            constant ShadeGpu &g [[buffer(CM_SHADE_BUF_GPU)]]) {
+                             constant ShadeFinalParams &P,
+                             constant ShadeFrame &f,
+                             constant ShadeLook &L,
+                             constant ShadeGpu &g,
+                             constant ShadeResources &sr) {
 	uint2 px = uint2(in.position.xy);
 	float ex = max(g.exposure.x, 1e-6);
 	float2 dsize = P.r.x > 0.0 ? P.r.xy : float2(depth.get_width(), depth.get_height());
 	uint2 dpx = min(uint2(in.uv * dsize), uint2(dsize) - 1u);
 	float d = depth.read(dpx);
-	float3 c = float3(scene.read(px).rgb);
+	bool dims = DIMS && (L.tier.y & SHADE_FEATURE_DIMS) != 0 && L.dimTint.x > 0.0 && f.flags.x != SHADE_DIM_OVERWORLD;
+	uint2 sp = px;
+	if (dims && (L.tier.y & SHADE_FEATURE_SHIMMER) != 0 && shadeDimKind(L) == 1 && d > 0.0) {
+		float dist = length(shadeWorldFromDepth(in.uv, d, f));
+		sp = uint2(clamp(int2(px) + int2(round(shadeShimmer(in.uv, dist, f, sr.milkyWay))),
+		                 int2(0), int2(scene.get_width(), scene.get_height()) - 1));
+	}
+	float3 c = float3(scene.read(sp).rgb);
 	float3 T = float3(1.0);
 	bool hazeOn = (L.tier.y & SHADE_FEATURE_HAZE) != 0 && f.flags.x == SHADE_DIM_OVERWORLD && f.fogColor.a < 0.5;
 	float hazeNear = shadeAirSmooth(L) ? 0.0 : 4.0;
@@ -135,8 +144,8 @@ fragment float4 shade_final(ShadeFsOut in [[stage_in]],
 #ifdef CELESTIA_SSAO
 	aoOn = P.v.y > 0.0;
 #endif
+	float3 wp = d > 0.0 ? shadeWorldFromDepth(in.uv, d, f) : float3(0.0);
 	if (d > 0.0 && (hazeOn || aoOn)) {
-		float3 wp = shadeWorldFromDepth(in.uv, d, f);
 		float edge = shadeChunkEdgeFade(wp, f, L);
 #ifdef CELESTIA_SSAO
 		if (aoOn) c *= saturate(mix(1.0, float(shadeAoSample(ambientOcclusion, in.uv, length(wp))), P.v.y * (1.0 - edge)));
@@ -149,6 +158,19 @@ fragment float4 shade_final(ShadeFsOut in [[stage_in]],
 				S *= kk;
 			}
 			c = c * T + S * ex;
+		}
+	}
+	if (DIMS) {
+		if (dims && d <= 0.0 && shadeDimKind(L) == 3 && f.flags.y == 0) {
+			float pixelAngle = 2.0 * atan(1.0 / max(abs(f.proj[1][1]), 1e-3)) * f.screen.w;
+			c = shadeEndSky(normalize(shadeViewRay(in.uv * 2.0 - 1.0, f.invViewProj)), f, L, sr.milkyWay, pixelAngle) * ex;
+		}
+		if (dims && f.flags.y == 0) {
+			c = shadeDimsFog(c, wp, d > 0.0, f, L, ex, false, sr.milkyWay);
+			T = float3(d > 0.0 ? exp(-L.dimTint.x * length(wp)) : 0.0);
+		}
+		if ((L.tier.y & SHADE_FEATURE_MEDIA) != 0 && (f.flags.y == 2 || f.flags.y == 3)) {
+			c = shadeMedia(c, in.uv, d > 0.0 ? length(wp) : 1e4, f, sr.milkyWay);
 		}
 	}
 	if (P.p.y > 0.5) {
@@ -187,6 +209,58 @@ fragment float4 shade_final(ShadeFsOut in [[stage_in]],
 	srgb += tri * half(L.output.z / 255.0);
 	if (P.p.w == 4.0) srgb = half3(half(saturate(log2(max(lum, 1e-6)) / 16.0 + 0.6)));
 	return float4(float3(saturate(srgb)), 1.0);
+}
+
+fragment float4 shade_final(ShadeFsOut in [[stage_in]],
+                            texture2d<half> scene [[texture(0)]],
+                            texture2d<half> bloom [[texture(1)]],
+                            depth2d<float> depth [[texture(2)]],
+                            texture2d<half> bloom0 [[texture(3)]],
+#ifdef CELESTIA_VL_COMPOSITE
+                            texture2d<half> volume [[texture(4)]],
+#endif
+#ifdef CELESTIA_SSAO
+                            texture2d<half> ambientOcclusion [[texture(5)]],
+#endif
+                            constant ShadeFinalParams &P [[buffer(0)]],
+                            constant ShadeFrame &f [[buffer(CM_SHADE_BUF_FRAME)]],
+                            constant ShadeLook &L [[buffer(CM_SHADE_BUF_LOOK)]],
+                            constant ShadeGpu &g [[buffer(CM_SHADE_BUF_GPU)]],
+                            constant ShadeResources &sr [[buffer(CM_SHADE_BUF_RESOURCES)]]) {
+	return shadeFinalMain<false>(in, scene, bloom, depth, bloom0,
+#ifdef CELESTIA_VL_COMPOSITE
+		volume,
+#endif
+#ifdef CELESTIA_SSAO
+		ambientOcclusion,
+#endif
+		P, f, L, g, sr);
+}
+
+fragment float4 shade_final_dims(ShadeFsOut in [[stage_in]],
+                                 texture2d<half> scene [[texture(0)]],
+                                 texture2d<half> bloom [[texture(1)]],
+                                 depth2d<float> depth [[texture(2)]],
+                                 texture2d<half> bloom0 [[texture(3)]],
+#ifdef CELESTIA_VL_COMPOSITE
+                                 texture2d<half> volume [[texture(4)]],
+#endif
+#ifdef CELESTIA_SSAO
+                                 texture2d<half> ambientOcclusion [[texture(5)]],
+#endif
+                                 constant ShadeFinalParams &P [[buffer(0)]],
+                                 constant ShadeFrame &f [[buffer(CM_SHADE_BUF_FRAME)]],
+                                 constant ShadeLook &L [[buffer(CM_SHADE_BUF_LOOK)]],
+                                 constant ShadeGpu &g [[buffer(CM_SHADE_BUF_GPU)]],
+                                 constant ShadeResources &sr [[buffer(CM_SHADE_BUF_RESOURCES)]]) {
+	return shadeFinalMain<true>(in, scene, bloom, depth, bloom0,
+#ifdef CELESTIA_VL_COMPOSITE
+		volume,
+#endif
+#ifdef CELESTIA_SSAO
+		ambientOcclusion,
+#endif
+		P, f, L, g, sr);
 }
 
 #define SHADE_HIST_MIN -14.0
