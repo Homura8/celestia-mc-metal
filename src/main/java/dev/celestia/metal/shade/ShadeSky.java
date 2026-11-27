@@ -28,7 +28,7 @@ public final class ShadeSky {
     public static final float SKY_BRIGHTNESS = 3.4f;
     public static final float SKY_SATURATION = 1.3f;
     public static final float AMBIENT_BOOST = 4.0f;
-    public static final float AMBIENT_DESATURATE = 0.2f;
+    public static final float AMBIENT_DESATURATE = 0.0f; // (alpha.26: 0.2 stripped the sky light's blue)
     public static final float KEY = 0.61f, EXPOSURE_MIN = 0.1f, EXPOSURE_MAX = 1.6f, ADAPT_SECONDS = 1.2f;
     public static final float ADAPTATION = 0.5f;
 
