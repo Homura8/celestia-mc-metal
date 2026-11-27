@@ -21,10 +21,12 @@
   - **Underside of the surface:** where it mirrors the water below, it now shows the same water colour.
   - **Cost:** the same frame time as before.
 - **New default colour look: Pastel.** It aims for "realistic and vibrant like Leica Vibrant, but more pastel and cuter".
-  - **Colour:** midtones are vibrant, and the vibrance step lifts muted colours most.
-  - **Tone:** contrast is softer and airier, highlights whiten a little sooner, blacks are lifted and slightly rosy, and highlights get a faint pink gain.
-  - **Sunsets and bloom:** sunsets are pinker and bloom is a touch stronger.
-  - **How:** it uses the display transform's lift and gain, which are now per look. `ShadeLook.ldrToHdr` and `display()` invert them exactly, so fog and clear colours stay correct.
+  - **Brightness:** it is a bright, high-key grade, with +0.3 EV.
+  - **Tone:** contrast is soft (0.84), shadows are milky and rosy (a display lift of about 3 % red and blue, 2 % green), and highlights whiten sooner (inset 0.34) and carry a pink gain (green 0.93, blue 0.965).
+  - **Colour:** a rose white-balance tint runs through the midtones, and the vibrance step is strong, so muted colours still pop.
+  - **Sunsets and bloom:** sunsets are pinker and bloom is dreamier.
+  - **Pastel Strength slider:** 0 is the Epic grade, 1 is the default and 1.5 is dreamier still. Every look parameter blends between Epic and Pastel.
+  - **How:** lift, gain and tint are per look. `ShadeLook.ldrToHdr` and `display()` invert them exactly, so fog and clear colours stay correct.
   - **Presets:** presets no longer set the look, because a look is a matter of taste, not of cost. Choose Epic, Storybook or Natural under Color Look.
   - **Existing installs:** an instance that already saved a look keeps it until Pastel is picked.
 - The **Cloud Layer Thickness** option is replaced by **Cloud Coverage** (0–1.6, default 1.0). Cloud Samples still sets the march: that many steps at the zenith and twice as many at the horizon.

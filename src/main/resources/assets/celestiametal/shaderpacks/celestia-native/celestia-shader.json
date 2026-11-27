@@ -477,6 +477,18 @@
       ]
     },
     {
+      "id": "PASTEL_STRENGTH",
+      "label": "Pastel Strength",
+      "description": "How pastel the Pastel look is: 0 is the Epic grade, 1 the default airy rose pastel, 1.5 dreamier still.",
+      "category": "Post-Processing",
+      "type": "FLOAT_SLIDER",
+      "default": "1.0",
+      "impact": "NEGLIGIBLE",
+      "min": 0.0,
+      "max": 1.5,
+      "step": 0.05
+    },
+    {
       "id": "BLOOM_ENABLED",
       "label": "Bloom",
       "description": "Adds a glow around bright parts of the scene.",

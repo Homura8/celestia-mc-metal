@@ -14,7 +14,7 @@ public record ShadeSettings(Shadows shadows, Lights lights, Sky sky, Water water
                         float reflectionStrength, int ssrBudget, int ssrDistance, float caustics, float foam) {}
     public record Atmosphere(boolean clouds, int cloudSteps, float cloudCoverage, float cloudDensity, float cloudSpeed,
                              boolean volumetrics, int lightSteps, float lightStrength, boolean weather) {}
-    public record Post(int look, boolean bloom, float bloomStrength, float exposureEv, float saturation) {}
+    public record Post(int look, boolean bloom, float bloomStrength, float exposureEv, float saturation, float pastel) {}
 
     public static ShadeSettings from(ShaderOptionState s) {
         String reflections = s.get("WATER_REFLECTIONS");
@@ -39,7 +39,8 @@ public record ShadeSettings(Shadows shadows, Lights lights, Sky sky, Water water
                 case "NATURAL" -> 2;
                 case "PASTEL" -> 3;
                 default -> 0;
-            }, s.getBoolean("BLOOM_ENABLED"), value(s, "BLOOM_STRENGTH"), value(s, "EXPOSURE"), value(s, "SATURATION"))
+            }, s.getBoolean("BLOOM_ENABLED"), value(s, "BLOOM_STRENGTH"), value(s, "EXPOSURE"), value(s, "SATURATION"),
+                value(s, "PASTEL_STRENGTH"))
         );
     }
 
