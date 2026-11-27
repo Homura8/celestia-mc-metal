@@ -339,7 +339,7 @@ Owner priorities (2026-11-28), in order:
       stalls the game ~7 s on an M1 Pro (a loading overlay or background compile would hide it); a pack can't yet change
       the engine-side passes (pass list, targets, bindings) or the dynamic-light shading.
 - [x] Nether and End looks.
-- [ ] Aurora.
+- [x] Aurora.
 - [ ] Motion blur.
 - [ ] A real cumulus congestus layer (days 2 and 4 currently stand in a thicker cumulus).
 - [ ] labPBR (carried over from P6b).

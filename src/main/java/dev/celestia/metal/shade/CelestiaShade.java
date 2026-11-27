@@ -475,7 +475,7 @@ public final class CelestiaShade {
         float[] fogHdr = look.ldrToHdr(frame.fogColor[0], frame.fogColor[1], frame.fogColor[2]);
         System.arraycopy(fogHdr, 0, frame.fogColorHdr, 0, 3);
         atmosphere.prepare(device.handle(), level, camera, frame, look, mc.options.getCloudStatus(), state.cloudHeight,
-            (float) clampedDt, w, h, settings.atmosphere());
+            (float) clampedDt, snap, w, h, settings.atmosphere(), settings.sky());
 
         ringSlot = (ringSlot + 1) % RING_SLOTS;
         ByteBuffer slotBb = ringSeg.asSlice((long) ringSlot * RING_SLOT_STRIDE, RING_SLOT_STRIDE)
@@ -483,7 +483,7 @@ public final class CelestiaShade {
         frame.pack(slotBb);
         ByteBuffer lookBb = slotBb.slice(LOOK_OFFSET, ShadeLook.SIZE).order(ByteOrder.nativeOrder());
         look.pack(lookBb, frame);
-        ShadeDims.pack(lookBb, slotBb, frame, applied.dimensions(), applied.post().exposureEv());
+        ShadeDims.pack(lookBb, slotBb, frame, applied.dimensions(), applied.post().exposureEv(), look.auroraTexActive);
 
         publishGlobals(ringSlot);
         MetalNative.shadeSetEnabled(device.handle(), true);
@@ -743,7 +743,9 @@ public final class CelestiaShade {
         String waterMode = water.isActive() && settings != null
             ? (settings.water().screenReflections() ? " | Water SSR" : " | Water") : "";
         String effects = waterMode
-            + (atmosphere.hasClouds() ? " | Clouds" : "") + (atmosphere.hasVolume() ? " | Volumetrics" : "")
+            + (atmosphere.hasClouds() ? " | Clouds" : "")
+            + (atmosphere.hasAurora() ? " | Aurora" : "")
+            + (atmosphere.hasVolume() ? " | Volumetrics" : "")
             + (aoActive ? " | SSAO" : "")
             + (DynLights.activeCount() > 0 ? " | Lights " + DynLights.activeCount() : "")
             + (ColorLights.activeSlots() > 0 ? " | Colour " + ColorLights.activeSlots() : "");

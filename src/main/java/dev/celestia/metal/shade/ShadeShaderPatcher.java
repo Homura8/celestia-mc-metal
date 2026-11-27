@@ -207,7 +207,8 @@ public final class ShadeShaderPatcher {
     public static String atmosphereSource() {
         return prelude(true, false, "#define CELESTIA_VL_MARCH 1\n#define SHADE_WX_NOISE_BAKE 1", false)
             + resource("shade_post.metal") + "\n" + resource("clouds.metal") + "\n"
-            + resource("vl.metal") + "\n" + resource("weather_surface.metal") + "\n";
+            + resource("vl.metal") + "\n" + resource("weather_surface.metal") + "\n"
+            + resource("aurora.metal") + "\n";
     }
 
     public static String waterDefines() {

@@ -9,7 +9,8 @@ public record ShadeSettings(Shadows shadows, Lights lights, Sky sky, Water water
     /** Dynamic lights (P6a) and coloured block light (P6b): the modules are startup switches, these are read every frame. */
     public record Lights(boolean dynamic, float strength, int count, boolean entities,
                          boolean colored, float coloredStrength, float coloredGlow, boolean smoothBlock) {}
-    public record Sky(boolean stars, boolean haze, float hazeStrength) {}
+    public record Sky(boolean stars, boolean haze, float hazeStrength, int auroraMode, float auroraBrightness,
+                      int auroraPalette) {}
     public record Water(boolean enabled, boolean waves, float waveStrength, float swell, boolean screenReflections,
                         float reflectionStrength, int ssrBudget, int ssrDistance, float caustics, float foam,
                         boolean snellWindow) {}
@@ -28,7 +29,19 @@ public record ShadeSettings(Shadows shadows, Lights lights, Sky sky, Water water
             new Lights(s.getBoolean("DYNAMIC_LIGHTS"), value(s, "DYNAMIC_LIGHT_STRENGTH"), s.getInt("DYNAMIC_LIGHT_COUNT"),
                 s.getBoolean("DYNAMIC_LIGHT_ENTITIES"), s.getBoolean("COLORED_LIGHTS"), value(s, "COLORED_LIGHT_STRENGTH"),
                 value(s, "COLORED_LIGHT_GLOW"), s.getBoolean("SMOOTH_BLOCK_LIGHT")),
-            new Sky(s.getBoolean("STARFIELD_ENABLED"), s.getBoolean("AERIAL_FOG"), value(s, "HAZE_STRENGTH")),
+            new Sky(s.getBoolean("STARFIELD_ENABLED"), s.getBoolean("AERIAL_FOG"), value(s, "HAZE_STRENGTH"),
+                switch (s.get("AURORA_MODE")) {
+                    case "OFF" -> 0;
+                    case "COLD_BIOMES" -> 1;
+                    case "ALWAYS" -> 3;
+                    default -> 2;
+                },
+                value(s, "AURORA_BRIGHTNESS"),
+                switch (s.get("AURORA_PALETTE")) {
+                    case "CLASSIC" -> 1;
+                    case "PASTEL" -> 2;
+                    default -> 0;
+                }),
             new Water(s.getBoolean("WATER_ENABLED"), s.getBoolean("WATER_WAVES"), value(s, "WAVE_STRENGTH"),
                 value(s, "WATER_SWELL"), reflections.equals("SSR_AND_SKY") && reflectionStrength > 0f,
                 reflectionStrength,

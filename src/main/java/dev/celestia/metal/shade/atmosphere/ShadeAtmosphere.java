@@ -24,13 +24,15 @@ public final class ShadeAtmosphere {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final boolean VOLUMETRICS = !"false".equalsIgnoreCase(System.getProperty("celestiametal.shade.volumetrics"));
     private static final String[] ENTRIES = {
-        "shade_cloud_trace", "shade_cloud_resolve", "shade_cloud_dome", "shade_vl_march", "shade_wx_noise_fs"
+        "shade_cloud_trace", "shade_cloud_resolve", "shade_cloud_dome", "shade_vl_march", "shade_wx_noise_fs",
+        "shade_aurora_pass"
     };
     // (textures[CLOUD_SCREEN] is unused: the resolved clouds ping-pong between cloudHistory[0] and [1])
-    private static final int CLOUD_TRACE = 0, CLOUD_SCREEN = 1, CLOUD_DOME = 2, VOLUME = 3, WEATHER_NOISE = 4;
-    private static final int WEATHER_SLOT = 4, DOME_SLOT = 13, SCREEN_SLOT = 14;
+    private static final int CLOUD_TRACE = 0, CLOUD_SCREEN = 1, CLOUD_DOME = 2, VOLUME = 3, WEATHER_NOISE = 4, AURORA = 5;
+    private static final int WEATHER_SLOT = 4, AURORA_SLOT = 11, DOME_SLOT = 13, SCREEN_SLOT = 14;
     private static final int WEATHER_NOISE_SIZE = 1024;
     private static final int DOME_WIDTH = 160, DOME_HEIGHT = 64;
+    private static final float AURORA_SCALE = 0.36f;
 
     private final long[] pipelines = new long[ENTRIES.length];
     private final long[] textures = new long[ENTRIES.length];
@@ -38,9 +40,11 @@ public final class ShadeAtmosphere {
     private int cloudCurrent;
     private boolean cloudHistoryValid;
     private ShadeCloudNoise cloudNoise;
+    private final ShadeAurora aurora = new ShadeAurora();
     private final MemorySegment cloudPush = Arena.global().allocate(16, 16);
+    private final MemorySegment auroraPush = Arena.global().allocate(48, 16);
     private int width, height;
-    private boolean failed, clouds, volume, noiseBaked, domeReady;
+    private boolean failed, clouds, volume, auroraActive, noiseBaked, domeReady;
     private float previousCloudBase;
     private double cloudPhase;
     private ShadeSettings.Atmosphere previousOptions;
@@ -48,15 +52,19 @@ public final class ShadeAtmosphere {
     private float wetness, puddles, snow;
 
     public void prepare(long ctx, ClientLevel level, CameraRenderState camera, ShadeFrame frame, ShadeLook look,
-                        CloudStatus status, float cloudHeight, float dt, int w, int h, ShadeSettings.Atmosphere options) {
-        clouds = volume = false;
+                        CloudStatus status, float cloudHeight, float dt, boolean snap, int w, int h,
+                        ShadeSettings.Atmosphere options, ShadeSettings.Sky skyOptions) {
+        clouds = volume = auroraActive = false;
         look.cloudsEnabled = false;
+        look.auroraStrength = 0f;
+        look.auroraTexActive = false;
         look.waterShaftSurface = 0f;
         look.wetness = look.puddles = look.snow = look.flashStrength = 0f;
         if (level == null || frame.dimension != ShadeFrame.DIM_OVERWORLD) {
             weatherLevel = null;
             domeReady = false;
             cloudHistoryValid = false;
+            aurora.reset();
             return;
         }
         if (!initialize(ctx)) return;
@@ -66,6 +74,7 @@ public final class ShadeAtmosphere {
         if (w != width || h != height) {
             destroyCloudTargets(ctx);
             destroyTexture(ctx, VOLUME);
+            destroyTexture(ctx, AURORA);
             width = w;
             height = h;
         }
@@ -74,6 +83,18 @@ public final class ShadeAtmosphere {
             domeReady = false;
             weatherLevel = level;
         }
+
+        aurora.update(level, camera.blockPos, frame, dt, snap, skyOptions);
+        if (aurora.strength() > 0.002f && pipelines[AURORA] != 0L && cloudNoise != null) {
+            if (textures[AURORA] == 0L) {
+                int aw = Math.max(1, Math.round(w * AURORA_SCALE));
+                int ah = Math.max(1, Math.round(h * AURORA_SCALE));
+                textures[AURORA] = texture(ctx, AURORA, aw, ah);
+            }
+            auroraActive = textures[AURORA] != 0L;
+        }
+        look.auroraStrength = auroraActive ? aurora.strength() : 0f;
+        look.auroraTexActive = auroraActive;
 
         float base = Float.isFinite(cloudHeight) ? cloudHeight : 192f;
         if (base != previousCloudBase) domeReady = false;
@@ -188,6 +209,15 @@ public final class ShadeAtmosphere {
         }
         MetalNative.shadeSetResource(ctx, SCREEN_SLOT, screen);
         MetalNative.shadeSetResource(ctx, DOME_SLOT, clouds ? textures[CLOUD_DOME] : 0L);
+        if (auroraActive && pipelines[AURORA] != 0L && textures[AURORA] != 0L && cloudNoise != null) {
+            aurora.packPush(auroraPush, frameIndex);
+            texArgs.set(ValueLayout.JAVA_LONG, 0, cloudNoise.noise2d);
+            MetalNative.shadeFullscreenPass(ctx, pipelines[AURORA], textures[AURORA], texArgs, 1,
+                MemorySegment.NULL, 0, auroraPush, 48);
+            MetalNative.shadeSetResource(ctx, AURORA_SLOT, textures[AURORA]);
+        } else {
+            MetalNative.shadeSetResource(ctx, AURORA_SLOT, 0L);
+        }
     }
 
     public long renderVolume(long ctx, long depth, MemorySegment texArgs) {
@@ -212,6 +242,10 @@ public final class ShadeAtmosphere {
 
     public boolean hasVolume() {
         return volume;
+    }
+
+    public boolean hasAurora() {
+        return auroraActive;
     }
 
     private boolean initialize(long ctx) {
@@ -258,7 +292,9 @@ public final class ShadeAtmosphere {
     }
 
     private static int format(int pass) {
-        return pass == WEATHER_NOISE ? MetalConst.FMT_RG16_FLOAT : MetalConst.FMT_RGBA16_FLOAT;
+        if (pass == WEATHER_NOISE) return MetalConst.FMT_RG16_FLOAT;
+        if (pass == AURORA) return MetalConst.FMT_RG11B10_FLOAT;
+        return MetalConst.FMT_RGBA16_FLOAT;
     }
 
     private static long texture(long ctx, int pass, int w, int h) {
@@ -290,6 +326,7 @@ public final class ShadeAtmosphere {
     public void close(long ctx) {
         if (ctx == 0L) return;
         MetalNative.shadeSetResource(ctx, WEATHER_SLOT, 0L);
+        MetalNative.shadeSetResource(ctx, AURORA_SLOT, 0L);
         MetalNative.shadeSetResource(ctx, DOME_SLOT, 0L);
         MetalNative.shadeSetResource(ctx, SCREEN_SLOT, 0L);
         destroyCloudTargets(ctx);
@@ -301,6 +338,7 @@ public final class ShadeAtmosphere {
             pipelines[i] = 0L;
         }
         weatherLevel = null;
-        clouds = volume = noiseBaked = domeReady = false;
+        clouds = volume = auroraActive = noiseBaked = domeReady = false;
+        aurora.reset();
     }
 }
