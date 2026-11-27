@@ -4,7 +4,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
-import net.minecraft.client.Minecraft;
 
 /**
  * The comparison scenes (the same for any renderer: Celestia, or Iris + a reference pack) and the screenshot mode. Positions are
@@ -30,8 +29,10 @@ final class Shots {
     static List<Scene> selected() {
         String f = System.getProperty("celestiaqa.scenes", "");
         if (f.isEmpty()) return SCENES;
-        Set<String> want = Arrays.stream(f.split(",")).map(String::trim).collect(Collectors.toSet());
-        return SCENES.stream().filter(sc -> want.contains(sc.name())).toList();
+        Set<String> want = Arrays.stream(f.split(",", -1)).map(String::trim).collect(Collectors.toSet());
+        List<Scene> selected = SCENES.stream().filter(sc -> want.contains(sc.name())).toList();
+        if (selected.size() != want.size()) throw new IllegalArgumentException("Unknown QA scene in " + f);
+        return selected;
     }
 
     /** Sets the time, weather and camera of a scene (the settle step after it waits for the result). */
@@ -55,10 +56,11 @@ final class Shots {
     static void add(List<Qa.Step> s) {
         for (Scene sc : selected()) {
             s.add(enter(sc));
-            s.add(settle(sc));
+            boolean fixed = Boolean.getBoolean("celestiaqa.fixedShots");
+            s.add(fixed ? Qa.ticks(240) : settle(sc));
             s.add(Qa.once(mc -> {
                 Qa.screenshot(mc, Qa.prefix() + "-" + sc.name());
-                Qa.log("shot " + sc.name() + " fps " + mc.getFps() + (Qa.CELESTIA ? Qa.fmt(" gpu %.2f ms", CelestiaHooks.gpuMs()) : ""));
+                Qa.log("shot " + sc.name() + " settled " + Qa.lastWaitTicks() + " ticks | fps " + mc.getFps() + (Qa.CELESTIA ? Qa.fmt(" gpu %.2f ms", CelestiaHooks.gpuMs()) : ""));
             }));
             s.add(Qa.ticks(2));
         }
@@ -70,5 +72,4 @@ final class Shots {
         return SCENES.stream().filter(sc -> sc.name().equals(name)).findFirst().orElseThrow();
     }
 
-    static void unused(Minecraft mc) {}
 }

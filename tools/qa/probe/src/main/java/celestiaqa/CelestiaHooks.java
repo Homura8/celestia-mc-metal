@@ -2,6 +2,7 @@ package celestiaqa;
 
 import dev.celestia.metal.backend.CelestiaMetalDevice;
 import dev.celestia.metal.backend.MetalNative;
+import dev.celestia.metal.perf.CelestiaConfig;
 import dev.celestia.metal.shade.CelestiaShade;
 import dev.celestia.metal.shade.light.ColorLights;
 import dev.celestia.metal.shade.light.DynLights;
@@ -23,6 +24,15 @@ final class CelestiaHooks {
         if (s != null) s.requestSnap();
     }
 
+    static void hidePerformanceHud() {
+        CelestiaConfig.get().appleSilicon.performanceHud = CelestiaConfig.HudMode.OFF;
+    }
+
+    static boolean isMetal4() {
+        var device = CelestiaMetalDevice.current;
+        return device != null && device.isMetal4();
+    }
+
     /** Last submitted frame's GPU time in ms, or -1. */
     static double gpuMs() {
         CelestiaMetalDevice d = CelestiaMetalDevice.current;
@@ -33,28 +43,33 @@ final class CelestiaHooks {
         ShaderPipelineManager.get().selectPack(id);
     }
 
-    static void preset(String name) {
-        ShaderPipelineManager m = ShaderPipelineManager.get();
-        if (m.activePack() == null || !NATIVE.equals(m.activePack().id)) m.selectPack(NATIVE);
-        m.applyPreset(name);
-    }
-
-    /** KEY=VALUE[,KEY=VALUE...] on top of the current option state. */
+    /** Apply all overrides together so one option change publishes the world settings once. */
     static void options(String kvs) {
-        if (kvs == null || kvs.isEmpty()) return;
-        ShaderPipelineManager m = ShaderPipelineManager.get();
-        ShaderOptionState st = m.optionState(m.activePack()).copy();
-        for (String kv : kvs.split(",")) {
-            String[] p = kv.split("=", 2);
-            if (p.length == 2) st.set(p[0].trim(), p[1].trim());
-        }
-        m.applyOptions(st);
+        var manager = ShaderPipelineManager.get();
+        var state = manager.optionState(manager.activePack()).copy();
+        applyOverrides(state, kvs);
+        manager.applyOptions(state);
     }
 
-    /** A preset, then option overrides (null for none). */
     static void presetWith(String preset, String kvs) {
-        preset(preset);
-        options(kvs);
+        var manager = ShaderPipelineManager.get();
+        if (manager.activePack() == null || !NATIVE.equals(manager.activePack().id)) manager.selectPack(NATIVE);
+        var state = manager.optionState(manager.activePack()).copy();
+        if (!state.manifest().presets.containsKey(preset)) throw new IllegalArgumentException("Unknown preset " + preset);
+        state.applyPreset(preset);
+        applyOverrides(state, kvs);
+        manager.applyOptions(state);
+    }
+
+    private static void applyOverrides(ShaderOptionState state, String kvs) {
+        if (kvs == null || kvs.isBlank()) return;
+        for (String entry : kvs.split(",")) {
+            String[] parts = entry.split("=", 2);
+            if (parts.length != 2 || state.manifest().options.stream().noneMatch(option -> option.id().equals(parts[0].trim()))) {
+                throw new IllegalArgumentException("Invalid shader option " + entry);
+            }
+            state.set(parts[0].trim(), parts[1].trim());
+        }
     }
 
     static void debugView(int view) {

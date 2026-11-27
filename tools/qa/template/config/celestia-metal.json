@@ -1,0 +1,7 @@
+{
+  "shaders": {
+    "activePackId": "builtin:celestia-native",
+    "activePreset": "Balanced",
+    "binaryPipelineCache": true
+  }
+}
