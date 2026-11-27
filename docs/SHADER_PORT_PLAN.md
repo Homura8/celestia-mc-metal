@@ -2,6 +2,41 @@
 
 Audience: the next agent picking this up. Read `AGENTS.md` first (build/test commands, invariants), then this file.
 
+## Start here (state on 2026-11-28)
+
+Sections 1–9 below are the original port plan and history; their "current state" notes are dated. This block is current.
+
+- **Latest release:** `0.1.0-alpha.25` (`mod_version` in `gradle.properties`). Work since then is under `## Unreleased` in `CHANGELOG.md`.
+- **Open PR:** [#23](https://github.com/Homura8/celestia-mc-metal/pull/23), branch `feat/multi-pack`. It holds multi-pack support plus the roadmap-priorities commit. Check whether the owner merged it (`gh pr view 23`); if not, keep new work on a branch based on it.
+- **What multi-pack added:**
+  - Celestia Native's MSL lives in `src/main/resources/assets/celestiametal/shaderpacks/celestia-native/shaders/`.
+  - The engine-owned ABI lives in `shaders/engine/`: `shade_api.metal` (structs), slots, vanilla uniforms, light/TAA kernels.
+  - **Load world MSL only via `ShadeShaderPatcher.resource(name)`.**
+  - The spec is `SHADER_PACK_SPEC.md` §5; AGENTS.md invariant 10 has the rules.
+- **Owner priorities, in order** (section 10):
+  1. Nether and End looks (next, **confirm with the owner before starting**).
+  2. Aurora.
+  3. Motion blur.
+  4. Cumulus congestus.
+  5. labPBR.
+- **Standing decisions:**
+  - Native MSL packs only; Iris stays hidden.
+  - The pink-lavender haze stays (Pastel look).
+  - Physically correct options default on: Snell's window is on.
+  - Port Photon code only from MIT commit `26c2906e`; v1.4 is a visual reference only.
+- **Workflow:**
+  - Ask before committing or pushing.
+  - After a merge, look at what is next and confirm with the owner.
+  - Never modify the owner's PrismLauncher instances. Only copy from them, read-only.
+- **Verify:**
+  - Run `JAVA_HOME=/opt/homebrew/opt/openjdk@25 ./gradlew clean build check runNativeTests`. `clean` wipes `build/qa`, including `build/qa/reference-photon`; restage it from the owner's Photon instance as `docs/QA.md` describes.
+  - Then use the QA harness (`docs/QA.md`): `tools/qa/run.sh shots`; `packs` for pack switching; `perf` and `profile` for cost. Keep `/fill` under 32k blocks.
+- **Known open items:**
+  - The first compile of a new world pack pauses the game ~7 s.
+  - Packs can't change engine-side passes yet.
+  - An old underwater glass-edge flash needs a recheck.
+  - The cost of the per-pixel `shadeLdrToHdr` in the Nether/End is unchecked; relevant to the next task.
+
 ## 0. Goal and constraints
 
 Port the native MSL shading of **[Metal Shaders](https://github.com/GaelQuinta/minecraft-metal-shaders)** (GaelQuinta,
