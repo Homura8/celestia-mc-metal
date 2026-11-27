@@ -4,6 +4,14 @@
 
 - Add underwater sunlight shafts with wave focusing and shadow occlusion. Looking up through water uses physical refraction
   and Fresnel reflection, with a directional sky fallback when the refracted view leaves the screen.
+- **Underwater sunlight is now Photon's volumetric light.** It's adapted from Photon's MIT-licensed `water_fog_vl.glsl` (commit 26c2906e).
+  - **Shafts:** they converge toward the sun and run from the surface to the floor, brightest near the surface, and they drift with the water.
+  - **Shadows:** the shadow map shadows them, so pillars and walls cut dark shafts through the water.
+  - **How:** a smooth noise projected along the refracted sun ray bands them, using Photon's `linear_step(0.4, 0.5)` plus a base of 0.15. Photon's four multiple-scattering octaves are included.
+  - **Fog:** the march now carries all underwater sunlight. The material fog keeps only skylight while it runs.
+  - **Optimisations:** the octaves' phase terms are computed once per ray, and the march takes 16–20 steps on Ultra.
+  - **Cost:** about 0.8–1.0 ms at 3024×1742 on an M1 Pro.
+  - **QA:** a new `underwater-noon` scene, and a `celestiaqa.repeat` burst option for capturing animated effects.
 - New **Water > Snell's Window** option (on by default). On keeps the physical view from underwater: the world above shows only
   inside the 97-degree cone, and the surface mirrors the water outside it. Off matches Photon's default: the sky, clouds and
   the world above show through the whole surface, shifted slightly by the waves. Off is also cheaper, because the underside

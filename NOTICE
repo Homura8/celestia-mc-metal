@@ -30,6 +30,9 @@ commit's noise textures unmodified (assets/celestiametal/textures/clouds/photon_
 photon_worley.dat, photon_curl.dat; MIT License, full text: LICENSES/MIT-Photon.txt). Photon
 releases after that commit use a different licence; no code or assets from them are included.
 
+The underwater sunlight march (vl.metal vlWaterShafts, alpha.26) is adapted from the same commit's
+include/fog/water_fog_vl.glsl (MIT).
+
 ---
 
 Upstream NOTICE preserved from Minecraft Metal Shaders (GaelQuinta/minecraft-metal-shaders, Apache-2.0):

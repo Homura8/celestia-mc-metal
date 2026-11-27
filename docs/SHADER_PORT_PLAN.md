@@ -291,10 +291,10 @@ Follow-up:
       Follow-up QA: profile `s128,s0` in the underwater scene to isolate the shafts, and compare the same camera views against Photon.
 
 Next, in order:
-- [ ] Underwater light shafts that read like Photon's: today's march takes 4-8 samples over 32 blocks, which averages the
-      ~2-block caustic beams into an even glow, so the shafts are nearly invisible (~0.1 ms). Raising their weight only adds
-      haze (tried: beam base 0.15-0.4 and weight 6 -> 14). They need more samples where the beams are, or beams evaluated
-      in screen space along the sun direction. Keep the water clear.
+- [x] Underwater sunlight ported from Photon's MIT `water_fog_vl.glsl`: shadow-mapped shafts banded along the refracted sun,
+      surface to floor, about 0.8-1.0 ms. The material fog drops its sun term while the pass runs. Check animated effects with
+      `celestiaqa.repeat` bursts in `underwater` and `underwater-noon`. Open question: the shafts take the warm low sun and the
+      Pastel grade's rose (lilac at morning), where Photon's read cyan-white.
 - [ ] A real cumulus congestus layer (days 2 and 4 currently stand in a thicker cumulus).
 - [ ] Terrain ambient: Photon's cooler sky light.
 - [ ] Nether and End looks, aurora, motion blur, labPBR (carried over from P6b).

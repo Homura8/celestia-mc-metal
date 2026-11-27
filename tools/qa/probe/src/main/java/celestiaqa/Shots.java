@@ -18,6 +18,7 @@ final class Shots {
         new Scene("pond-noon", 6000, "clear", "tp @a 0.5 149.3 -14.5 0 -8"),
         new Scene("pond-sunset", 12300, "clear", "tp @a 0.5 149.3 -14.5 -90 -6"),
         new Scene("underwater", 1500, "clear", "tp @a 0.5 144.0 -14.5 0 -4"),
+        new Scene("underwater-noon", 6000, "clear", "tp @a 0.5 143.0 -14.5 0 0"), // (sun overhead: the shafts come down)
         new Scene("vista-noon", 6000, "clear", "tp @a 40.5 210 40.5 135 12"),
         new Scene("vista-sunset", 12300, "clear", "tp @a 40.5 210 40.5 135 12"),
         new Scene("vista-up", 6000, "clear", "tp @a 40.5 210 40.5 135 -35"),
@@ -58,11 +59,17 @@ final class Shots {
             s.add(enter(sc));
             boolean fixed = Boolean.getBoolean("celestiaqa.fixedShots");
             s.add(fixed ? Qa.ticks(240) : settle(sc));
-            s.add(Qa.once(mc -> {
-                Qa.screenshot(mc, Qa.prefix() + "-" + sc.name());
-                Qa.log("shot " + sc.name() + " settled " + Qa.lastWaitTicks() + " ticks | fps " + mc.getFps() + (Qa.CELESTIA ? Qa.fmt(" gpu %.2f ms", CelestiaHooks.gpuMs()) : ""));
-            }));
-            s.add(Qa.ticks(2));
+            // celestiaqa.repeat=N: a burst of N shots celestiaqa.repeatTicks apart (animated effects: waves, shafts, caustics)
+            int repeat = Math.max(1, Integer.getInteger("celestiaqa.repeat", 1));
+            int every = Math.max(1, Integer.getInteger("celestiaqa.repeatTicks", 10));
+            for (int k = 0; k < repeat; k++) {
+                String name = Qa.prefix() + "-" + sc.name() + (repeat > 1 ? "-" + k : "");
+                s.add(Qa.once(mc -> {
+                    Qa.screenshot(mc, name);
+                    Qa.log("shot " + name + " settled " + Qa.lastWaitTicks() + " ticks | fps " + mc.getFps() + (Qa.CELESTIA ? Qa.fmt(" gpu %.2f ms", CelestiaHooks.gpuMs()) : ""));
+                }));
+                s.add(Qa.ticks(k + 1 < repeat ? every : 2));
+            }
         }
         s.add(Qa.once(mc -> Qa.cmd(mc, "weather clear")));
         s.add(Qa.settle(20, 600, mc -> mc.level.getRainLevel(1f) <= 0.01f));

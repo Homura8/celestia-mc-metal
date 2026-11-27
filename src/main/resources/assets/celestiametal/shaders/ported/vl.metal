@@ -48,40 +48,63 @@ static float vlShadowAt(float3 p, constant ShadeFrame &f, depth2d_array<float> s
 #ifdef CELESTIA_VL_MARCH
 struct VlFsIn { float4 position [[position]]; float2 uv; };
 
-// Integrate only focused sunlight; the material shaders already handle the homogeneous water fog.
+// Underwater sunlight (alpha.26), adapted from Photon Shaders include/fog/water_fog_vl.glsl at commit 26c2906e, Copyright (c) 2025
+// Benjamin Stott ("sixthsurge"), MIT License (LICENSES/MIT-Photon.txt). The march carries ALL of the sun's in-scattering under
+// water: shadowed by the shadow map (pillars and walls cut dark shafts through the water) and banded by a smooth noise projected
+// along the refracted sun ray, so every point on one sun ray reads the same band: shafts that run from the surface to the floor,
+// brightest near the surface. The material shaders' underwater fog (shade_m2.metal shadeUnderwaterFog) drops its own sun term
+// while this pass runs (L.vl.z > 0) and keeps the skylight. Differences from upstream: the sun's path to the surface comes from the
+// water depth (L.vl.z) instead of the shadow map's depth difference, skylight stays in the material fog, the noise is our copy of
+// Photon's noise.png (texture 1), and the step count follows the Volumetric Light Steps option.
 static float3 vlWaterShafts(float3 eye, float3 dir, float distance, float jitter, constant ShadeFrame &f, constant ShadeLook &L,
-                           depth2d_array<float> shadow, sampler cmp) {
-	int steps = clamp(int(L.vl.x) / 2, 4, 8);
+                           depth2d_array<float> shadow, sampler cmp, texture2d<half> noise) {
+	constexpr sampler wrap(filter::linear, address::repeat);
+	int steps = min(clamp(int(L.vl.x), 8, 16) + int(0.15 * distance), 20); // (Ultra: 16-20)
 	float dt = distance / float(steps);
 	float2 sunXZ = f.lightDirWorld.xz / SHADE_WATER_IOR;
-	float3 sun = float3(sunXZ.x, sqrt(1.0 - dot(sunXZ, sunXZ)), sunXZ.y);
+	float3 sun = float3(sunXZ.x, sqrt(max(1.0 - dot(sunXZ, sunXZ), 1e-4)), sunXZ.y);
+	// the band pattern's plane, perpendicular to the refracted sun (upstream: shadow view space)
+	float3 e1 = normalize(cross(sun, abs(sun.x) < 0.9 ? float3(1.0, 0.0, 0.0) : float3(0.0, 0.0, 1.0)));
+	float3 e2 = cross(sun, e1);
+	float3 world0 = f.cameraFract.xyz + fmod(f.cameraBlock.xyz, 512.0);
+	const float2 d0 = float2(cos(0.5), sin(0.5)), d1 = float2(cos(3.0), sin(3.0));
+	float t = f.time.y * 0.25;
+	float LoV = dot(dir, sun);
+	// the four multiple-scattering octaves' phase x amount, constant along the ray (hoisted out of the march)
+	float4 ph;
+	for (int k = 0; k < 4; k++) ph[k] = (0.7 * shadeHG(LoV, 0.5 / float(1 << k)) + 0.3 * (0.25 / M_PI_F)) / float(1 << k);
 	float3 stepT = exp(-SHADE_WATER_EXTINCTION * dt);
 	float3 transmission = float3(1.0);
 	float3 scattering = float3(0.0);
-	float2 cameraXZ = f.cameraFract.xz + fmod(f.cameraBlock.xz, 2048.0);
 	for (int i = 0; i < steps; i++) {
 		float3 p = eye + dir * ((float(i) + jitter) * dt);
-		float lightPath = max(L.vl.z - p.y, 0.0) / sun.y;
 		float lit = f.flags.z == 0 ? 1.0 : vlShadowAt(p, f, shadow, cmp);
 		if (lit > 0.001) {
-			float2 surface = cameraXZ + p.xz + sun.xz * lightPath;
-			float focus = shadeCausticFocus(surface * 0.44, f.sunPath.w * 0.55, 1.5, 3);
-			float beam = smoothstep(0.8, 2.6, focus);
-			scattering += transmission * exp(-SHADE_WATER_EXTINCTION * lightPath) * (lit * beam);
+			float lightPath = max(L.vl.z - p.y, 0.0) / sun.y;
+			float3 lightT = exp(-SHADE_WATER_EXTINCTION * lightPath) * lit;
+			float3 w = world0 + p;
+			float2 c = float2(dot(w, e1), dot(w, e2));
+			float caustics = 0.67 * float(noise.sample(wrap, (c + d0 * t) * 0.02).g) + 0.33 * float(noise.sample(wrap, (c + d1 * t) * 0.04).g);
+			caustics = saturate((caustics - 0.4) * 10.0) + 0.15;
+			float3 sum = float3(0.0);
+			for (int k = 0; k < 4; k++) { // (Photon's multiple-scattering octaves: the light's transmittance square-rooted each)
+				sum += ph[k] * lightT;
+				lightT = sqrt(lightT);
+			}
+			scattering += caustics * sum * transmission;
 		}
 		transmission *= stepT;
 	}
-	float phase = shadeHG(dot(dir, sun), 0.65);
 	float sky = smoothstep(0.2, 0.8, L.eye.w) * (1.0 - 0.85 * f.weather.x);
 	float strength = L.vl.y * sky * smoothstep(0.015, 0.15, f.lightDirWorld.y) * (1.0 - smoothstep(14.0, 24.0, L.vl.z));
-	return f.sunColor.rgb * scattering * (1.0 - stepT) * (SHADE_WATER_SCATTERING / SHADE_WATER_EXTINCTION)
-	    * (6.0 * strength * phase);
+	return f.sunColor.rgb * M_PI_F * scattering * (1.0 - stepT) * (SHADE_WATER_SCATTERING / SHADE_WATER_EXTINCTION) * strength;
 }
 
 fragment half4 shade_vl_march(VlFsIn in [[stage_in]],
                               constant ShadeFrame &f [[buffer(CM_SHADE_BUF_FRAME)]],
                               constant ShadeLook &L [[buffer(CM_SHADE_BUF_LOOK)]],
                               depth2d<float> depth [[texture(0)]],
+                              texture2d<half> noise [[texture(1)]],
                               depth2d_array<float> shadow [[texture(CM_SHADE_TEX_SHADOW)]],
                               sampler cmp [[sampler(CM_SHADE_SAMP_SHADOW)]]) {
 	uint2 size = uint2(depth.get_width(), depth.get_height());
@@ -90,7 +113,7 @@ fragment half4 shade_vl_march(VlFsIn in [[stage_in]],
 	float distance = vlDistance(in.uv, z, eye, f, L.vl.z);
 	float3 dir = normalize(shadeViewRay(in.uv * 2.0 - 1.0, f.invViewProj));
 	float jitter = 0.2 + 0.6 * shadeNoise(in.position.xy, 0);
-	if (L.vl.z > 0.0) return half4(half3(vlWaterShafts(eye, dir, distance, jitter, f, L, shadow, cmp)), half(distance));
+	if (L.vl.z > 0.0) return half4(half3(vlWaterShafts(eye, dir, distance, jitter, f, L, shadow, cmp, noise)), half(distance));
 	float mu = dot(dir, f.lightDirWorld.xyz);
 	float phase = 0.75 * shadeHG(mu, 0.76) + 0.25 * shadeHG(mu, -0.15);
 	int steps = L.vl.x > 0.0 ? clamp(int(L.vl.x), 4, 24) : 12;
@@ -117,7 +140,21 @@ static float3 vlUpsample(texture2d<half> volume, float2 uv, float distance) {
 	constexpr sampler linear(filter::linear, address::clamp_to_edge);
 	float4 sample = float4(volume.sample(linear, uv, level(0.0)));
 	float tolerance = max(1.0, 0.1 * distance);
-	if (abs(sample.a - distance) <= tolerance) return sample.rgb;
+	if (abs(sample.a - distance) <= tolerance) {
+		// (alpha.26) a 4-tap tent over the quarter-resolution texels at the same depth: smooths the march's per-pixel jitter
+		// (visible as a dither grid in sparse underwater shafts) without blurring across depth edges
+		float2 o = 0.75 / float2(volume.get_width(), volume.get_height());
+		float3 sum = sample.rgb;
+		float n = 1.0;
+		for (int i = 0; i < 4; i++) {
+			float4 t = float4(volume.sample(linear, uv + o * float2((i & 1) ? 1.0 : -1.0, (i & 2) ? 1.0 : -1.0), level(0.0)));
+			if (abs(t.a - distance) <= tolerance) {
+				sum += t.rgb;
+				n += 1.0;
+			}
+		}
+		return sum / n;
+	}
 
 	float2 size = float2(volume.get_width(), volume.get_height());
 	int2 first = int2(floor(uv * size - 0.5));
