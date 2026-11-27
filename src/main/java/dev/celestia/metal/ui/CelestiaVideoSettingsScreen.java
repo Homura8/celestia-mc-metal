@@ -313,9 +313,9 @@ public final class CelestiaVideoSettingsScreen extends Screen {
             }
             case SHADERS -> {
                 ShaderPipelineManager spm = ShaderPipelineManager.get();
-                list.add(new OptionEntry.Header("Native MSL & Iris Shader Ecosystem"));
+                list.add(new OptionEntry.Header("Native MSL Shader Packs"));
                 list.add(new OptionEntry.Action("Shader Packs",
-                    "Active pack: " + spm.activeDisplayName() + " (" + spm.activePack().kind.badge + "). Browse, switch, or hot-reload native MSL and Iris packs.",
+                    "Active pack: " + spm.activeDisplayName() + " (" + spm.activePack().kind.badge + "). Browse, switch, or hot-reload native MSL packs.",
                     "Open Shader Packs...", ShaderOptionDef.Impact.NEGLIGIBLE,
                     () -> Minecraft.getInstance().gui.setScreen(new CelestiaShaderPacksScreen(this))));
                 list.add(new OptionEntry.Action("Configure Current Pack",

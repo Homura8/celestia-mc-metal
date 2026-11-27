@@ -282,6 +282,11 @@ public final class ShadeAtmosphere {
         }
     }
 
+    /** Lets a world-pack reload try again after this pack's sources failed to compile. */
+    public void resetFailure() {
+        failed = false;
+    }
+
     public void close(long ctx) {
         if (ctx == 0L) return;
         MetalNative.shadeSetResource(ctx, WEATHER_SLOT, 0L);

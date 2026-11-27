@@ -2,6 +2,41 @@
 
 Audience: the next agent picking this up. Read `AGENTS.md` first (build/test commands, invariants), then this file.
 
+## Start here (state on 2026-11-28)
+
+Sections 1–9 below are the original port plan and history; their "current state" notes are dated. This block is current.
+
+- **Latest release:** `0.1.0-alpha.25` (`mod_version` in `gradle.properties`). Work since then is under `## Unreleased` in `CHANGELOG.md`.
+- **Open PR:** [#23](https://github.com/Homura8/celestia-mc-metal/pull/23), branch `feat/multi-pack`. It holds multi-pack support plus the roadmap-priorities commit. Check whether the owner merged it (`gh pr view 23`); if not, keep new work on a branch based on it.
+- **What multi-pack added:**
+  - Celestia Native's MSL lives in `src/main/resources/assets/celestiametal/shaderpacks/celestia-native/shaders/`.
+  - The engine-owned ABI lives in `shaders/engine/`: `shade_api.metal` (structs), slots, vanilla uniforms, light/TAA kernels.
+  - **Load world MSL only via `ShadeShaderPatcher.resource(name)`.**
+  - The spec is `SHADER_PACK_SPEC.md` §5; AGENTS.md invariant 10 has the rules.
+- **Owner priorities, in order** (section 10):
+  1. Nether and End looks (next, **confirm with the owner before starting**).
+  2. Aurora.
+  3. Motion blur.
+  4. Cumulus congestus.
+  5. labPBR.
+- **Standing decisions:**
+  - Native MSL packs only; Iris stays hidden.
+  - The pink-lavender haze stays (Pastel look).
+  - Physically correct options default on: Snell's window is on.
+  - Port Photon code only from MIT commit `26c2906e`; v1.4 is a visual reference only.
+- **Workflow:**
+  - Ask before committing or pushing.
+  - After a merge, look at what is next and confirm with the owner.
+  - Never modify the owner's PrismLauncher instances. Only copy from them, read-only.
+- **Verify:**
+  - Run `JAVA_HOME=/opt/homebrew/opt/openjdk@25 ./gradlew clean build check runNativeTests`. `clean` wipes `build/qa`, including `build/qa/reference-photon`; restage it from the owner's Photon instance as `docs/QA.md` describes.
+  - Then use the QA harness (`docs/QA.md`): `tools/qa/run.sh shots`; `packs` for pack switching; `perf` and `profile` for cost. Keep `/fill` under 32k blocks.
+- **Known open items:**
+  - The first compile of a new world pack pauses the game ~7 s.
+  - Packs can't change engine-side passes yet.
+  - An old underwater glass-edge flash needs a recheck.
+  - The cost of the per-pixel `shadeLdrToHdr` in the Nether/End is unchecked; relevant to the next task.
+
 ## 0. Goal and constraints
 
 Port the native MSL shading of **[Metal Shaders](https://github.com/GaelQuinta/minecraft-metal-shaders)** (GaelQuinta,
@@ -231,7 +266,7 @@ P6a status (branch `feat/shader-port-p6a-alpha.21`, based on main after the P5 m
       irradiance 3D textures, zeroed fallback, `cm_dl_*` C ABI (ABI 8), bound per render encoder at buffer 29 / textures
       23-25 via `cm_dynlight_bind_render_encoder`. Removed dead `CM_SHADE_BUF_BLOOM` (it collided with slot 29). Metal 4
       compute has no `setBytes`: kernel parameters go through a per-ring-slot params buffer + producer barriers.
-- [x] MSL: `dynlight.metal`, `dynlight_vis.metal` in `shaders/ported/` (upstream's `shade_dynlight.metal` m3 seam is not
+- [x] MSL: `dynlight.metal`, `dynlight_vis.metal` in `shaders/ported/` (now `shaders/engine/`) (upstream's `shade_dynlight.metal` m3 seam is not
       needed: `ShadeShaderPatcher` appends `DynLightMsl.module()` and passes `CEL_DL_PARAMS` / `CEL_DL_ARGS`).
 - [x] Java in `dev.celestia.metal.shade.light`: `DynLightNative` on `cm_dl_*` via `MetalNative.shadeDowncall`, config as
       `celestiametal.shade.dynLights.*` + `applyLive`, occupancy through vanilla `PalettedContainer.get` (Sodium optional),
@@ -295,8 +330,18 @@ Next, in order:
       surface to floor, about 0.8-1.0 ms. The material fog drops its sun term while the pass runs. Check animated effects with
       `celestiaqa.repeat` bursts in `underwater` and `underwater-noon`. Open question: the shafts take the warm low sun and the
       Pastel grade's rose (lilac at morning), where Photon's read cyan-white.
+Owner priorities (2026-11-28), in order:
+- [x] Multiple native MSL shader packs (Unreleased, `feat/multi-pack`). `"kind": "world"` packs override Celestia Native's
+      `shaders/*.metal` by file name over the engine ABI in `shaders/engine/` (`shade_api.metal`: ShadeFrame / ShadeLook /
+      ShadeGpu / ShadeResources / ShadeWaterParams; slots; light and TAA kernels), with `"recompile"` options as `#define`s and
+      live switching (`ShadeShaderPatcher.epoch`). Iris/OptiFine packs hidden. Spec: `SHADER_PACK_SPEC.md` section 5; example:
+      `examples/shaderpacks/celestia-example-world`; QA: `tools/qa/run.sh packs`. Open: the first compile of a new pack
+      stalls the game ~7 s on an M1 Pro (a loading overlay or background compile would hide it); a pack can't yet change
+      the engine-side passes (pass list, targets, bindings) or the dynamic-light shading.
+- [ ] Nether and End looks.
+- [ ] Aurora.
+- [ ] Motion blur.
 - [ ] A real cumulus congestus layer (days 2 and 4 currently stand in a thicker cumulus).
-- [x] Terrain ambient: cooler daytime sky light, shaded faces now cool against warm sunlit faces. Photon is still cooler and darker, at (85, 126, 137); a further step would fight the Pastel grade's rose.
-- [ ] Distant haze: ours reads pink-lavender against Photon's neutral grey-blue (vista views).
-- [ ] Nether and End looks, aurora, motion blur, labPBR (carried over from P6b).
-- [ ] Multiple native MSL shader packs: keep engine code pack-agnostic.
+- [ ] labPBR (carried over from P6b).
+
+Settled: the pink-lavender distant haze stays, as part of the Pastel look (owner).

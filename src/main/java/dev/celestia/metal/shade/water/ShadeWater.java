@@ -197,6 +197,11 @@ public final class ShadeWater {
         p.putInt(160, budget).putInt(164, options.snellWindow() ? 1 : 0).putInt(168, 0).putInt(172, 0);
     }
 
+    /** Lets a world-pack reload try again after this pack's sources failed to compile. */
+    public void resetFailure() {
+        failed = false;
+    }
+
     public void close(long ctx) {
         activeThisFrame = false;
         capturedThisFrame = false;

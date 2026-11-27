@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Multiple native MSL world packs.**
+  - **Change:** a pack whose manifest says `"kind": "world"` replaces the world renderer's MSL. It overrides Celestia Native's `shaders/*.metal` by file name, and the files it leaves out stay Celestia Native's. Options marked `"recompile"` are compiled in as `#define`s. Engine options a pack does not declare keep Celestia Native's defaults.
+  - **Layout:** Celestia Native's shaders now live in its pack folder (`shaderpacks/celestia-native/shaders/`). The buffer layouts, slots and light/TAA kernels moved to the engine-owned `shaders/engine/`, which packs cannot override.
+  - **Switching:** switching packs or changing a recompile option rebuilds the world renderer on the next frame, with no restart. It takes ~0.1 s once compiled; the first compile of a new pack pauses the game ~7 s on an M1 Pro.
+  - **Iris/OptiFine:** GLSL packs are no longer listed (`-Dcelestiametal.irisPacks=true` shows them for bridge development).
+  - **Docs and tests:** spec in `SHADER_PACK_SPEC.md` §5, a starter pack in `examples/shaderpacks/celestia-example-world`, and a new `tools/qa/run.sh packs` QA mode.
+
 - Add underwater sunlight shafts with wave focusing and shadow occlusion. Looking up through water uses physical refraction
   and Fresnel reflection, with a directional sky fallback when the refracted view leaves the screen.
 - **Daytime sky light on blocks is cooler, closer to Photon's.**

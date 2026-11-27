@@ -6,6 +6,7 @@ import dev.celestia.metal.backend.MetalConst;
 import dev.celestia.metal.backend.MetalNative;
 import dev.celestia.metal.perf.CelestiaConfig;
 import dev.celestia.metal.shade.ShadeSettings;
+import dev.celestia.metal.shade.ShadeShaderPatcher;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -25,6 +26,8 @@ import org.slf4j.Logger;
 public final class ShaderPipelineManager {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final ShaderPipelineManager INSTANCE = new ShaderPipelineManager();
+    /** The built-in world pack: the reference implementation and the fallback for files and engine options other packs omit. */
+    public static final String BUILTIN_WORLD_PACK = "builtin:celestia-native";
     private static final String COMMON_PRELUDE_RESOURCE = "/assets/celestiametal/shaders/celestia_common.metal";
 
     public record CompiledPass(
@@ -64,7 +67,7 @@ public final class ShaderPipelineManager {
         String targetId = config.shaders.activePackId;
         boolean oldMinimal = "builtin:celestia-minimal".equals(targetId);
         ShaderPackManifest found = findPack(targetId);
-        if (found == null) found = findPack("builtin:celestia-native");
+        if (found == null) found = findPack(BUILTIN_WORLD_PACK);
         if (found == null) found = ShaderPackManifest.offPack();
         activePack = found;
 
@@ -89,8 +92,32 @@ public final class ShaderPipelineManager {
     }
 
     private void publishWorldSettings() {
-        worldSettings = shadersEnabled && activePack.kind == ShaderPackManifest.PackKind.WORLD_MSL
-            ? ShadeSettings.from(optionState(activePack)) : null;
+        if (!shadersEnabled || activePack.kind != ShaderPackManifest.PackKind.WORLD_MSL) {
+            worldSettings = null;
+            return;
+        }
+        ShaderOptionState state = optionState(activePack);
+        if (!BUILTIN_WORLD_PACK.equals(activePack.id)) {
+            ShaderPackManifest reference = findPack(BUILTIN_WORLD_PACK);
+            if (reference != null) state = state.withFallback(new ShaderOptionState(reference));
+        }
+        publishWorldSources(activePack, state);
+        worldSettings = ShadeSettings.from(state);
+    }
+
+    /**
+     * Points the world renderer at this world pack's MSL: {@code shaders/<file>.metal} from the pack, Celestia Native's for
+     * every file it leaves out, plus its {@code "recompile"} options as {@code #define}s. A change rebuilds the world shaders
+     * on the next frame (CelestiaShade / CelestiaPipeline watch ShadeShaderPatcher.epoch()).
+     */
+    private static void publishWorldSources(ShaderPackManifest pack, ShaderOptionState state) {
+        String defines = state.toMslDefines(true);
+        if (defines.indexOf("#define") < 0) defines = "";
+        ShadeShaderPatcher.PackSource source = BUILTIN_WORLD_PACK.equals(pack.id)
+            ? null : name -> ShaderPackLoader.readPackFile(pack, "shaders/" + name);
+        if (ShadeShaderPatcher.setWorldPack(pack.id, source, defines)) {
+            LOGGER.info("World shader pack: {}{}", pack.name, defines.isEmpty() ? "" : " (recompile options changed)");
+        }
     }
 
     public synchronized List<ShaderPackManifest> packs() {
@@ -176,6 +203,10 @@ public final class ShaderPipelineManager {
 
     public synchronized void reloadActivePack() {
         refreshPacks();
+        // A world pack under development: pick up edited .metal files even though its id and options did not change.
+        if (activePack.kind == ShaderPackManifest.PackKind.WORLD_MSL && !BUILTIN_WORLD_PACK.equals(activePack.id)) {
+            ShadeShaderPatcher.invalidate();
+        }
         compileActivePackIfNeeded(true);
     }
 

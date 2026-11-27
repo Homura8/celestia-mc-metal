@@ -2,7 +2,12 @@
 
 Celestia Metal allows shader authors to distribute **native Metal Shading Language (MSL)** shader packs as either a folder or a `.zip` inside Minecraft's `shaderpacks/` directory — independently of the renderer JAR.
 
-The bundled **Celestia Native** entry uses the same option schema. Its passes run in the world renderer, and its settings are applied per frame. The `passes` examples below describe the external MSL format.
+A pack is one of two kinds, chosen by the manifest's `"kind"`:
+
+- **World packs** (`"kind": "world"`) replace the world renderer's own MSL: sky, terrain, water, clouds, lighting and post. The bundled **Celestia Native** is a world pack, and any folder or `.zip` in `shaderpacks/` can be one. See [section 5](#5-world-packs-kind-world).
+- **Pass packs** (`"kind": "post"`, the default for user packs) add the fullscreen/compute `passes` described in sections 1–4.
+
+Only native MSL packs are listed. Iris/OptiFine GLSL packs are hidden until the GLSL bridge is mature (`-Dcelestiametal.irisPacks=true` lists them for bridge development).
 ---
 
 ## 1. Directory Layout
@@ -102,3 +107,69 @@ Every native `.metal` pass compiled by Celestia Metal automatically receives:
 3. **Early-out underground**: Check `skyLight < 0.02h` before sampling `depth2d_array` shadow cascades.
 4. **Compute passes for LUTs & half-res effects**: Run sky scattering LUTs (`64×32`), volumetric clouds (`0.5×`), and dual Kawase bloom in compute kernels (`MTL4ComputeCommandEncoder`) with `access::write` on `RGBA16Float` targets.
 5. **Respect EDR headroom**: Read `u.resolutionParams.w` (`edrHeadroom`) to expand specular & sky highlights smoothly on XDR displays without blowing out SDR screens.
+
+
+---
+
+## 5. World Packs (`"kind": "world"`)
+
+A world pack supplies the MSL the world renderer compiles: what Celestia Native ships in
+`src/main/resources/assets/celestiametal/shaderpacks/celestia-native/shaders/`. The engine keeps the Java side (render
+passes, buffers, textures, shadow maps, dynamic and coloured light volumes, MetalFX/TAAU) and the ABI the shaders read.
+[`examples/shaderpacks/celestia-example-world`](examples/shaderpacks/celestia-example-world) is a minimal, complete
+example: Celestia Native with its own `sky.fs.metal` and two compiled-in options.
+
+### Layout
+
+```text
+shaderpacks/
+  MyWorldPack/                 # or MyWorldPack.zip
+    celestia-shader.json       # "kind": "world"
+    shaders/
+      sky.fs.metal             # any of Celestia Native's file names: replaces that file
+      water.metal
+```
+
+- **Override by file name.** For each world shader file, the engine reads `shaders/<name>` from the active pack. If the pack does not provide it, the engine uses Celestia Native's. A pack can change one file or all of them.
+- **A replaced file keeps its contract.** It must define the functions and entry points the other files and the engine call. The safest start is a copy of Celestia Native's file. Entry points the engine looks up by name:
+
+  | File | Entry points |
+  | --- | --- |
+  | `sky_lut.metal` | `shade_lut_vs`, `shade_lut_fs` |
+  | `shade_post.metal` | `shade_fs_vs`, `shade_bloom_down0`, `shade_bloom_down`, `shade_bloom_up`, `shade_final`, `shade_histogram`, `shade_exposure`, `shade_milkyway_bake`, `shade_ambient_occlusion` |
+  | `clouds.metal`, `vl.metal`, `weather_surface.metal` | `shade_cloud_trace`, `shade_cloud_resolve`, `shade_cloud_dome`, `shade_vl_march`, `shade_wx_noise_fs` |
+  | `water.metal` | `shade_water_bake_fs`, `shade_water_bake_detail_fs`, `shade_water_bake_swell_fs`, `shade_water_pyr_fs`, `shade_water_pyr2_fs` |
+  | `shadow_vanilla.metal` / `shadow_sodium.metal` | `shadow_vanilla_vs`, `shadow_vanilla_cutout_vs`, `shadow_vanilla_cutout_fs` / `shadow_vs`, `shadow_cutout_vs`, `shadow_cutout_fs` |
+  | `sky.*`, `celestial.*`, `stars.vs`, `sunrise_sunset.vs`, `clouds.fs` | `main0` (they replace RenderPearl's stages for those pipelines) |
+  | `shade_terrain.metal`, `shade_water_terrain.metal`, `shade_entity.metal` | `shadeTerrainShade`, `shadeWaterTerrainShade` / `shadeWaterTerrainOther`, `shadeEntityShade` / `shadeEntityOut` (called from patched RenderPearl terrain, water and entity shaders) |
+
+  Shared helpers live in `shade_look.metal`, `shade_common.metal` and `shade_m2.metal`, which every world source includes.
+- **Engine-owned files cannot be overridden.** These live in `assets/celestiametal/shaders/engine/`, and a pack copy is ignored:
+  - `shade_api.metal`: the buffer layouts the engine writes (`ShadeFrame`, `ShadeLook`, `ShadeGpu`, `ShadeResources`, `ShadeWaterParams`).
+  - `shade_slots.metal`: buffer, texture and sampler slots.
+  - `vanilla_uniforms.metal`: vanilla uniform blocks.
+  - `dynlight*.metal`, `colorlight.metal`: the light-volume kernels and sampling.
+  - `taa.metal`: TAAU.
+
+  `CELESTIA_WORLD_API` (currently `1`) names this ABI's version.
+
+### Options
+
+World pack options use the schema of section 2, with one extra field:
+
+- **Engine options** keep Celestia Native's ids (for example `SHADOWS_ENABLED`, `SHADOW_RES`, `WATER_REFLECTIONS`, `COLOR_LOOK`; see its `celestia-shader.json`). They are read every frame into the engine's settings, with no recompile. Declare one to show it in your pack's options screen. Undeclared engine options keep Celestia Native's defaults.
+- **`"recompile": true`** options are compiled into every world shader as `#define`s, generated like section 3's (an `ENUM` gives `ID` = index and `ID_VALUE` = each index). Changing one rebuilds the world shaders. Guard them with `#ifndef` defaults so the file still compiles on its own.
+
+```json
+{ "id": "SKY_TINT", "type": "ENUM", "values": ["ROSE", "MINT", "GOLD"], "default": "ROSE", "recompile": true }
+```
+
+### Switching and reloading
+
+- Selecting a world pack, changing one of its `recompile` options, or **Reload** (for a user world pack, to pick up edited `.metal` files) rebuilds the world renderer on the next frame:
+  - every world library and pipeline is recompiled from the new sources;
+  - the old ones are retired, never freed while a frame still uses them;
+  - GPU-side state (exposure, sky irradiance) carries over, so the picture does not flash.
+- **First switch:** compiling a pack's shaders for the first time takes a few seconds; the game pauses meanwhile. Later switches hit Metal's shader cache and take about 0.1 s on an M1 Pro.
+- **Compile errors:** a pack that fails to compile leaves the world on standard rendering, and `latest.log` shows the compiler's message. Switch packs, or fix the file and reload.
+- **Testing:** `tools/qa/run.sh packs` switches between Celestia Native and the example pack in game (see [docs/QA.md](docs/QA.md)).

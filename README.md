@@ -22,7 +22,8 @@ Celestia Metal replaces Minecraft's legacy OpenGL path with Apple's native **Met
 - **Extensible Native MSL Shader Pack Ecosystem (API v1)**:
   - **Celestia Native** includes an atmospheric sky, two-cascade sun and moon shadows, SSAO, water refraction and reflections, volumetric clouds and light, surface weather, bloom, and filmic tone mapping.
   - Apply **Performance**, **Balanced**, **Quality**, or **Ultra** from Shader Packs, or tune individual effects in Shader Options. Changes take effect in the current world.
-  - Discover third-party MSL and Iris / OptiFine GLSL packages in `shaderpacks/`. The loader supports `shaders.properties`, `.lang` labels, and `.txt` options for Iris packs.
+  - Install other native MSL packs as folders or `.zip` files in `shaderpacks/`, and switch packs in game without restarting. A **world pack** (`"kind": "world"`) replaces the world renderer's shaders file by file over Celestia Native's; see [SHADER_PACK_SPEC.md](SHADER_PACK_SPEC.md) §5 and the starter pack in [examples/shaderpacks/celestia-example-world](examples/shaderpacks/celestia-example-world).
+  - Iris / OptiFine GLSL packs are hidden until the GLSL bridge is mature (`-Dcelestiametal.irisPacks=true` shows them for development).
   - Hotkeys in-game: **`O`** (Shader Packs), **`K`** (Pause/Resume Shaders), **`R`** (Hot-Reload Shaders).
 - **CelestiaGlow Frosted Observatory UI**:
   - Replaces Vanilla Video Settings with a Reese's Sodium Options–inspired tabbed, searchable screen (`General`, `Quality`, `Performance`, `Apple Silicon`, `Shaders`, `Advanced`), integrates cleanly into Sodium 0.9+ / Reese's Sodium Options via Sodium's Config API when Sodium is installed, and includes dedicated Shader Packs and Shader Options screens plus a live Performance HUD pill.

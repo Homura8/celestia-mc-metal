@@ -13,13 +13,19 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
- * Discovers built-in Native MSL packs, external Native MSL packs, and Iris/OptiFine GLSL packs
- * inside {@code shaderpacks/}.
+ * Discovers built-in Native MSL packs and external Native MSL packs (world packs and legacy pass packs) inside
+ * {@code shaderpacks/}; Iris/OptiFine GLSL packs only with {@link #IRIS_PACKS}.
  */
 public final class ShaderPackLoader {
     private static final List<String> BUILTIN_PACK_RESOURCES = List.of(
         "/assets/celestiametal/shaderpacks/celestia-native/celestia-shader.json"
     );
+
+    /**
+     * Iris/OptiFine GLSL packs are hidden until the GLSL bridge is mature (owner decision, 2026-11-28): only native MSL packs are
+     * listed. {@code -Dcelestiametal.irisPacks=true} lists them again for bridge development.
+     */
+    public static final boolean IRIS_PACKS = Boolean.getBoolean("celestiametal.irisPacks");
 
     private ShaderPackLoader() {}
 
@@ -64,7 +70,7 @@ public final class ShaderPackLoader {
                     return null;
                 }
             }
-            if (Files.isDirectory(entry.resolve("shaders"))) {
+            if (IRIS_PACKS && Files.isDirectory(entry.resolve("shaders"))) {
                 return IrisPackParser.parseDirectory(entry);
             }
             return null;
@@ -78,7 +84,7 @@ public final class ShaderPackLoader {
                         return ShaderPackManifest.parseNativeJson("user:" + fname, json, false, entry, null);
                     }
                 }
-                if (zf.getEntry("shaders/shaders.properties") != null || hasZipShadersFolder(zf)) {
+                if (IRIS_PACKS && (zf.getEntry("shaders/shaders.properties") != null || hasZipShadersFolder(zf))) {
                     return IrisPackParser.parseZip(entry, zf);
                 }
             } catch (IOException ignored) {

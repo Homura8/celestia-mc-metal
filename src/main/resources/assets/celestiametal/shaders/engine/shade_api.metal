@@ -1,4 +1,4 @@
-// Adapted from Metal Shaders (GaelQuinta, Apache-2.0): metal/src/main/resources/mcopt/shade/shade_look.metal
+// Adapted from Metal Shaders (GaelQuinta, Apache-2.0): metal/src/main/resources/mcopt/shade/shade_look.metal and shade_common.metal
 //
 // Copyright 2026 mcopt-shade contributors
 //
@@ -8,14 +8,20 @@
 // OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// M2: the art layer and GPU-written state every shaded pipeline (and every pipeline drawn into the HDR world target)
-// can read, plus the display transform ("Shade Filmic") and its inverse. Self-contained (only metal_stdlib):
-//   buffer(25)  constant ShadeLook&   CPU-written per frame (1136 B)
-//   buffer(26)  ShadeGpu              GPU-written (auto-exposure); read by the next frame
-#ifndef MCOPT_SHADE_LOOK
-#define MCOPT_SHADE_LOOK
+// Celestia Metal world-pack ABI: the buffers the engine (Java) writes and every world shader pack reads. Engine-owned: a
+// world pack cannot override this file (SHADER_PACK_SPEC.md, "World packs"). Layout changes here must match ShadeFrame.java,
+// ShadeLook.java, CelestiaShade (ShadeGpu / ShadeResources) and ShadeWater.packParams, and bump the world API version.
+//   buffer(24)  constant ShadeFrame&        CPU-written per frame (1024 B)
+//   buffer(25)  constant ShadeLook&         CPU-written per frame (1136 B)
+//   buffer(26)  ShadeGpu                    GPU-written (auto-exposure); read by the next frame
+//   buffer(27)  constant ShadeResources&    argument buffer of engine textures (128 B)
+//   buffer(28)  constant ShadeWaterParams&  CPU-written per frame (176 B)
+#ifndef CELESTIA_SHADE_API
+#define CELESTIA_SHADE_API
 #include <metal_stdlib>
 using namespace metal;
+
+#define CELESTIA_WORLD_API 1
 
 struct ShadeLook {
 	float4x4 viewProjNoJitter;     //   0
@@ -115,56 +121,82 @@ struct ShadeResources {
 
 static_assert(sizeof(ShadeResources) == 128, "ShadeResources size must be 128 bytes");
 
-static inline float shadeAirSky(constant ShadeLook &L) { return L.clock2.z > 0.5 ? L.clock2.y : 1.0; }
-static inline bool shadeAirSmooth(constant ShadeLook &L) { return L.clock2.z > 0.5; }
-static inline float shadeAirSun(constant ShadeLook &L) { return L.clock2.w; }
+struct ShadeFrame {
+	float4x4 view;              //   0
+	float4x4 proj;              //  64
+	float4x4 viewProj;          // 128
+	float4x4 invViewProj;       // 192
+	float4x4 prevViewProj;      // 256
+	float4x4 shadowViewProj[2]; // 320
+	float4 cameraBlock;         // 448
+	float4 cameraFract;         // 464
+	float4 sunDirWorld;         // 480
+	float4 sunDirView;          // 496
+	float4 moonDirWorld;        // 512
+	float4 lightDirWorld;       // 528
+	float4 sunColor;            // 544
+	float4 ambientSky;          // 560
+	float4 ambientGround;       // 576
+	float4 ambientBlock;        // 592
+	float4 fogColor;            // 608
+	float4 fogRange;            // 624
+	float4 fogSky;              // 640
+	float4 fogColorHdr;         // 656 fogColor.rgb as shadeLdrToHdr gives it (per frame, CelestiaShade), w 1 - rain
+	float4 zenithColor;         // 672
+	float4 horizon[8];          // 688
+	float4 cascadeSplits;       // 816
+	float4 shadowParams;        // 832: inverse resolution, resolution, depth bias, filter spread scale
+	float4 screen;              // 848
+	float4 time;                // 864
+	float4 weather;             // 880
+	float4 jitter;              // 896
+	float4 atmosphere;          // 912
+	float4 ambientToward;       // 928
+	float4 ambientAway;         // 944
+	int4 flags;                 // 960
+	int4 flags2;                // 976
+	float4 sunPath;             // 992
+	float4 wxLine;              // 1008
+};
 
-static inline float3 shadeRows(const constant float4 *m, float3 c) {
-	return float3(dot(m[0].xyz, c), dot(m[1].xyz, c), dot(m[2].xyz, c));
-}
+static_assert(sizeof(ShadeFrame) == 1024, "ShadeFrame size must be 1024 bytes");
 
-static inline float3 shadeLottes(float3 x, float4 t) {
-	float3 lx = log2(max(x, 1e-7)) * t.x;
-	float3 xa = exp2(lx);
-	float3 xad = exp2(lx * t.y);
-	return xa / (xad * t.z + t.w);
-}
+#define SHADE_DEV_NO_FOG_LUT 1
+#define SHADE_DEV_NO_SHADOW 2
+#define SHADE_DEV_FLAT_SKY 4
+#define SHADE_DEV_NO_WATER 8
+#define SHADE_DEV_FLAT_LIGHT 16
+#define SHADE_DEV_LEGACY_CHUNK_EDGE 32
+#define SHADE_DEV_LEGACY_SNELL 64
 
-static inline float3 shadeLottesInverse(float3 y, float4 t) {
-	float a = t.x, d = t.y, b = t.z, beta = t.w;
-	y = clamp(y, 0.0, 0.95 / (b * d));
-	float3 u = (y * b * (1.0 - d) + y * beta) / (1.0 - y * b * d);
-	for (int i = 0; i < 3; i++) {
-		float3 ud = pow(max(u, 1e-9), float3(d));
-		float3 g = u - y * (b * ud + beta);
-		float3 dg = 1.0 - y * b * d * ud / max(u, 1e-9);
-		u = max(u - g / max(dg, 0.05), 0.0);
-	}
-	return pow(u, float3(1.0 / a));
-}
+static inline bool shadeDev(constant ShadeFrame &f, int bit) { return (int(f.sunPath.z) & bit) != 0; }
 
-static inline float3 shadeDisplay(float3 x, constant ShadeLook &L) {
-	float3 c = max(shadeRows(L.gradeIn, max(x, 0.0)), 0.0);
-	c = min(shadeLottes(c, L.tonemap), L.output.x);
-	float3 y = max(shadeRows(L.gradeOut, c), 0.0);
-	return max(y * L.grade3.rgb + L.grade2.rgb, 0.0);
-}
-
-static inline float3 shadeSrgbToLinearExact(float3 c) {
-	return select(pow((c + 0.055) / 1.055, 2.4), c / 12.92, c <= 0.04045);
-}
-static inline float3 shadeLinearToSrgbExact(float3 c) {
-	return select(1.055 * pow(max(c, 0.0), 1.0 / 2.4) - 0.055, c * 12.92, c <= 0.0031308);
-}
-
-static inline float3 shadeLdrToHdr(float3 srgb, constant ShadeLook &L) {
-	float3 y = shadeSrgbToLinearExact(saturate(srgb));
-	y = (y - L.grade2.rgb) / max(L.grade3.rgb, 1e-3);
-	y = clamp(shadeRows(L.gradeOutInv, max(y, 0.0)), 0.0, L.output.w);
-	float3 c = shadeLottesInverse(y, L.tonemap);
-	return max(shadeRows(L.gradeInInv, c), 0.0);
-}
-static inline half4 shadeLdrToHdr(half4 c, constant ShadeLook &L) { return half4(half3(min(shadeLdrToHdr(float3(c.rgb), L), 60000.0)), c.a); }
-static inline float4 shadeLdrToHdr(float4 c, constant ShadeLook &L) { return float4(shadeLdrToHdr(c.rgb, L), c.a); }
+// 176 bytes, written by ShadeWater.packParams.
+struct ShadeWaterParams {
+	float4 still;  // atlas uv rectangle (u0, v0, u1, v1) of minecraft:block/water_still (all 0: unknown)
+	float4 flow;   // the same for minecraft:block/water_flow
+	float4 state;  // x 1 when the copies hold this frame's opaque scene, y water surface height above the eye (under water),
+	               // z wetness 0..1, w 1 when texture(20) holds this frame's baked waves
+	float4 tune;   // x wave strength (mcopt.shade.waterWaves), y SSR max distance (blocks; (1.1) 0 = screen reflections off), z reflection strength, w caustics 0/1
+	// (2026-11-02, water round 1; all read every frame, defaults = the look before it; SHADE_WATER_SWELL / SHADE_WATER_GLITTER code)
+	float4 swell;  // x the swell's strength (mcopt.shade.water.swell, 0 = none), y its masking k (.swellMask, 0.45), z the light through
+	               // its crests at golden hour (.swellGlow, 0), w its share in the Fresnel (.swellFresnel, 1 = physical, 0 = as without it)
+	float4 swell2; // x the open-water map's mean in its outer ring, for the water beyond it (< 0: no map, the swell everywhere at its
+	               // strength), y (candidate 7) the mirrored images' calm (.mirrorCalm; 0 = 0.55), z the long waves' calm (mcopt.shade.water.calm,
+	               // 0.55), w the ripples' (.ripple, 2.0)
+	float4 swell3; // x the swell's share in the mirrored images' direction (.swellRefl, 0.45 = the ripples' share, 1 = all of it),
+	               // y the glint's glitter (.glitter, 0 = none), z the glint's base roughness factor (.glintSharp, 1 = candidate 4's), w (candidate
+	               // 7) the mirrored image's temporal reprojection's weight (.reflTemporal, 0 = none; SHADE_WATER_RTR)
+	float4 rhist;  // (2026-11-06, SHADE_WATER_RHIST) the reflection's own history: x its weight (mcopt.shade.water.reflHistK, 0 = off:
+	               // no read, no write), y 1 when texture(29) holds last frame's (mcwater.m), z this frame's tag (+1 / -1, alternating;
+	               // the texels last frame wrote carry -z), w the clamp box's scale (.reflHistBox; 0 = the code isn't compiled in)
+	float4 mirror; // (2026-11-06, SHADE_WATER_MIRROR_AA) x the ripple-aware mirror normal's strength (mcopt.shade.water.mirrorAAStrength,
+	               // 0 = none), y (candidate 8, SHADE_SSR_HIER) the mirrored image's footprint filter (mcopt.shade.water.reflFilter, 1; 0 = one
+	               // tap per pixel), z (candidate 8, SHADE_WATER_PANO) the panorama's share off screen (mcopt.shade.water.reflPano, 1; 0 = none),
+	               // w (1.2.8) the gain of the caustics' bright lines seen from above (mcopt.shade.water.causticGain; 1 = 1.2.7's)
+	float4 far;    // (1.2.9, water phase 2) x the far water's distance D (blocks, mcopt.shade.water.far; 0 = off), y its fade band (blocks)
+	int4 quality;  // x hierarchical SSR interval budget, y physical Snell's window from below (0: Photon's default), zw reserved
+};
+static_assert(sizeof(ShadeWaterParams) == 176, "ShadeWaterParams layout");
 
 #endif

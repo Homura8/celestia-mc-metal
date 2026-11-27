@@ -142,33 +142,7 @@
 #define SHADE_SSR_TOP 0.15
 #endif
 
-// 176 bytes, written by ShadeWater.packParams.
-struct ShadeWaterParams {
-	float4 still;  // atlas uv rectangle (u0, v0, u1, v1) of minecraft:block/water_still (all 0: unknown)
-	float4 flow;   // the same for minecraft:block/water_flow
-	float4 state;  // x 1 when the copies hold this frame's opaque scene, y water surface height above the eye (under water),
-	               // z wetness 0..1, w 1 when texture(20) holds this frame's baked waves
-	float4 tune;   // x wave strength (mcopt.shade.waterWaves), y SSR max distance (blocks; (1.1) 0 = screen reflections off), z reflection strength, w caustics 0/1
-	// (2026-11-02, water round 1; all read every frame, defaults = the look before it; SHADE_WATER_SWELL / SHADE_WATER_GLITTER code)
-	float4 swell;  // x the swell's strength (mcopt.shade.water.swell, 0 = none), y its masking k (.swellMask, 0.45), z the light through
-	               // its crests at golden hour (.swellGlow, 0), w its share in the Fresnel (.swellFresnel, 1 = physical, 0 = as without it)
-	float4 swell2; // x the open-water map's mean in its outer ring, for the water beyond it (< 0: no map, the swell everywhere at its
-	               // strength), y (candidate 7) the mirrored images' calm (.mirrorCalm; 0 = 0.55), z the long waves' calm (mcopt.shade.water.calm,
-	               // 0.55), w the ripples' (.ripple, 2.0)
-	float4 swell3; // x the swell's share in the mirrored images' direction (.swellRefl, 0.45 = the ripples' share, 1 = all of it),
-	               // y the glint's glitter (.glitter, 0 = none), z the glint's base roughness factor (.glintSharp, 1 = candidate 4's), w (candidate
-	               // 7) the mirrored image's temporal reprojection's weight (.reflTemporal, 0 = none; SHADE_WATER_RTR)
-	float4 rhist;  // (2026-11-06, SHADE_WATER_RHIST) the reflection's own history: x its weight (mcopt.shade.water.reflHistK, 0 = off:
-	               // no read, no write), y 1 when texture(29) holds last frame's (mcwater.m), z this frame's tag (+1 / -1, alternating;
-	               // the texels last frame wrote carry -z), w the clamp box's scale (.reflHistBox; 0 = the code isn't compiled in)
-	float4 mirror; // (2026-11-06, SHADE_WATER_MIRROR_AA) x the ripple-aware mirror normal's strength (mcopt.shade.water.mirrorAAStrength,
-	               // 0 = none), y (candidate 8, SHADE_SSR_HIER) the mirrored image's footprint filter (mcopt.shade.water.reflFilter, 1; 0 = one
-	               // tap per pixel), z (candidate 8, SHADE_WATER_PANO) the panorama's share off screen (mcopt.shade.water.reflPano, 1; 0 = none),
-	               // w (1.2.8) the gain of the caustics' bright lines seen from above (mcopt.shade.water.causticGain; 1 = 1.2.7's)
-	float4 far;    // (1.2.9, water phase 2) x the far water's distance D (blocks, mcopt.shade.water.far; 0 = off), y its fade band (blocks)
-	int4 quality;  // x hierarchical SSR interval budget, y physical Snell's window from below (0: Photon's default), zw reserved
-};
-static_assert(sizeof(ShadeWaterParams) == 176, "ShadeWaterParams layout");
+
 
 // (1.2.9, water phase 2: the far water) Own's far draw (OwnTerrain: the translucent list's farthest run of sections, all wholly
 // beyond wp.far.x) specializes the same shade_own_fs with function constant 41 (mcown.m, kind bit 31): what SHADE_WFAR_* cut is

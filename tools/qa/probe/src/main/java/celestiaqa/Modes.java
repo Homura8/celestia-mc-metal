@@ -122,6 +122,55 @@ final class Modes {
         }
     }
 
+    /**
+     * Multi-pack: switches the world renderer live between Celestia Native and the example world pack
+     * (examples/shaderpacks/celestia-example-world, copied into the run's shaderpacks/ by run.sh), changes one of the pack's
+     * recompile options, and switches back. Each step must leave CelestiaShade ready (a failed rebuild throws).
+     */
+    static void packs(List<Step> steps) {
+        var scene = Shots.byName("vista-up");
+        // Clouds off (cloudDev 7: no altocumulus, cirrus or cumulus): they drift with real time, so a deck overhead would make
+        // the sky shots differ for reasons that have nothing to do with the pack.
+        String cloudDev = System.getProperty(DEV_PROPERTIES[3]);
+        steps.add(once(mc -> {
+            System.setProperty(DEV_PROPERTIES[3], "7");
+            CelestiaHooks.presetWith("Ultra", null);
+        }));
+        steps.add(Shots.enter(scene));
+        steps.add(Shots.settle(scene));
+        packStep(steps, "native", () -> {});
+        packStep(steps, "example-rose", () -> {
+            CelestiaHooks.refreshPacks();
+            CelestiaHooks.selectPack(CelestiaHooks.EXAMPLE_PACK);
+        });
+        packStep(steps, "example-mint", () -> CelestiaHooks.options("SKY_TINT=MINT,SKY_TINT_STRENGTH=1"));
+        packStep(steps, "native-again", () -> CelestiaHooks.selectPack(CelestiaHooks.NATIVE));
+        // (warm: the example's libraries are in Metal's cache now) a switch must look the same however long its compile took
+        packStep(steps, "example-warm", () -> CelestiaHooks.selectPack(CelestiaHooks.EXAMPLE_PACK));
+        packStep(steps, "native-warm", () -> CelestiaHooks.selectPack(CelestiaHooks.NATIVE));
+        steps.add(once(mc -> {
+            if (cloudDev == null) System.clearProperty(DEV_PROPERTIES[3]);
+            else System.setProperty(DEV_PROPERTIES[3], cloudDev);
+            configure();
+        }));
+    }
+
+    private static void packStep(List<Step> steps, String name, Runnable change) {
+        long[] t0 = new long[1];
+        steps.add(once(mc -> {
+            t0[0] = System.nanoTime();
+            change.run();
+        }));
+        steps.add(Qa.frames(3));
+        steps.add(once(mc -> System.out.println(fmt("[PACKS] %-13s %-16s rebuilt and drew 3 frames in %7.1f ms",
+            name, CelestiaHooks.worldPack(), (System.nanoTime() - t0[0]) / 1e6))));
+        steps.add(ticks(60));
+        steps.add(once(mc -> {
+            CelestiaHooks.requireWorldReady(name);
+            screenshot(mc, "packs-" + name);
+        }));
+    }
+
     static void lights(List<Step> steps) {
         Lights.add(steps);
     }

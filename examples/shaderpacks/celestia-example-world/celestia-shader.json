@@ -1,0 +1,45 @@
+{
+  "apiVersion": 1,
+  "kind": "world",
+  "name": "Celestia Example World",
+  "author": "Celestia Metal Contributors",
+  "version": "1.0.0",
+  "description": "A minimal world pack: Celestia Native's renderer with its own sky shader (shaders/sky.fs.metal) and a compiled-in tint option. Copy it as a starting point for your own pack.",
+  "categories": ["Sky"],
+  "options": [
+    {
+      "id": "SKY_TINT",
+      "label": "Sky Tint",
+      "description": "Colour the sky is tinted towards. Compiled into the pack's MSL: changing it rebuilds the world shaders.",
+      "category": "Sky",
+      "type": "ENUM",
+      "values": ["ROSE", "MINT", "GOLD"],
+      "default": "ROSE",
+      "impact": "NEGLIGIBLE",
+      "recompile": true
+    },
+    {
+      "id": "SKY_TINT_STRENGTH",
+      "label": "Sky Tint Strength",
+      "description": "How far the sky moves towards the tint colour (0 = Celestia Native's sky).",
+      "category": "Sky",
+      "type": "FLOAT_SLIDER",
+      "default": "0.5",
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.05,
+      "impact": "NEGLIGIBLE",
+      "recompile": true
+    },
+    {
+      "id": "SHADOWS_ENABLED",
+      "label": "Shadows",
+      "description": "An engine option this pack chooses to expose (same id as Celestia Native's). Undeclared engine options keep Celestia Native's defaults.",
+      "category": "Sky",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "HIGH"
+    }
+  ],
+  "presets": {}
+}

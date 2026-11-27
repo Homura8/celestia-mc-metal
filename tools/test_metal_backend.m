@@ -36,6 +36,16 @@ static NSString *read_file_str(NSString *path) {
     return s;
 }
 
+// World shader sources: engine-owned ABI and kernels in shaders/engine/, Celestia Native's world pack in
+// shaderpacks/celestia-native/shaders/ (ShadeShaderPatcher resolves them the same way). dir is <assets>/shaders/ported, the
+// pre-multi-pack location, kept as the lookup handle so call sites stay one expression.
+static NSString *shade_path(NSString *dir, NSString *name) {
+    NSString *assets = [[dir stringByDeletingLastPathComponent] stringByDeletingLastPathComponent];
+    NSString *engine = [[assets stringByAppendingPathComponent:@"shaders/engine"] stringByAppendingPathComponent:name];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:engine]) return engine;
+    return [[assets stringByAppendingPathComponent:@"shaderpacks/celestia-native/shaders"] stringByAppendingPathComponent:name];
+}
+
 static void verify_backend_ops(int32_t preferMetal4) {
     int64_t ctx = cm_device_create(preferMetal4, 1, "");
     assert(ctx != 0);
@@ -808,13 +818,14 @@ static void verify_backend_ops(int32_t preferMetal4) {
     {
         NSString *repoAssets = [NSString stringWithUTF8String:getenv("CELESTIA_TEST_ASSETS") ?: "src/main/resources/assets/celestiametal"];
         NSString *portedDir = [repoAssets stringByAppendingPathComponent:@"shaders/ported"];
-        NSString *slots = read_file_str([portedDir stringByAppendingPathComponent:@"shade_slots.metal"]);
-        NSString *lookSrc = read_file_str([portedDir stringByAppendingPathComponent:@"shade_look.metal"]);
-        NSString *commonSrc = read_file_str([portedDir stringByAppendingPathComponent:@"shade_common.metal"]);
-        NSString *m2Src = read_file_str([portedDir stringByAppendingPathComponent:@"shade_m2.metal"]);
-        NSString *vuniSrc = read_file_str([portedDir stringByAppendingPathComponent:@"vanilla_uniforms.metal"]);
-        NSString *prelude = [NSString stringWithFormat:@"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n%@\n%@\n%@\n%@\n%@\n",
-                             slots, lookSrc, commonSrc, m2Src, vuniSrc];
+        NSString *slots = read_file_str(shade_path(portedDir, @"shade_slots.metal"));
+        NSString *apiSrc = read_file_str(shade_path(portedDir, @"shade_api.metal"));
+        NSString *lookSrc = read_file_str(shade_path(portedDir, @"shade_look.metal"));
+        NSString *commonSrc = read_file_str(shade_path(portedDir, @"shade_common.metal"));
+        NSString *m2Src = read_file_str(shade_path(portedDir, @"shade_m2.metal"));
+        NSString *vuniSrc = read_file_str(shade_path(portedDir, @"vanilla_uniforms.metal"));
+        NSString *prelude = [NSString stringWithFormat:@"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n%@\n%@\n%@\n%@\n%@\n%@\n",
+                             slots, apiSrc, lookSrc, commonSrc, m2Src, vuniSrc];
 
         // Compile-verify every ported P1 & P2 .metal file on both Metal 4 and Metal 3
         NSString *dummyDefines = @"#define CELESTIA_BUF_Fog 0\n#define CELESTIA_BUF_DynamicTransforms 1\n#define CELESTIA_BUF_Projection 2\n#define CELESTIA_BUF_CloudInfo 0\n#define CELESTIA_TEX_Sampler0 0\n#define CELESTIA_SAMP_Sampler0 0\n";
@@ -826,9 +837,9 @@ static void verify_backend_ops(int32_t preferMetal4) {
         ];
         char serr[4096] = {0};
         for (NSString *fn in portedShaders) {
-            NSString *body = read_file_str([portedDir stringByAppendingPathComponent:fn]);
+            NSString *body = read_file_str(shade_path(portedDir, fn));
             NSString *weather = [fn isEqualToString:@"shade_terrain.metal"]
-                ? read_file_str([portedDir stringByAppendingPathComponent:@"weather_surface.metal"]) : @"";
+                ? read_file_str(shade_path(portedDir, @"weather_surface.metal")) : @"";
             NSString *src = [NSString stringWithFormat:@"%@\n%@\n%@\n%@", dummyDefines, prelude, weather, body];
             int64_t l = cm_compile_msl_library(ctx, src.UTF8String, fn.UTF8String, 1, serr, sizeof(serr));
             if (!l) {
@@ -838,7 +849,7 @@ static void verify_backend_ops(int32_t preferMetal4) {
             cm_library_destroy(l);
         }
         for (NSString *fn in @[@"shadow_sodium.metal", @"shadow_vanilla.metal"]) {
-            NSString *src = read_file_str([portedDir stringByAppendingPathComponent:fn]);
+            NSString *src = read_file_str(shade_path(portedDir, fn));
             int64_t l = cm_compile_msl_library(ctx, src.UTF8String, fn.UTF8String, 1, serr, sizeof(serr));
             if (!l) {
                 fprintf(stderr, "FAIL 2l compiling ported shadow shader %s:\n%s\n", fn.UTF8String, serr);
@@ -847,8 +858,8 @@ static void verify_backend_ops(int32_t preferMetal4) {
             cm_library_destroy(l);
         }
 
-        NSString *lutFull = [NSString stringWithFormat:@"%@\n%@", prelude, read_file_str([portedDir stringByAppendingPathComponent:@"sky_lut.metal"])];
-        NSString *postFull = [NSString stringWithFormat:@"%@\n%@", prelude, read_file_str([portedDir stringByAppendingPathComponent:@"shade_post.metal"])];
+        NSString *lutFull = [NSString stringWithFormat:@"%@\n%@", prelude, read_file_str(shade_path(portedDir, @"sky_lut.metal"))];
+        NSString *postFull = [NSString stringWithFormat:@"%@\n%@", prelude, read_file_str(shade_path(portedDir, @"shade_post.metal"))];
         int64_t lLut = cm_compile_msl_library(ctx, lutFull.UTF8String, "Test2lSkyLut", 1, serr, sizeof(serr));
         int64_t lPost = cm_compile_msl_library(ctx, postFull.UTF8String, "Test2lPost", 1, serr, sizeof(serr));
         assert(lLut && lPost);
@@ -1057,8 +1068,8 @@ static void verify_backend_ops(int32_t preferMetal4) {
         NSString *portedDir = [repoAssets stringByAppendingPathComponent:@"shaders/ported"];
         char serr[4096] = {0};
 
-        int64_t lSod = cm_compile_msl_library(ctx, read_file_str([portedDir stringByAppendingPathComponent:@"shadow_sodium.metal"]).UTF8String, "2m_sod", 1, serr, sizeof(serr));
-        int64_t lVan = cm_compile_msl_library(ctx, read_file_str([portedDir stringByAppendingPathComponent:@"shadow_vanilla.metal"]).UTF8String, "2m_van", 1, serr, sizeof(serr));
+        int64_t lSod = cm_compile_msl_library(ctx, read_file_str(shade_path(portedDir, @"shadow_sodium.metal")).UTF8String, "2m_sod", 1, serr, sizeof(serr));
+        int64_t lVan = cm_compile_msl_library(ctx, read_file_str(shade_path(portedDir, @"shadow_vanilla.metal")).UTF8String, "2m_van", 1, serr, sizeof(serr));
         assert(lSod && lVan);
         int64_t fnSodVs = cm_compile_function(lSod, "shadow_vs", 0, 0, 0, serr, sizeof(serr));
         int64_t fnSodCvs = cm_compile_function(lSod, "shadow_cutout_vs", 0, 0, 0, serr, sizeof(serr));
@@ -1727,17 +1738,18 @@ static void benchmark_p1_hdr_post(NSString *assetsDir, int32_t preferMetal4) {
     assert(ctx != 0);
     const char *api = cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3";
     NSString *portedDir = [assetsDir stringByAppendingPathComponent:@"shaders/ported"];
-    NSString *slots = read_file_str([portedDir stringByAppendingPathComponent:@"shade_slots.metal"]);
-    NSString *lookSrc = read_file_str([portedDir stringByAppendingPathComponent:@"shade_look.metal"]);
-    NSString *commonSrc = read_file_str([portedDir stringByAppendingPathComponent:@"shade_common.metal"]);
-    NSString *m2Src = read_file_str([portedDir stringByAppendingPathComponent:@"shade_m2.metal"]);
-    NSString *vuniSrc = read_file_str([portedDir stringByAppendingPathComponent:@"vanilla_uniforms.metal"]);
-    NSString *prelude = [NSString stringWithFormat:@"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n%@\n%@\n%@\n%@\n%@\n",
-                         slots, lookSrc, commonSrc, m2Src, vuniSrc];
+    NSString *slots = read_file_str(shade_path(portedDir, @"shade_slots.metal"));
+        NSString *apiSrc = read_file_str(shade_path(portedDir, @"shade_api.metal"));
+    NSString *lookSrc = read_file_str(shade_path(portedDir, @"shade_look.metal"));
+    NSString *commonSrc = read_file_str(shade_path(portedDir, @"shade_common.metal"));
+    NSString *m2Src = read_file_str(shade_path(portedDir, @"shade_m2.metal"));
+    NSString *vuniSrc = read_file_str(shade_path(portedDir, @"vanilla_uniforms.metal"));
+    NSString *prelude = [NSString stringWithFormat:@"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n%@\n%@\n%@\n%@\n%@\n%@\n",
+                         slots, apiSrc, lookSrc, commonSrc, m2Src, vuniSrc];
 
     char err[2048] = {0};
-    NSString *lutSrc = [NSString stringWithFormat:@"%@\n%@", prelude, read_file_str([portedDir stringByAppendingPathComponent:@"sky_lut.metal"])];
-    NSString *postSrc = [NSString stringWithFormat:@"%@\n%@", prelude, read_file_str([portedDir stringByAppendingPathComponent:@"shade_post.metal"])];
+    NSString *lutSrc = [NSString stringWithFormat:@"%@\n%@", prelude, read_file_str(shade_path(portedDir, @"sky_lut.metal"))];
+    NSString *postSrc = [NSString stringWithFormat:@"%@\n%@", prelude, read_file_str(shade_path(portedDir, @"shade_post.metal"))];
     int64_t lLut = cm_compile_msl_library(ctx, lutSrc.UTF8String, "BenchLut", 1, err, sizeof(err));
     int64_t lPost = cm_compile_msl_library(ctx, postSrc.UTF8String, "BenchPost", 1, err, sizeof(err));
     assert(lLut && lPost);
@@ -1863,7 +1875,7 @@ static void benchmark_p2_shadow(NSString *assetsDir, int32_t preferMetal4) {
     NSString *portedDir = [assetsDir stringByAppendingPathComponent:@"shaders/ported"];
     char err[2048] = {0};
 
-    int64_t lSod = cm_compile_msl_library(ctx, read_file_str([portedDir stringByAppendingPathComponent:@"shadow_sodium.metal"]).UTF8String, "bp2_sod", 1, err, sizeof(err));
+    int64_t lSod = cm_compile_msl_library(ctx, read_file_str(shade_path(portedDir, @"shadow_sodium.metal")).UTF8String, "bp2_sod", 1, err, sizeof(err));
     int64_t fnVs = cm_compile_function(lSod, "shadow_vs", 0, 0, 0, err, sizeof(err));
     int64_t pSolid = cm_render_pipeline_create(ctx, fnVs, 0, NULL, 0, NULL, 0, NULL, 0, CM_FMT_D16_UNORM, CM_TOPO_TRIANGLES, 0, 0, 1, CM_CMP_GREATER_EQUAL, 1, 0, 0, "bp2_s", err, sizeof(err));
     assert(pSolid);
@@ -1958,17 +1970,19 @@ static NSString *build_water_bake_msl(NSString *portedDir) {
          "#define SHADE_WATER_SWELL_BAKED 1\n"
          "#define SHADE_WATER_GLITTER 1\n"
          "#define SHADE_WATER_SUBRECT 1\n"];
-    [s appendString:read_file_str([portedDir stringByAppendingPathComponent:@"shade_slots.metal"])];
+    [s appendString:read_file_str(shade_path(portedDir, @"shade_slots.metal"))];
     [s appendString:@"\n"];
-    [s appendString:read_file_str([portedDir stringByAppendingPathComponent:@"shade_look.metal"])];
+    [s appendString:read_file_str(shade_path(portedDir, @"shade_api.metal"))];
     [s appendString:@"\n"];
-    [s appendString:read_file_str([portedDir stringByAppendingPathComponent:@"shade_common.metal"])];
+    [s appendString:read_file_str(shade_path(portedDir, @"shade_look.metal"))];
     [s appendString:@"\n"];
-    [s appendString:read_file_str([portedDir stringByAppendingPathComponent:@"shade_m2.metal"])];
+    [s appendString:read_file_str(shade_path(portedDir, @"shade_common.metal"))];
     [s appendString:@"\n"];
-    [s appendString:read_file_str([portedDir stringByAppendingPathComponent:@"shade_post.metal"])];
+    [s appendString:read_file_str(shade_path(portedDir, @"shade_m2.metal"))];
     [s appendString:@"\n"];
-    [s appendString:read_file_str([portedDir stringByAppendingPathComponent:@"water.metal"])];
+    [s appendString:read_file_str(shade_path(portedDir, @"shade_post.metal"))];
+    [s appendString:@"\n"];
+    [s appendString:read_file_str(shade_path(portedDir, @"water.metal"))];
     return s;
 }
 
@@ -2246,9 +2260,9 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
     NSMutableString *source = [NSMutableString stringWithString:
         @"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n#define SHADE_WX_NOISE_BAKE 1\n"
          "#define CELESTIA_VL_MARCH 1\n#define CELESTIA_VL_COMPOSITE 1\n#define CELESTIA_SSAO 1\n"];
-    for (NSString *fn in @[@"shade_slots.metal", @"shade_look.metal", @"shade_common.metal", @"shade_m2.metal", @"vl.metal",
+    for (NSString *fn in @[@"shade_slots.metal", @"shade_api.metal", @"shade_look.metal", @"shade_common.metal", @"shade_m2.metal", @"vl.metal",
                            @"ssao.metal", @"shade_post.metal", @"clouds.metal", @"weather_surface.metal"]) {
-        [source appendFormat:@"%@\n", read_file_str([ported stringByAppendingPathComponent:fn])];
+        [source appendFormat:@"%@\n", read_file_str(shade_path(ported, fn))];
     }
     [source appendString:
         @"struct AoDepthFixture { half4 color [[color(0)]]; float depth [[depth(any)]]; };\n"
@@ -2559,7 +2573,7 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
 static void verify_p4_taau(NSString *assetsDir, int32_t preferMetal4) {
     int64_t ctx = cm_device_create(preferMetal4, 0, "");
     assert(ctx);
-    NSString *file = [assetsDir stringByAppendingPathComponent:@"shaders/ported/taa.metal"];
+    NSString *file = shade_path([assetsDir stringByAppendingPathComponent:@"shaders/ported"], @"taa.metal");
     NSString *source = [read_file_str(file) stringByAppendingString:
         @"\nfragment half4 taa_edge(TaaIn in [[stage_in]]) {"
          "return half4(half3(in.uv.x < 0.5 ? 0.0h : 1.0h), 1.0h); }"];
@@ -2652,8 +2666,8 @@ static void verify_p6a_dynlights(NSString *assetsDir, int32_t preferMetal4) {
     assert(ctx);
     const char *api = cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3";
     NSString *ported = [assetsDir stringByAppendingPathComponent:@"shaders/ported"];
-    NSString *dl = read_file_str([ported stringByAppendingPathComponent:@"dynlight.metal"]);
-    NSString *vis = read_file_str([ported stringByAppendingPathComponent:@"dynlight_vis.metal"]);
+    NSString *dl = read_file_str(shade_path(ported, @"dynlight.metal"));
+    NSString *vis = read_file_str(shade_path(ported, @"dynlight_vis.metal"));
     NSString *kernels = [NSString stringWithFormat:@"#define SHADE_DL_KERNELS\n%@\n%@", dl, vis];
     NSString *probeSrc = [NSString stringWithFormat:@"%@\n"
         "struct DlProbeOut { float4 position [[position]]; float2 uv; };\n"
@@ -2818,7 +2832,7 @@ static void verify_p6b_colorlights(NSString *assetsDir, int32_t preferMetal4) {
     int64_t ctx = cm_device_create(preferMetal4, 0, "");
     assert(ctx);
     const char *api = cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3";
-    NSString *cl = read_file_str([[assetsDir stringByAppendingPathComponent:@"shaders/ported"] stringByAppendingPathComponent:@"colorlight.metal"]);
+    NSString *cl = read_file_str(shade_path([assetsDir stringByAppendingPathComponent:@"shaders/ported"], @"colorlight.metal"));
     NSString *kernels = [NSString stringWithFormat:@"#define SHADE_CL_KERNELS\n%@", cl];
     NSString *probeSrc = [NSString stringWithFormat:@"%@\n"
         "struct ClProbeOut { float4 position [[position]]; float2 uv; };\n"

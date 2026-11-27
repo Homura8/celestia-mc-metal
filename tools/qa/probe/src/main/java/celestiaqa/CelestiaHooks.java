@@ -39,6 +39,23 @@ final class CelestiaHooks {
         return d == null ? -1 : MetalNative.deviceLastGpuNs(d.handle()) / 1e6;
     }
 
+    static final String EXAMPLE_PACK = "user:celestia-example-world";
+
+    static void refreshPacks() {
+        ShaderPipelineManager.get().refreshPacks();
+    }
+
+    static String worldPack() {
+        return dev.celestia.metal.shade.ShadeShaderPatcher.worldPackKey();
+    }
+
+    static void requireWorldReady(String step) {
+        var shade = dev.celestia.metal.shade.CelestiaShade.current();
+        if (shade == null || !shade.isReady() || !dev.celestia.metal.shade.CelestiaShade.isEnabled()) {
+            throw new IllegalStateException("World renderer not ready after pack step " + step + " (" + worldPack() + ")");
+        }
+    }
+
     static void selectPack(String id) {
         ShaderPipelineManager.get().selectPack(id);
     }

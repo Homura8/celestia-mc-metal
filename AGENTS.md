@@ -24,7 +24,7 @@ Practical guidance for AI agents and contributors working on **Celestia Metal** 
   - `cm_shader_runtime.m`: Compute dispatch helper for shader packs.
 - **Java Backend (`src/main/java/dev/celestia/metal/backend/`)**: RenderPearl backend (`CelestiaMetalBackend`, `CelestiaMetalDevice`, `CelestiaCommandEncoder`, `CelestiaRenderPass`, `CelestiaSurface`, `CelestiaPipeline`, `CelestiaTransientMemory`, `MetalNative`, `MetalConst`, `MetalShaderTranslator`, `StartupGuard`).
 - **Mixins (`src/main/java/dev/celestia/metal/mixin/`)**: Entry points into MC 26.3 (`PreferredGraphicsApiMixin`, `GameRendererMixin`, `GuiMixin`, `HudMixin`, `KeyboardHandlerMixin`, `MinecraftMixin`, `DebugScreenEntriesMixin`, `DebugScreenEntryListMixin`) and world render scale (`dev.celestia.metal.render.WorldRenderScale`).
-- **Shader Packs (`src/main/java/dev/celestia/metal/shader/` & `src/main/resources/assets/celestiametal/`)**: Native MSL packs (`celestia-native`, `celestia-minimal`, `celestia_common.metal`) and Iris/OptiFine parser/bridge (`IrisPackParser`, `IrisGlslBridge`).
+- **Shader Packs (`src/main/java/dev/celestia/metal/shader/` & `src/main/resources/assets/celestiametal/`)**: Native MSL packs. World packs (`"kind": "world"`) replace the world renderer's MSL: Celestia Native's sources are `shaderpacks/celestia-native/shaders/`, the engine-owned ABI and kernels `shaders/engine/` (`shade_api.metal`, `shade_slots.metal`, light/TAA kernels), resolved by `ShadeShaderPatcher.resource`. Pass packs use `celestia_common.metal`. The Iris/OptiFine parser/bridge (`IrisPackParser`, `IrisGlslBridge`) is hidden unless `-Dcelestiametal.irisPacks=true`. Spec: `SHADER_PACK_SPEC.md` (§5 world packs); example: `examples/shaderpacks/celestia-example-world`.
 - **CelestiaGlow UI (`src/main/java/dev/celestia/metal/ui/`) & Perf (`dev.celestia.metal.perf`)**: Tabbed video settings, shader pack/option screens, performance engine, and HUD pill.
 - **Tests & Benchmarks**: `src/test/java/dev/celestia/metal/` (JUnit 5 + FFM) and `tools/test_metal_backend.m` (live Metal 4 & Metal 3 GPU verification + 3024 × 1752 synthetic benchmark).
 
@@ -56,7 +56,7 @@ ls "$(xcrun --show-sdk-path)/System/Library/Frameworks/Metal.framework/Headers/"
 
 ## QA harness
 
-- Run `tools/qa/run.sh shots,frames` for scripted screenshots and a frame-by-frame pond descent. Use `profile` for Metal 4 pass breakdowns, `perf` for A/B/A GPU timing, and `lights` for the colour and dynamic light rooms. See [docs/QA.md](docs/QA.md) for mode filters, output locations and Iris reference runs.
+- Run `tools/qa/run.sh shots,frames` for scripted screenshots and a frame-by-frame pond descent. Use `profile` for Metal 4 pass breakdowns, `perf` for A/B/A GPU timing, `lights` for the colour and dynamic light rooms, and `packs` for live world-pack switching. See [docs/QA.md](docs/QA.md) for mode filters, output locations and Iris reference runs.
 - Read `summary.txt` first and open `review.jpg` when images are needed. Open individual captures only for specific follow-up.
 - Keep QA in `build/qa/` so the runner can reuse the compiled Metal pipeline cache and QA world template. Use the Gradle daemon for repeated runs.
 - Keep every `/fill` below 32,000 blocks. Compare changed screenshot settles against the 240-tick baseline and preserve the light propagation and performance sampling windows.
@@ -106,7 +106,11 @@ ls "$(xcrun --show-sdk-path)/System/Library/Frameworks/Metal.framework/Headers/"
 9. **Buffer Map Synchronization (`CelestiaBuffer.map`)**:
    - Mods are often written against OpenGL, where mapping a buffer for read implicitly waits for GPU writes. Every GPU write into a `CelestiaBuffer` (`copyTextureToBuffer`, `copyToBuffer`, `writeToBuffer`, and any new blit/compute path that writes buffers) must call `markGpuWrite(recordingSerial())` so `map(read = true)` can submit and wait. Keep write-only maps unsynchronized (Minecraft's ring buffers rely on fences instead).
 
-10. **Privacy Check (`checkPrivacy`) & Workspace Boundaries**:
+10. **World packs (`ShadeShaderPatcher`, `CelestiaShade.reloadShaders`)**:
+   - Load world MSL only through `ShadeShaderPatcher.resource(name)`, never from a fixed path, so the active pack's file wins. Layouts Java writes go in `shaders/engine/shade_api.metal` (engine-owned, not overridable); keep it in sync with `ShadeFrame`/`ShadeLook`/`ShadeWater.packParams`.
+   - Anything new that compiles world MSL must rebuild when `ShadeShaderPatcher.epoch()` changes: own it from `CelestiaShade` (closed and re-initialised by `reloadShaders`) or check the epoch as `CelestiaPipeline` does. GPU state that converges over frames goes in `ShadeGpu` (carried across rebuilds).
+
+11. **Privacy Check (`checkPrivacy`) & Workspace Boundaries**:
    - `./gradlew check` scans tracked files and non-native resources to ensure no machine-specific home directory paths or local OS usernames are committed. Always use `~/` or environment variables in docs and scripts.
    - Do not modify external user launcher instances (e.g., PrismLauncher `mods/` or `options.txt`); only inspect logs/crash reports read-only when debugging user reports.
 

@@ -129,6 +129,10 @@ public final class CelestiaShade {
     private boolean handPassActive;
     private boolean initialized;
     private boolean failed;
+    /** ShadeShaderPatcher.epoch() the compiled world shaders came from; a different one means the world pack changed. */
+    private int shaderEpoch = ShadeShaderPatcher.epoch();
+    /** ShadeGpu across a world-pack rebuild: sky irradiance, sun at camera, exposure and the histogram converge over frames. */
+    private byte[] carriedGpu;
 
     private final double[] dirScratch = new double[3];
     private final MemorySegment pushSeg = Arena.global().allocate(128, 16);
@@ -217,6 +221,10 @@ public final class CelestiaShade {
             gpuView = MemorySegment.ofAddress(MetalNative.bufferContents(gpuBuf))
                 .reinterpret(GPU_BUF_SIZE).asByteBuffer().order(ByteOrder.nativeOrder());
             gpuView.putFloat(176, 1f).putFloat(180, 1f).putFloat(184, 1f).putFloat(188, 0f);
+            if (carriedGpu != null) {
+                gpuView.put(0, carriedGpu);
+                carriedGpu = null;
+            }
             for (int i = 0; i < RING_SLOTS; i++) {
                 ByteBuffer slotBb = ringSeg.asSlice((long) i * RING_SLOT_STRIDE, RING_SLOT_STRIDE)
                     .asByteBuffer().order(ByteOrder.nativeOrder());
@@ -341,6 +349,7 @@ public final class CelestiaShade {
             MetalNative.shadeSetEnabled(device.handle(), false);
             return;
         }
+        if (shaderEpoch != ShadeShaderPatcher.epoch()) reloadShaders();
         if (!ensureInitialized()) return;
 
         Minecraft mc = Minecraft.getInstance();
@@ -778,6 +787,31 @@ public final class CelestiaShade {
         activeBloomLevels = count;
         bloomWidth = w;
         bloomHeight = h;
+    }
+
+    /**
+     * The world pack's MSL changed (pack switch, a recompile option, reload): tear every world-renderer library, pipeline and
+     * target down (natively retired, so in-flight frames keep theirs) and initialize again from the new sources on this frame.
+     * A pack that fails to compile leaves the world on standard rendering, as a failed first initialization does.
+     */
+    private synchronized void reloadShaders() {
+        int target = ShadeShaderPatcher.epoch();
+        LOGGER.info("CelestiaShade: world pack sources changed ({}), rebuilding the world renderer", ShadeShaderPatcher.worldPackKey());
+        if (gpuView != null && initialized) {
+            // Drain first: the last submitted frame may still be writing it.
+            MetalNative.deviceWaitIdle(device.handle());
+            carriedGpu = new byte[GPU_BUF_SIZE];
+            gpuView.get(0, carriedGpu);
+        }
+        close();
+        activeInstance = this;
+        failed = false;
+        water.resetFailure();
+        atmosphere.resetFailure();
+        hasPrevHdrWorld = false;
+        hasPrevious = false;
+        snapRequested = true;
+        shaderEpoch = target;
     }
 
     public synchronized void close() {
