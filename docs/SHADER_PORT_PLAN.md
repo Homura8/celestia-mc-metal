@@ -281,11 +281,13 @@ Done (alpha.25):
 - [x] Water absorption and scattering, and physical underwater fog. Underwater is now clearer than Photon at the owner's request.
 - [x] The Pastel colour look with a Pastel Strength slider.
 
+Follow-up:
+- [x] Calmer water surface verified in a fixed-camera pond comparison with Photon. The broader swells and finer ripples ship in alpha.25.
+- [x] Chunk-edge blending fades distant Overworld terrain and water into the directional sky. Depth coverage tapers at the outer
+      edge, and water reflection hits fade toward the sky along the reflected ray. Use the QA profile tokens `s32,s0` to compare
+      the previous border fog with chunk-edge blending.
+
 Next, in order:
-- [ ] Calmer water surface, closer to Photon's gentle waves (fine ripples reduced in alpha.25; check in game).
-- [ ] **Chunk-edge blending (owner request):** at the render distance the terrain ends abruptly. Fade the last chunks smoothly
-      into the sky or atmosphere, as other packs do: border fog toward the sky colour in the reflected and aerial direction,
-      plus a dithered or soft depth fade.
 - [ ] Underwater light shafts and a clear Snell window to the sky.
 - [ ] A real cumulus congestus layer (days 2 and 4 currently stand in a thicker cumulus).
 - [ ] Terrain ambient: Photon's cooler sky light.

@@ -40,7 +40,7 @@ QA_LABEL=descent tools/qa/run.sh frames -PqaJvm=celestiaqa.frames=180
 
 Use `celestiaqa.scenes` to select comma-separated scene names in their declared order. The nine names are `pond-morning`, `pond-noon`, `pond-sunset`, `underwater`, `vista-noon`, `vista-sunset`, `vista-up`, `vista-night` and `vista-rain`. Other JVM properties include `celestiaqa.preset` (default Ultra), `celestiaqa.pack=off`, `celestiaqa.debug=<view>` and `celestiaqa.prefix=<name>`. Pass shader overrides with a dedicated Gradle property, for example `-PqaOptions=GOD_RAYS=false,BLOOM_ENABLED=false`.
 
-The profile tokens are `N` for `celestiametal.shade.water.devSsr`, `bN` for `celestiametal.shade.water.ssrBudget`, `sN` for `celestiametal.shade.dev`, and `cN` for `celestiametal.shade.cloudDev`. The default is `0`. Each token applies one override to the launch settings.
+The profile tokens are `N` for `celestiametal.shade.water.devSsr`, `bN` for `celestiametal.shade.water.ssrBudget`, `sN` for `celestiametal.shade.dev`, and `cN` for `celestiametal.shade.cloudDev`. The default is `0`. Each token applies one override to the launch settings. Use `s32,s0` to compare the previous chunk-border fog with the directional fade.
 
 ## Adding scenes
 
@@ -58,4 +58,4 @@ QA_REFERENCE_DIR="$reference_dir" QA_LABEL=photon tools/qa/run.sh shots \
   -PqaJvm=celestiaqa.prefix=photon,celestiaqa.fixedShots=true
 ```
 
-Use Photon v1.4 for visual comparison. Any Photon code or assets incorporated into Celestia must come from MIT commit `26c2906e`. The look roadmap is in [Shader Port Plan §10](SHADER_PORT_PLAN.md#10-photon-look-pass-and-roadmap-alpha25-on).
+On macOS, check `client.log` for Iris shader pipeline errors. If Photon v1.4 exceeds the OpenGL sampler limit, add `SHADOW_COLOR=false` and `SH_SKYLIGHT=false` to `shaderpacks/photon_v1.4.zip.txt` in the reference directory. Any Photon code or assets incorporated into Celestia must come from MIT commit `26c2906e`. The look roadmap is in [Shader Port Plan §10](SHADER_PORT_PLAN.md#10-photon-look-pass-and-roadmap-alpha25-on).

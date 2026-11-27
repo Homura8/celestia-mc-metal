@@ -86,7 +86,7 @@ static float4 shadeEntityShade(float4 vanilla, float4 albedoSrgb, float4 overlay
 	float vanillaFog = 0.0;
 #else
 	float vanillaFog = shadeVanillaFog(p, fog.xy, fog.zw);
-	radiance = shadeFogAir2(radiance, p, vanillaFog, 0.0, lut, lutS, f, L, &R);
+	radiance = shadeFogAir2(radiance, p, vanillaFog, 0.0, lut, lutS, f, L, R, shadeChunkEdgeFade(p, f, L));
 #endif
 	float3 rgb = shadeFinish2(radiance, vanillaFog, f, L, ex);
 	if (debug == 2) rgb = shadeVanillaOut(n * 0.5 + 0.5, L);

@@ -15,7 +15,7 @@
 #define CELESTIA_SHADE_TERRAIN
 
 static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawColor, float3 p, float2 light,
-                                float chunkVis, bool isCutout, float4 fogRanges,
+                                float2 pixel, float chunkVis, bool isCutout, float4 fogRanges,
                                 texture2d<half> skyLut, sampler skyLutSmplr,
                                 depth2d_array<float> shadowMap, sampler shadowCmp,
                                 constant ShadeFrame &f, constant ShadeLook &L, constant ShadeGpu &g,
@@ -25,6 +25,8 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
 	if (f.flags.x != SHADE_DIM_OVERWORLD || shadeDev(f, SHADE_DEV_FLAT_LIGHT)) {
 		return float4(shadeVanillaOut(vanillaColor.rgb, L), vanillaColor.a);
 	}
+	float chunkEdge = shadeChunkEdgeFade(p, f, L);
+	if (f.flags.w == 0 && shadeChunkEdgeDiscard(chunkEdge, pixel)) discard_fragment();
 	float3 nf = cross(dpx, dpy);
 	float3 n = nf * rsqrt(max(dot(nf, nf), 1e-30));
 	// Orient flat face normal toward the camera (gl_Position/view-ray convention).
@@ -65,7 +67,7 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
 #endif
 	float vanillaFog = shadeVanillaFog(p, fogRanges.xy, fogRanges.zw);
 	float chunkFade = saturate(1.0 - chunkVis);
-	radiance = shadeFogAir2(radiance, p, vanillaFog, chunkFade, skyLut, skyLutSmplr, f, L, &sr);
+	radiance = shadeFogAir2(radiance, p, vanillaFog, chunkFade, skyLut, skyLutSmplr, f, L, sr, chunkEdge);
 	float3 rgb = shadeFinish2(radiance, vanillaFog, f, L, ex);
 	if (debug == 2) rgb = shadeVanillaOut(n * 0.5 + 0.5, L);
 	if (debug == 1) rgb = shadeVanillaOut(float3(0.25 + 0.75 * float(shadow)), L);

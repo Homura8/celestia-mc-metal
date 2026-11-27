@@ -984,6 +984,53 @@ static void verify_backend_ops(int32_t preferMetal4) {
         printf("[Backend %s] Test 2l P1 HDR+LUT+Bloom+Exposure+Final OK (rgb=%u,%u,%u, exp=%.3f)\n",
                preferMetal4 ? "Metal 4" : "Metal 3", px[0], px[1], px[2], gpuOut[44]);
 
+        // Sample the same radial fade used by terrain, post haze and reflected hits.
+        NSString *edgeSrc = [NSString stringWithFormat:
+            @"%@\n"
+             "kernel void chunk_edge_probe(constant ShadeFrame &f [[buffer(0)]], constant ShadeLook &l [[buffer(1)]],"
+             "                             device float *out [[buffer(2)]]) {\n"
+             "    out[0] = shadeChunkEdgeFade(float3(24.0, 100.0, 0.0), f, l);\n"
+             "    out[1] = shadeChunkEdgeFade(float3(43.0, 0.0, 0.0), f, l);\n"
+             "    out[2] = shadeChunkEdgeFade(float3(25.8, -80.0, 34.4), f, l);\n"
+             "    out[3] = shadeChunkEdgeFade(float3(-48.0, 100.0, 0.0), f, l);\n"
+             "    out[4] = shadeChunkEdgeDepthFade(out[1]);\n"
+             "    out[5] = shadeChunkEdgeDepthFade(shadeChunkEdgeFade(float3(46.0, 0.0, 0.0), f, l));\n"
+             "    out[6] = shadeChunkEdgeDiscard(out[3], float2(12.0, 18.0)) ? 1.0 : 0.0;\n"
+             "}\n", prelude];
+        int64_t edgeLib = cm_compile_msl_library(ctx, edgeSrc.UTF8String, "chunk edge probe", 1, serr, sizeof(serr));
+        assert(edgeLib);
+        int64_t edgeFn = cm_compile_function(edgeLib, "chunk_edge_probe", 0, 0, 0, serr, sizeof(serr));
+        int64_t edgePso = cm_compute_pipeline_create(ctx, edgeFn, "chunk edge probe", serr, sizeof(serr));
+        int64_t edgeRead = cm_buffer_create(ctx, 7 * sizeof(float), NULL, "chunk edge results");
+        assert(edgeFn && edgePso && edgeRead);
+        int64_t edgeBuffers[3] = { fBuf, lBuf, edgeRead };
+        int64_t edgeOffsets[3] = {0};
+        float *edgeLook = (float *)(void *)cm_buffer_contents(lBuf);
+        int32_t *edgeFrame = (int32_t *)(void *)cm_buffer_contents(fBuf);
+        edgeLook[118] = 56.0f; // 4-chunk render distance, minus the existing 8-block inset
+        for (int test = 0; test < 3; test++) {
+            edgeFrame[241] = test == 1 ? 1 : 0; // underwater
+            ((float *)edgeFrame)[250] = test == 2 ? 32.0f : 0.0f; // legacy A/B switch
+            cm_cmd_begin(ctx);
+            cm_compute_dispatch(ctx, edgePso, edgeBuffers, edgeOffsets, 3, NULL, 0, NULL, 0, 1, 1, 1, 1, 1, 1);
+            assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+            const float *out = (const float *)(void *)cm_buffer_contents(edgeRead);
+            assert(out[0] == 0.0f && out[4] == 0.0f);
+            if (test == 0) {
+                assert(out[1] > 0.0f && out[1] < 1.0f && fabsf(out[1] - out[2]) < 1e-5f);
+                assert(out[3] == 1.0f && out[5] > 0.0f && out[5] < 1.0f && out[6] == 1.0f);
+            } else {
+                assert(out[1] == 0.0f && out[3] == 0.0f && out[6] == 0.0f);
+            }
+        }
+        assert(cm_device_drain_errors(ctx, serr, sizeof(serr)) == 0);
+        cm_buffer_destroy(ctx, edgeRead);
+        cm_compute_pipeline_destroy(ctx, edgePso);
+        cm_function_destroy(edgeFn);
+        cm_library_destroy(edgeLib);
+        printf("[Backend %s] Chunk edge radial fade, depth coverage, and fog bypass OK\n",
+               preferMetal4 ? "Metal 4" : "Metal 3");
+
         cm_shade_set_globals(ctx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         cm_shade_set_resource(ctx, 0, 0);
         cm_buffer_destroy(ctx, finRead);
