@@ -193,7 +193,8 @@ public final class ShadeWater {
         // far: x dist, y band, z dev, w baked swell ready
         p.putFloat(144, 176f).putFloat(148, 64f).putFloat(152, (float) Integer.getInteger("celestiametal.shade.water.devSsr", 0)).putFloat(156, swellReady ? 1f : 0f);
         int budget = Math.clamp(Integer.getInteger("celestiametal.shade.water.ssrBudget", options.ssrBudget()), 8, 32);
-        p.putInt(160, budget).putInt(164, 0).putInt(168, 0).putInt(172, 0);
+        // quality: x SSR budget, y physical Snell's window from below (0 = Photon's default: the world above, no TIR)
+        p.putInt(160, budget).putInt(164, options.snellWindow() ? 1 : 0).putInt(168, 0).putInt(172, 0);
     }
 
     public void close(long ctx) {

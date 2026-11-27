@@ -363,6 +363,15 @@
       "step": 0.1
     },
     {
+      "id": "WATER_SNELL_WINDOW",
+      "label": "Snell's Window",
+      "description": "Underwater, shows the world above only inside a 97-degree cone and mirrors the water outside it (physical). Off: the sky and the world above show through the whole surface, as in Photon, and the underside is cheaper.",
+      "category": "Water",
+      "type": "TOGGLE",
+      "default": "true",
+      "impact": "LOW"
+    },
+    {
       "id": "CLOUDS_ENABLED",
       "label": "Volumetric Clouds",
       "description": "Uses volumetric clouds when Minecraft clouds are enabled. Turning them off here keeps Minecraft cloud rendering.",
