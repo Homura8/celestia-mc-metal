@@ -88,6 +88,7 @@ static id ensure_blit_encoder(CMContext *ctx) {
         if (ctx.metal4Active) {
             if (@available(macOS 26.0, *)) {
                 ctx.activeBlitEnc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf computeCommandEncoder];
+                if (ctx.debugLabels) [(id<MTL4ComputeCommandEncoder>)ctx.activeBlitEnc setLabel:@"Celestia.Blit"];
             }
         } else {
             ctx.activeBlitEnc = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf blitCommandEncoder];

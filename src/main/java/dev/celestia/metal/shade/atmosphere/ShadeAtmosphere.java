@@ -100,6 +100,8 @@ public final class ShadeAtmosphere {
         look.cloudsEnabled = clouds;
         look.cloudSteps = status == CloudStatus.FANCY ? options.cloudSteps() : Math.max(4, Math.round(options.cloudSteps() * 4f / 7f));
         look.cloudBase = base;
+        ShadeWeather.compute(level.getOverworldClockTime(), frame.rain, options.cloudCoverage(), Integer.getInteger("celestiametal.shade.weatherDay", -1),
+            look.cloudWeather);
         look.cloudPhase = (float) cloudPhase;
         if (!options.weather()) {
             wetness = puddles = snow = 0f;

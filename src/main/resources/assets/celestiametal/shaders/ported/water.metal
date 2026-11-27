@@ -2172,8 +2172,8 @@ static inline float3 shadeWaterViewPoint(depth2d<float> depth, uint2 q, float2 s
 
 #ifdef SHADE_WATER_DETAIL
 #define SHADE_WATER_DETAIL_SCALE 3.3  // the fine ripples: the baked field this many times smaller
-#define SHADE_WATER_DETAIL_AMP 0.30   // their height scale (slopes: x SHADE_WATER_DETAIL_SCALE)
-#define SHADE_WATER_LONG 0.6          // the long waves' scale
+#define SHADE_WATER_DETAIL_AMP 0.10   // their height scale (slopes: x SHADE_WATER_DETAIL_SCALE; alpha.25: 0.30 -> 0.10, Photon-calm)
+#define SHADE_WATER_LONG 1.0          // the long waves' scale (alpha.25: 0.6 -> 1.0, Photon's gentle visible swells)
 #define SHADE_WATER_PIXEL 0.7         // how far the near ripples' sample point is pulled to its 1/16-block cell's centre
 // The detail sample's rotation R (53 degrees) and its transpose; the detail field's coordinates for absolute xz x.
 static inline float2 shadeWaterRot(float2 v) { return float2(0.6 * v.x - 0.8 * v.y, 0.8 * v.x + 0.6 * v.y); }
@@ -2415,7 +2415,7 @@ static float3 shadeWaterNormal(ShadeWaterIn w, constant ShadeFrame &f, constant 
 	float mv = shadeWaterMoving(float(w.cave.w), w.p); // (FT2.11) a current roughens them (mcopt.shade.water.falls)
 #endif
 #ifdef SHADE_WATER_SMOOTH
-	const float fade = 1.0 / 170.0; // FT1.3: the ripples' texture carries farther (Gael's references: textured to the horizon)
+	const float fade = 1.0 / 110.0; // (alpha.25: 1/170 carried tiny ripples to the horizon, a crowded surface; Photon's fade calmer)
 #else
 	const float fade = 1.0 / 90.0;
 #endif

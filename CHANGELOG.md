@@ -13,11 +13,20 @@
   - **Tracing:** rays are traced for a quarter of the half-resolution pixels each frame, in a 2×2 checkerboard. A resolve pass rebuilds the half-resolution image from the reprojected history, clamped to the new traces so cloud edges don't smear.
   - **Light marches:** they skip the fine noise octave and the curl warp, and run on every other in-cloud sample.
   - **Cost:** on Ultra at 3024×1742 on an M1 Pro, all cloud passes together cost about 1.2–1.7 ms. The clouds are also sharper than before, since they used to be traced at quarter resolution with no history.
+- **Three cloud layers and daily weather, like Photon.**
+  - **New layers:** a thin altocumulus deck at 8/3 of the cumulus height and a planar cirrus and cirrocumulus layer at 5×. Both are adapted from Photon's MIT commit, and layers blend by distance.
+  - **Daily weather:** `ShadeWeather` hashes each Minecraft day to one of Photon's twelve skies, blends into the next around dawn, and moves toward overcast in rain. It runs on the CPU, once per frame.
+  - **Congestus days:** Photon's days 2 and 4 use a tall cumulus congestus layer, which isn't ported yet. Those days draw a thicker, denser cumulus instead.
+  - **Testing:** `-Dcelestiametal.shade.weatherDay=N` fixes the sky to day N.
+  - **Apple GPU path:** a layer with no coverage today is skipped. The altocumulus marches half the cumulus steps with shorter light marches. The cirrus swirl comes from the curl texture instead of hashed gradient noise, and its light march uses a lighter density.
+  - **Cost:** all clouds together cost about 2 ms on Ultra at 3024×1742 on an M1 Pro, and about 3.4 ms on the heaviest overcast day. That is measured against a clear-sky run, so overlap into the following passes is counted.
+- **Calmer water surface, closer to Photon:** the fine ripples are a third as strong (0.30 → 0.10) and fade out within about 110 blocks instead of reaching the horizon. The long waves are stronger (0.6 → 1.0), so the water reads as calm with gentle visible swells.
 - **Water now looks like Photon's: deep, clear and mirror-like** instead of milky azure.
   - **Coefficients:** water now uses Photon's absorption (0.39, 0.14, 0.07 per block), its biome term (a third of the biome tint's absorption, relative to forest water) and its scattering of 0.01, which used to be 0.022. In-scattering gets Photon's multiple-scattering energy term.
   - **Result:** reflections stand out over a darker body of water, oceans stay deep blue and swamps turn murky green.
 - **Underwater fog is now real water fog, not vanilla's blue wall.**
-  - **How:** every surface seen from inside water is attenuated per channel by Photon's underwater coefficients (absorption 0.20, 0.08, 0.04 and scattering 0.03), with sun and sky light scattered toward the eye. Vanilla's fog-colour blend is off while the camera is in water.
+  - **How:** every surface seen from inside water is attenuated per channel, with sun and sky light scattered toward the eye. Vanilla's fog-colour blend is off while the camera is in water.
+  - **Clearer than Photon:** absorption is (0.11, 0.040, 0.022) and scattering 0.010, where Photon uses (0.20, 0.08, 0.04) and 0.03. That gives clean ocean and river water with roughly 60 blocks of blue-green visibility, while reds still fade within about 10 blocks.
   - **Underside of the surface:** where it mirrors the water below, it now shows the same water colour.
   - **Cost:** the same frame time as before.
 - **New default colour look: Pastel.** It aims for "realistic and vibrant like Leica Vibrant, but more pastel and cuter".
@@ -32,7 +41,8 @@
 - The **Cloud Layer Thickness** option is replaced by **Cloud Coverage** (0–1.6, default 1.0). Cloud Samples still sets the march: that many steps at the zenith and twice as many at the horizon.
 
 ### Added
-- Each fullscreen pass now reports its own pipeline name in the GPU profiler and in GPU captures, for example `shade_cloud_trace`.
+- Each fullscreen pass now reports its own pipeline name in the GPU profiler and in GPU captures, for example `shade_cloud_trace`. The exposure and blit encoders are labelled too.
+- `-Dcelestiametal.shade.cloudDev` is a live switch for pricing the cloud layers: 1 turns off the altocumulus, 2 the cirrus, 4 the cumulus, and 8 skips tracing.
 - A JUnit test compiles every atmosphere entry point on the GPU. It also checks the noise atlases' wrap gutters and that the noise PNG's alpha channel is read as raw data.
 
 ## 0.1.0-alpha.24

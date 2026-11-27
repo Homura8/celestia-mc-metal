@@ -340,4 +340,25 @@ class ShadeP1Test {
             assertTrue(distinctAlpha > 64, "alpha holds noise, not coverage: " + distinctAlpha + " distinct values");
         }
     }
+
+    @Test
+    void dailyCloudWeatherFollowsPhotonsTable() {
+        float[] w = new float[8];
+        // a fixed sky is that day's row; rain pushes toward overcast stratus
+        dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(12000L, 0f, 1f, 0, w);
+        assertArrayEquals(new float[] {0.40f, 0.60f, 0.20f, 0.50f, 0.00f, 0.53f, 0f, 0f}, w, 1e-6f);
+        dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(12000L, 1f, 1f, 0, w);
+        assertEquals(0.6f, w[0], 1e-6f);
+        assertEquals(0.8f, w[1], 1e-6f);
+        assertEquals(0.7f, w[7], 1e-6f);
+        // congestus days stand in a cumulus; coverage scales every layer
+        dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(12000L, 0f, 0.5f, 2, w);
+        assertEquals(0.225f, w[0], 1e-6f);
+        assertEquals(1f, w[6], 1e-6f);
+        // the daily cycle is deterministic and continuous across the dawn blend
+        float[] a = new float[8], b = new float[8];
+        dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(5L * 24000L + 5999L, 0f, 1f, -1, a);
+        dev.celestia.metal.shade.atmosphere.ShadeWeather.compute(5L * 24000L + 6001L, 0f, 1f, -1, b);
+        for (int i = 0; i < 8; i++) assertEquals(a[i], b[i], 0.02f, "jump at noon in value " + i);
+    }
 }

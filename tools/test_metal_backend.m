@@ -2260,6 +2260,8 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
     }
     look[112] = 0.002f; look[113] = 128.0f; // fogM
     look[132] = 12.0f; look[133] = 1.0f; look[135] = 1.0f; // clouds0: base, coverage scale, on
+    look[128] = 0.40f; look[129] = 0.55f; look[130] = 0.30f; look[131] = 0.50f; // weatherA: cumulus, altocumulus coverage
+    look[188] = 0.40f; look[189] = 0.50f; // weatherB: cirrus, cirrocumulus (no congestus, no stratus)
     look[136] = 1.0f; look[137] = 14.0f; look[138] = 1.0f; // reflection dome, steps, density
     look[92] = look[93] = look[94] = 1.0f; // grade3
     look[96] = 1.4f; look[97] = 0.92f; look[98] = 0.8f; look[99] = 0.05f; // tonemap

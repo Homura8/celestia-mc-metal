@@ -311,7 +311,9 @@ static float3 shadeHazeInscatter(float3 p, constant ShadeFrame &f, constant Shad
 // distance, and the sun (forward-scattering phase) and sky light scattered toward the eye inside it, with Jessie's
 // multiple-scattering energy. Replaces vanilla's opaque blue fog wall: near things stay clear, the far water turns deep teal.
 static inline float3 shadeUnderwaterFog(float3 radiance, float3 p, constant ShadeFrame &f, constant ShadeLook &L) {
-	const float3 sigmaA = float3(0.20, 0.08, 0.04), sigmaS = float3(0.03);
+	// (alpha.25, clearer than Photon's 0.20 / 0.08 / 0.04 + 0.03 at the owner's request: clean ocean/river water, ~60 blocks of
+	// visibility in blue-green, reds still gone after ~10)
+	const float3 sigmaA = float3(0.11, 0.040, 0.022), sigmaS = float3(0.010);
 	const float3 sigmaT = sigmaA + sigmaS;
 	const float3 albedo = sigmaS / sigmaT;
 	const float3 ms = 0.84 * albedo;

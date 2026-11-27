@@ -341,6 +341,7 @@ void cm_shade_exposure_run(int64_t ctxPtr,
             if (@available(macOS 26.0, *)) {
                 id<MTL4ComputeCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf computeCommandEncoder];
                 if (!enc) return;
+                if (ctx.debugLabels) enc.label = @"CelestiaShade.Exposure";
                 id<MTL4ArgumentTable> at = (id<MTL4ArgumentTable>)ctx.m4FragmentArgTable;
                 [at setTexture:srcTex.gpuResourceID atIndex:0];
                 [at setAddress:gBuf.gpuAddress + (MTLGPUAddress)gOff atIndex:CM_SHADE_BUF_GPU];

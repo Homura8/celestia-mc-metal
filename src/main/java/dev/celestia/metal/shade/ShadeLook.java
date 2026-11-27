@@ -37,6 +37,8 @@ public final class ShadeLook {
     public float cloudPhase;
     private ShadeSettings options;
     public float cloudBase, wetness, puddles, snow;
+    /** ShadeWeather.compute's eight daily cloud weather values (ShadeAtmosphere fills them each frame). */
+    public final float[] cloudWeather = {0.40f, 0.55f, 0.30f, 0.50f, 0.40f, 0.50f, 0f, 0f};
     public float flashX, flashY, flashZ, flashStrength;
 
     // elevation, chroma gamma, light mul, ambient rgb (3), saturation, contrast a, bloom mix, VL k, mist sigma, white balance (mired)
@@ -331,9 +333,12 @@ public final class ShadeLook {
         put4(b, VL, options == null ? 12f : options.atmosphere().lightSteps(),
             options == null ? 1f : options.atmosphere().lightStrength(), 0f, 0f);
         put4(b, WET, wetness, puddles, snow, f.rain);
-        put4(b, WIND, 0f, 0f, 0f, 0f);
+        float[] w = this.cloudWeather; // (ShadeWeather: weatherA cumulus / altocumulus coverage, weatherB the rest)
+        put4(b, WIND, w[0], w[1], w[2], w[3]);
         // clouds0: x cumulus base (block y), y coverage scale (clouds.metal cloudLayer), w volumetric clouds on
-        put4(b, CLOUDS0, cloudBase, options == null ? 1f : options.atmosphere().cloudCoverage(), 0f, cloudsEnabled ? 1f : 0f);
+        // (z: -Dcelestiametal.shade.cloudDev, live, pricing: 1 no altocumulus, 2 no cirrus, 4 no cumulus, 8 trace nothing)
+        put4(b, CLOUDS0, cloudBase, options == null ? 1f : options.atmosphere().cloudCoverage(),
+            (float) Integer.getInteger("celestiametal.shade.cloudDev", 0), cloudsEnabled ? 1f : 0f);
         put4(b, CLOUDS1, cloudsEnabled ? 1f : 0f, cloudSteps,
             options == null ? 1f : options.atmosphere().cloudDensity(), cloudPhase);
         put4(b, EYE, 0.5f, 0.5f, 1f, this.eyeSky);
@@ -343,7 +348,7 @@ public final class ShadeLook {
         put4(b, SSR, this.hasPrevScene ? 1f : 0f, 0f, 0f, 0f);
         float nightUp = EV_UP - (EV_UP - EV_UP_NIGHT) * (1f - smooth(-10f, -2f, this.elevation)) * this.outdoor;
         put4(b, EXPOSURE_CFG, EV_DOWN, nightUp, TAU_UP, TAU_DOWN);
-        put4(b, DIM_TINT, 0f, 0f, 0f, 0f);
+        put4(b, DIM_TINT, w[4], w[5], w[6], w[7]);
         put4(b, FLASH, flashX, flashY, flashZ, flashStrength);
         put4(b, RENDER_SCALE, f.renderScale, (float) (Math.log(Math.max(f.mipScale, 1e-4f)) / Math.log(2.0)), f.width, f.height);
         put4(b, DT, this.dt, f.gameTimeSeconds, 0f, this.rising);
