@@ -353,6 +353,7 @@ static inline float shadeChunkEdgeDepthFade(float edge) {
 	return smoothstep(0.92, 1.0, edge);
 }
 
+// Compatibility for world pack overrides. Built-in materials blend to sky with continuous depth coverage.
 static inline bool shadeChunkEdgeDiscard(float edge, float2 pixel) {
 	return edge > 0.92 && shadeChunkEdgeDepthFade(edge) > shadeNoise(floor(pixel), 0);
 }

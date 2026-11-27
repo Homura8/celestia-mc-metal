@@ -27,7 +27,6 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
 		return float4(shadeVanillaOut(vanillaColor.rgb, L), vanillaColor.a);
 	}
 	float chunkEdge = shadeChunkEdgeFade(p, f, L);
-	if (!dimsLit && f.flags.w == 0 && shadeChunkEdgeDiscard(chunkEdge, pixel)) discard_fragment();
 	float3 nf = cross(dpx, dpy);
 	float3 n = nf * rsqrt(max(dot(nf, nf), 1e-30));
 	// Orient flat face normal toward the camera (gl_Position/view-ray convention).

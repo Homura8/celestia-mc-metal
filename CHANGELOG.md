@@ -41,8 +41,8 @@
   inside the 97-degree cone, and the surface mirrors the water outside it. Off matches Photon's default: the sky, clouds and
   the world above show through the whole surface, shifted slightly by the waves. Off is also cheaper, because the underside
   skips its SSR march: underwater on Ultra at 3024×1742 drops from 24.8 to 15.3 ms on an M1 Pro.
-- Fade distant Overworld terrain and water into the directional sky at chunk borders. The fade also applies to depth coverage
-  and screen-space water reflections.
+- Fade distant Overworld terrain and water into the directional sky at chunk borders. Continuous depth coverage prevents
+  dark and bright slivers in the haze. Screen-space water reflections also fade toward the sky.
 
 ## 0.1.0-alpha.25
 
