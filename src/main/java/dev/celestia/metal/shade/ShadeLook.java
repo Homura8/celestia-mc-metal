@@ -37,6 +37,7 @@ public final class ShadeLook {
     public float cloudPhase;
     private ShadeSettings options;
     public float cloudBase, wetness, puddles, snow;
+    public float waterShaftSurface;
     /** ShadeWeather.compute's eight daily cloud weather values (ShadeAtmosphere fills them each frame). */
     public final float[] cloudWeather = {0.40f, 0.55f, 0.30f, 0.50f, 0.40f, 0.50f, 0f, 0f};
     public float flashX, flashY, flashZ, flashStrength;
@@ -331,7 +332,7 @@ public final class ShadeLook {
         float borderFrac = this.rainFog > 0f ? 0.78f - 0.18f * this.rainFog : 0.78f;
         put4(b, FOG_MISC, SEA + HAZE_BASE, borderFrac, this.borderRadius, (float) glow);
         put4(b, VL, options == null ? 12f : options.atmosphere().lightSteps(),
-            options == null ? 1f : options.atmosphere().lightStrength(), 0f, 0f);
+            options == null ? 1f : options.atmosphere().lightStrength(), waterShaftSurface, 0f);
         put4(b, WET, wetness, puddles, snow, f.rain);
         float[] w = this.cloudWeather; // (ShadeWeather: weatherA cumulus / altocumulus coverage, weatherB the rest)
         put4(b, WIND, w[0], w[1], w[2], w[3]);

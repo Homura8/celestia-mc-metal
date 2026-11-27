@@ -422,7 +422,7 @@
     {
       "id": "GOD_RAYS",
       "label": "Volumetric Light Shafts",
-      "description": "Scatters sun and moon light through air using the shadow cascades.",
+      "description": "Shows shafts of sunlight and moonlight through air, and shafts of sunlight through water.",
       "category": "Clouds & Weather",
       "type": "TOGGLE",
       "default": "true",

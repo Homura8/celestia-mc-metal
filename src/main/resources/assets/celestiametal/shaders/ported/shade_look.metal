@@ -36,7 +36,7 @@ struct ShadeLook {
 	float4 fogR;       // 432  rgb haze extinction sigma (1/block, at base height), w scale height (blocks)
 	float4 fogM;       // 448  x mist sigma (1/block), y mist scale height, z mist base y (absolute), w mist albedo
 	float4 fogMisc;    // 464  x haze base y (absolute), y border fog start fraction, z border fog radius (blocks, 0 = off), w evening glow
-	float4 vl;         // 480  volumetric light: x samples, y strength, zw reserved
+	float4 vl;         // 480  volumetric light: x samples, y strength, z water surface above camera (0 in air), w reserved
 	float4 wet;        // 496  x wetness, y puddles, z snow cover, w rain intensity
 	float4 weatherA;   // 512  daily cloud weather (ShadeWeather): x, y cumulus coverage min / max, z, w altocumulus min / max
 	float4 clouds0;    // 528  x cumulus base y, y coverage scale (now folded into weatherA/B), z unused, w volumetric clouds on

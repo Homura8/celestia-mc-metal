@@ -19,7 +19,6 @@ import dev.celestia.metal.shade.ShadeSettings;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import net.minecraft.client.multiplayer.ClientLevel;
 import org.slf4j.Logger;
 
 /**
@@ -107,14 +106,12 @@ public final class ShadeWater {
         }
     }
 
-    public void beginFrame(long ctx, int ringSlot, ShadeFrame frame, ClientLevel level,
-                           double camX, double camY, double camZ, ShadeSettings.Water options, boolean weather) {
+    public void beginFrame(long ctx, int ringSlot, ShadeFrame frame, ShadeSettings.Water options, boolean weather) {
         if (!ensureInitialized(ctx)) {
             disableFrame(ctx);
             return;
         }
         WaterFrame.sprites(stillRect, flowRect);
-        float surfaceAbove = frame.underwater ? WaterFrame.surfaceAbove(level, camX, camY, camZ) : 0f;
         int slot = Math.floorMod(ringSlot, RING_SLOTS);
         currentSlotOffset = (long) slot * SLOT_STRIDE;
 
@@ -142,7 +139,7 @@ public final class ShadeWater {
         }
 
         ByteBuffer b = paramsSeg.asSlice(currentSlotOffset, PARAMS_BYTES).asByteBuffer().order(ByteOrder.nativeOrder());
-        packParams(b, stillRect, flowRect, false, surfaceAbove, weather ? frame.rain : 0f,
+        packParams(b, stillRect, flowRect, false, frame.waterSurfaceAbove, weather ? frame.rain : 0f,
             wavesEnabled && wavesReady, swellEnabled && swellReady, options);
 
         capturedThisFrame = false;

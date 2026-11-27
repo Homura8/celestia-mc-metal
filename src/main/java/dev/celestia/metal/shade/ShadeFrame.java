@@ -30,7 +30,9 @@ public final class ShadeFrame {
 
     static final int DEV_BITS = Integer.getInteger("celestiametal.shade.dev", Integer.getInteger("mcopt.shade.dev", 0));
 
-    static int devBits() {
+    public static final int DEV_NO_UNDERWATER_SHAFTS = 128;
+
+    public static int devBits() {
         return Integer.getInteger("celestiametal.shade.dev", Integer.getInteger("mcopt.shade.dev", DEV_BITS));
     }
 
@@ -62,7 +64,7 @@ public final class ShadeFrame {
     public int cascades = 2;
     public int width = 1, height = 1;
     public float dayTime, gameTimeSeconds, exposure = 1f, partialTick;
-    public float waterTime;
+    public float waterTime, waterSurfaceAbove;
     public float skyTime;
     public float jitterX, jitterY, prevJitterX, prevJitterY;
     public float mipScale = 1f;

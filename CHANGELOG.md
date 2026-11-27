@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add underwater sunlight shafts with wave focusing and shadow occlusion. Looking up through water uses physical refraction
+  and Fresnel reflection, with a directional sky fallback when the refracted view leaves the screen.
 - Fade distant Overworld terrain and water into the directional sky at chunk borders. The fade also applies to depth coverage
   and screen-space water reflections.
 

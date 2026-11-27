@@ -26,6 +26,7 @@ import dev.celestia.metal.shade.light.DynLightConfig;
 import dev.celestia.metal.shade.light.DynLights;
 import dev.celestia.metal.shade.shadow.ShadowPass;
 import dev.celestia.metal.shade.water.ShadeWater;
+import dev.celestia.metal.shade.water.WaterFrame;
 import dev.celestia.metal.shader.pack.ShaderPipelineManager;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -413,6 +414,8 @@ public final class CelestiaShade {
             : fogType == FogType.LAVA ? ShadeFrame.FOG_LAVA
             : fogType == FogType.POWDER_SNOW ? ShadeFrame.FOG_POWDER_SNOW : ShadeFrame.FOG_AIR;
         frame.underwater = fogType == FogType.WATER;
+        frame.waterSurfaceAbove = frame.underwater && frame.dimension == ShadeFrame.DIM_OVERWORLD && applied.water().enabled()
+            ? WaterFrame.surfaceAbove(level, x, y, z) : 0f;
         Vector4f fogColor = fog.color;
         frame.fogColor[0] = fogColor.x;
         frame.fogColor[1] = fogColor.y;
@@ -477,7 +480,7 @@ public final class CelestiaShade {
         atmosphere.renderClouds(device.handle(), frameCounter, texArgSeg);
 
         if (frame.dimension == ShadeFrame.DIM_OVERWORLD && settings.water().enabled()) {
-            water.beginFrame(device.handle(), ringSlot, frame, level, x, y, z, settings.water(), settings.atmosphere().weather());
+            water.beginFrame(device.handle(), ringSlot, frame, settings.water(), settings.atmosphere().weather());
         } else {
             water.disableFrame(device.handle());
         }

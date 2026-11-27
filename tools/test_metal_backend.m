@@ -2253,7 +2253,15 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
     [source appendString:
         @"struct AoDepthFixture { half4 color [[color(0)]]; float depth [[depth(any)]]; };\n"
          "fragment AoDepthFixture ao_depth_fixture(ShadeFsOut in [[stage_in]]) {"
-         "return {half4(0.0h), in.uv.x < 0.5 ? 0.022 : 0.02}; }\n"];
+         "return {half4(0.0h), in.uv.x < 0.5 ? 0.022 : 0.02}; }\n"
+         "fragment half4 snell_fixture() {\n"
+         "    const float3 up = float3(0.0, 1.0, 0.0);\n"
+         "    float4 normal = shadeSnellExit(up, up);\n"
+         "    float4 angled = shadeSnellExit(float3(0.5, 0.8660254, 0.0), up);\n"
+         "    float4 edge = shadeSnellExit(float3(0.7431448, 0.6691306, 0.0), up);\n"
+         "    float4 outside = shadeSnellExit(float3(0.7660444, 0.6427876, 0.0), up);\n"
+         "    return half4(normal.w, angled.x, edge.w, outside.w == 1.0 && all(outside.xyz == 0.0) ? 1.0 : 0.0);\n"
+         "}\n"];
     char err[4096] = {0};
     int64_t lib = cm_compile_msl_library(ctx, source.UTF8String, "P3b atmosphere", 1, err, sizeof(err));
     if (!lib) {
@@ -2437,6 +2445,51 @@ static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
     printf("[Backend %s] P4 SSAO flat surface, depth step contact and final binding OK\n",
            cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3");
     finalParams[9] = 0.0f;
+
+    // Snell angles and Fresnel at normal incidence, inside the rim and beyond the critical angle.
+    int64_t snellFs = cm_compile_function(lib, "snell_fixture", 0, 0, 0, err, sizeof(err));
+    int64_t snellPso = cm_render_pipeline_create(ctx, vs, snellFs, NULL, 0, NULL, 0, &fixtureColor, 1, -1,
+        CM_TOPO_TRIANGLES, 0, 0, 0, 0, 0, 0, 0, "Snell window probe", err, sizeof(err));
+    assert(snellFs && snellPso);
+    cm_cmd_begin(ctx);
+    cm_shade_fullscreen_pass(ctx, snellPso, tex[VOLUME], NULL, 0, NULL, 0, NULL, 0);
+    cm_blit_copy_texture_to_buffer(ctx, tex[VOLUME], 0, 0, 0, 0, 1, 1, vlRead, 0, 8);
+    assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+    assert(fabsf(vlPixel[0] - 0.0204f) < 0.001f && fabsf(vlPixel[1] - 0.6665f) < 0.001f
+        && vlPixel[2] > 0.35f && vlPixel[2] < 1.0f && vlPixel[3] == 1.0f);
+    cm_pipeline_destroy(ctx, snellPso);
+    cm_function_destroy(snellFs);
+
+    // Use the production volume pass with a three-block column. The upper rays end at the
+    // water surface, the downward rays march to the distance cap, and opaque depth shortens both.
+    float *waterLook = (float *)(void *)cm_buffer_contents(lookBuf);
+    waterLook[120] = 12.0f; waterLook[121] = 1.0f; waterLook[122] = 3.0f;
+    waterLook[159] = 1.0f; // smoothed eye skylight
+    for (int test = 0; test < 3; test++) {
+        cm_cmd_begin(ctx);
+        cm_blit_clear_depth(ctx, depth, test == 2 ? 0.1 : 0.0);
+        cm_blit_clear_depth(ctx, shadow, test == 1 ? 1.0 : 0.0);
+        cm_shade_fullscreen_pass(ctx, pso[VOLUME], tex[VOLUME], &depth, 1, NULL, 0, NULL, 0);
+        cm_blit_copy_texture_to_buffer(ctx, tex[VOLUME], 0, 0, 0, 0, 96, 64, cloudRead, 0, 96 * 8);
+        assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+        float peak = 0.0f;
+        for (size_t i = 0; i < 96 * 64; i++) {
+            assert(isfinite(cloudPixels[4 * i + 2]) && cloudPixels[4 * i + 3] > 0.0f);
+            assert(cloudPixels[4 * i + 3] <= (test == 2 ? 1.75f : 32.0f));
+            peak = MAX(peak, cloudPixels[4 * i + 2]);
+        }
+        if (test == 0) {
+            float upward = cloudPixels[(52 * 96 + 48) * 4 + 3];
+            assert(upward > 3.0f && upward < 8.0f && cloudPixels[(10 * 96 + 48) * 4 + 3] == 32.0f);
+            assert(peak > 0.001f);
+        } else if (test == 1) {
+            assert(peak == 0.0f);
+        }
+    }
+    waterLook[120] = waterLook[121] = waterLook[122] = waterLook[159] = 0.0f;
+    assert(cm_device_drain_errors(ctx, err, sizeof(err)) == 0);
+    printf("[Backend %s] Underwater shafts, depth and shadow occlusion, and Snell angles OK\n",
+           cm_device_is_metal4(ctx) ? "Metal 4" : "Metal 3");
 
     // Time the recurring atmosphere passes at the owner test resolution.
     const int W = 3024, H = 1752, SW = W / 4, SH = H / 4;

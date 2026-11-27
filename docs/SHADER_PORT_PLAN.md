@@ -286,9 +286,11 @@ Follow-up:
 - [x] Chunk-edge blending fades distant Overworld terrain and water into the directional sky. Depth coverage tapers at the outer
       edge, and water reflection hits fade toward the sky along the reflected ray. Use the QA profile tokens `s32,s0` to compare
       the previous border fog with chunk-edge blending.
+- [x] Underwater sunlight shafts reuse the quarter-resolution volumetric pass and stop at the visible terrain or water surface.
+      Snell's window uses physical refraction and Fresnel reflection. Test 2o checks the critical angle and underwater occlusion on Metal 3 and 4.
+      Follow-up QA: profile `s128,s0` in the underwater scene to isolate the shafts, and compare the same camera views against Photon.
 
 Next, in order:
-- [ ] Underwater light shafts and a clear Snell window to the sky.
 - [ ] A real cumulus congestus layer (days 2 and 4 currently stand in a thicker cumulus).
 - [ ] Terrain ambient: Photon's cooler sky light.
 - [ ] Nether and End looks, aurora, motion blur, labPBR (carried over from P6b).
