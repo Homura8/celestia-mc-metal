@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.0-alpha.25
+
+### Changed
+- **Volumetric clouds rebuilt in the style of Photon.** The old layer was a 32-block slab of very coarse noise, sampled about every 24 blocks, so it rendered as a blurry overcast smear. It is now a cumulus layer that starts at vanilla's cloud height and is as thick as that height above sea level (about 130 blocks).
+  - **Detail and lighting:** individual clouds have lit tops, grey-blue undersides, wispy bottoms and fine eroded edges, and the water reflects them.
+  - **Light:** the sun or moon lights the clouds as seen from cloud altitude, so low suns turn them golden rather than red, and the zenith sky fills the shadowed sides.
+  - **Rain:** rain spreads the layer toward overcast stratus.
+  - **Source:** the density model, light and sky marches, multiple-scattering octaves, powder term and phase lobes are adapted from Photon's last MIT-licensed commit (26c2906e). Its three noise textures ship unmodified. Photon v1.4 itself is under a different licence and was used only as a visual reference.
+- **Built for Apple GPUs.**
+  - **Noise:** the 3D noises are tiled 2D atlases, read with two bilinear taps.
+  - **Tracing:** rays are traced for a quarter of the half-resolution pixels each frame, in a 2×2 checkerboard. A resolve pass rebuilds the half-resolution image from the reprojected history, clamped to the new traces so cloud edges don't smear.
+  - **Light marches:** they skip the fine noise octave and the curl warp, and run on every other in-cloud sample.
+  - **Cost:** on Ultra at 3024×1742 on an M1 Pro, all cloud passes together cost about 1.2–1.7 ms. The clouds are also sharper than before, since they used to be traced at quarter resolution with no history.
+- The **Cloud Layer Thickness** option is replaced by **Cloud Coverage** (0–1.6, default 1.0). Cloud Samples still sets the march: that many steps at the zenith and twice as many at the horizon.
+
+### Added
+- Each fullscreen pass now reports its own pipeline name in the GPU profiler and in GPU captures, for example `shade_cloud_trace`.
+- A JUnit test compiles every atmosphere entry point on the GPU. It also checks the noise atlases' wrap gutters and that the noise PNG's alpha channel is read as raw data.
+
 ## 0.1.0-alpha.24
 
 ### Performance

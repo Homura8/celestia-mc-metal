@@ -22,6 +22,14 @@ Celestia Metal's cloud, volumetric-light and dynamic-light code includes adaptat
 the upstream Metal Shaders modules listed below. The distribution includes
 the Photon MIT license at META-INF/LICENSES/MIT-Photon.txt.
 
+Celestia Metal's volumetric cumulus clouds (clouds.metal, alpha.25) adapt the density model,
+light/sky optical-depth marches, multiple-scattering octaves, powder term and phase lobes of
+Photon Shaders (https://github.com/sixthsurge/photon) include/sky/clouds/{common,cumulus}.glsl
+at commit 26c2906e, Copyright (c) 2025 Benjamin Stott ("sixthsurge"), MIT License, and ship that
+commit's noise textures unmodified (assets/celestiametal/textures/clouds/photon_noise.png,
+photon_worley.dat, photon_curl.dat; MIT License, full text: LICENSES/MIT-Photon.txt). Photon
+releases after that commit use a different licence; no code or assets from them are included.
+
 ---
 
 Upstream NOTICE preserved from Minecraft Metal Shaders (GaelQuinta/minecraft-metal-shaders, Apache-2.0):

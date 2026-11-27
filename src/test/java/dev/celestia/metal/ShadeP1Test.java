@@ -285,4 +285,48 @@ class ShadeP1Test {
             }
         }
     }
+
+    @Test
+    void atmosphereShadersCompileAndCloudNoiseLoads() throws Exception {
+        // (alpha.25) the Photon-style clouds: every atmosphere entry compiles, and the atlases wrap as clouds.metal expects
+        long ctx = MetalNative.deviceCreate(true, false, "");
+        assertNotEquals(0L, ctx);
+        try {
+            StringBuilder err = new StringBuilder();
+            long lib = MetalNative.compileMslLibrary(ctx, ShadeShaderPatcher.atmosphereSource(), "test.atmosphere", true, err);
+            assertNotEquals(0L, lib, () -> err.toString());
+            for (String entry : List.of("shade_cloud_trace", "shade_cloud_resolve", "shade_cloud_dome", "shade_vl_march", "shade_wx_noise_fs")) {
+                long fn = MetalNative.compileFunction(lib, entry, false, 0, 0, err);
+                assertNotEquals(0L, fn, () -> entry + ": " + err);
+                MetalNative.functionDestroy(fn);
+            }
+            MetalNative.libraryDestroy(lib);
+        } finally {
+            MetalNative.deviceDestroy(ctx);
+        }
+        // a 4^3 volume of distinct voxels into 2x2 tiles of 6^2: tile (z % 2, z / 2), border = the opposite edge
+        int n = 4;
+        byte[] vol = new byte[n * n * n];
+        for (int i = 0; i < vol.length; i++) vol[i] = (byte) i;
+        byte[] at = dev.celestia.metal.shade.atmosphere.ShadeCloudNoise.atlasForTest(vol, n, 1, 1, 2, 2);
+        int aw = 12;
+        int z = 3, ox = (z % 2) * 6, oy = (z / 2) * 6;
+        assertEquals((z * n + 0) * n + 0, at[(oy + 1) * aw + ox + 1]);         // (0, 0) at texel (1, 1)
+        assertEquals((z * n + 0) * n + (n - 1), at[(oy + 1) * aw + ox]);       // left gutter wraps to x = 3
+        assertEquals((z * n + (n - 1)) * n + 0, at[oy * aw + ox + 1]);         // top gutter wraps to y = 3
+        assertEquals((z * n + 0) * n + 0, at[(oy + 5) * aw + ox + 5] & 0xFF);  // bottom-right corner wraps to (0, 0)
+        // the shipped files have the sizes the shader assumes, and the PNG's alpha (noise data) is read raw
+        try (var in = ShadeP1Test.class.getResourceAsStream("/assets/celestiametal/textures/clouds/photon_worley.dat")) {
+            assertEquals(64 * 64 * 64, in.readAllBytes().length);
+        }
+        try (var in = ShadeP1Test.class.getResourceAsStream("/assets/celestiametal/textures/clouds/photon_curl.dat")) {
+            assertEquals(32 * 32 * 32 * 3, in.readAllBytes().length);
+        }
+        try (var in = ShadeP1Test.class.getResourceAsStream("/assets/celestiametal/textures/clouds/photon_noise.png")) {
+            byte[] rgba = dev.celestia.metal.shade.atmosphere.ShadeCloudNoise.rgbaForTest(javax.imageio.ImageIO.read(in));
+            assertEquals(512 * 512 * 4, rgba.length);
+            int distinctAlpha = (int) java.util.stream.IntStream.range(0, 512 * 512).map(i -> rgba[i * 4 + 3] & 0xFF).distinct().count();
+            assertTrue(distinctAlpha > 64, "alpha holds noise, not coverage: " + distinctAlpha + " distinct values");
+        }
+    }
 }

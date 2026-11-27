@@ -299,8 +299,8 @@ public final class ShadeLook {
             options == null ? 1f : options.atmosphere().lightStrength(), 0f, 0f);
         put4(b, WET, wetness, puddles, snow, f.rain);
         put4(b, WIND, 0f, 0f, 0f, 0f);
-        put4(b, CLOUDS0, cloudBase, cloudBase + (options == null ? 32f : options.atmosphere().cloudThickness()),
-            0f, cloudsEnabled ? 1f : 0f);
+        // clouds0: x cumulus base (block y), y coverage scale (clouds.metal cloudLayer), w volumetric clouds on
+        put4(b, CLOUDS0, cloudBase, options == null ? 1f : options.atmosphere().cloudCoverage(), 0f, cloudsEnabled ? 1f : 0f);
         put4(b, CLOUDS1, cloudsEnabled ? 1f : 0f, cloudSteps,
             options == null ? 1f : options.atmosphere().cloudDensity(), cloudPhase);
         put4(b, EYE, 0.5f, 0.5f, 1f, this.eyeSky);

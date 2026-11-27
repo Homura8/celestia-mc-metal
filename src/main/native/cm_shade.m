@@ -232,7 +232,7 @@ void cm_shade_fullscreen_pass(int64_t ctxPtr, int64_t psoPtr, int64_t colorTexPt
 
                 id<MTL4RenderCommandEncoder> enc = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf renderCommandEncoderWithDescriptor:rpd];
                 if (!enc) return;
-                if (ctx.debugLabels) enc.label = @"CelestiaShade.Fullscreen";
+                if (ctx.debugLabels) enc.label = box.state.label.length ? box.state.label : @"CelestiaShade.Fullscreen";
                 id<MTL4ArgumentTable> at = (id<MTL4ArgumentTable>)ctx.m4VertexArgTable;
                 [enc setArgumentTable:at atStages:MTLRenderStageVertex | MTLRenderStageFragment];
                 [enc setRenderPipelineState:box.state];
@@ -274,7 +274,7 @@ void cm_shade_fullscreen_pass(int64_t ctxPtr, int64_t psoPtr, int64_t colorTexPt
 
             id<MTLRenderCommandEncoder> enc = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf renderCommandEncoderWithDescriptor:rpd];
             if (!enc) return;
-            if (ctx.debugLabels) enc.label = @"CelestiaShade.Fullscreen";
+            if (ctx.debugLabels) enc.label = box.state.label.length ? box.state.label : @"CelestiaShade.Fullscreen";
             [enc setRenderPipelineState:box.state];
             [enc setCullMode:MTLCullModeNone];
             [enc setViewport:(MTLViewport){0.0, 0.0, (double)dstTex.width, (double)dstTex.height, 0.0, 1.0}];

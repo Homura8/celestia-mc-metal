@@ -387,16 +387,16 @@
       "step": 2
     },
     {
-      "id": "CLOUD_THICKNESS",
-      "label": "Cloud Layer Thickness",
-      "description": "Sets the height of the cumulus layer in blocks.",
+      "id": "CLOUD_COVERAGE",
+      "label": "Cloud Coverage",
+      "description": "Scales how much of the sky the cumulus layer covers. Rain still pushes it toward overcast.",
       "category": "Clouds & Weather",
-      "type": "INT_SLIDER",
-      "default": "32",
+      "type": "FLOAT_SLIDER",
+      "default": "1.0",
       "impact": "LOW",
-      "min": 16,
-      "max": 64,
-      "step": 4
+      "min": 0.0,
+      "max": 1.6,
+      "step": 0.05
     },
     {
       "id": "CLOUD_DENSITY",
