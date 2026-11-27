@@ -555,7 +555,7 @@ public final class CelestiaShade {
             }
         }
         if (bloom && levelsUsed > 0) {
-            float spectrum = look.lookPreset() == 1 ? 0.9f : look.lookPreset() == 2 ? 0.3f : 0.6f;
+            float spectrum = look.bloomSpectrum();
             float sum = 0f;
             if (levelsUsed >= 3) {
                 float wLast = (float) Math.pow(levelsUsed + bloomShift, spectrum);

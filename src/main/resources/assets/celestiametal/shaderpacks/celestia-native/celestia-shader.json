@@ -25,8 +25,7 @@
       "WATER_CAUSTICS": "0",
       "CLOUD_STEPS": "8",
       "GOD_RAYS": "false",
-      "BLOOM_STRENGTH": "0.75",
-      "COLOR_LOOK": "NATURAL"
+      "BLOOM_STRENGTH": "0.75"
     },
     "Balanced": {},
     "Quality": {
@@ -37,8 +36,7 @@
       "SSR_BUDGET": "28",
       "SSR_DISTANCE": "176",
       "CLOUD_STEPS": "18",
-      "VL_STEPS": "16",
-      "COLOR_LOOK": "STORYBOOK"
+      "VL_STEPS": "16"
     },
     "Ultra": {
       "SHADOW_RES": "4096",
@@ -48,8 +46,7 @@
       "SSR_BUDGET": "32",
       "SSR_DISTANCE": "224",
       "CLOUD_STEPS": "24",
-      "VL_STEPS": "20",
-      "COLOR_LOOK": "STORYBOOK"
+      "VL_STEPS": "20"
     }
   },
   "options": [
@@ -467,12 +464,13 @@
     {
       "id": "COLOR_LOOK",
       "label": "Color Look",
-      "description": "Chooses the filmic color grade.",
+      "description": "Chooses the filmic color grade. Pastel: vibrant, airy and a little rosy.",
       "category": "Post-Processing",
       "type": "ENUM",
-      "default": "EPIC",
+      "default": "PASTEL",
       "impact": "NEGLIGIBLE",
       "values": [
+        "PASTEL",
         "EPIC",
         "STORYBOOK",
         "NATURAL"

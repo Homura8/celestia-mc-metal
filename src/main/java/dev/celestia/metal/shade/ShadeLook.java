@@ -63,15 +63,23 @@ public final class ShadeLook {
     private static final float[][] SKY_ROSE = {
         {-6, 0f}, {-3, 0.32f}, {0, 0.64f}, {4, 0.70f}, {9, 0.56f}, {16, 0.28f}, {26, 0.07f}, {34, 0f}
     };
-    private static final float[] ROSE_LOOK = {1f, 1.15f, 0.6f};
+    private static final float[] ROSE_LOOK = {1f, 1.15f, 0.6f, 1.4f};
     static final float ROSE_AMOUNT = 0.25f;
 
     private static final int K_GAMMA = 1, K_LIGHT = 2, K_AMB = 3, K_SAT = 6, K_CONTRAST = 7, K_BLOOM = 8, K_VL = 9, K_MIST = 10, K_WB = 11;
 
-    private static final float[] PRESET_GAMMA = {1.0f, 1.15f, 0.9f}, PRESET_SAT = {0.08f, 0.14f, 0.02f},
-        PRESET_CONTRAST = {1.05f, 0.97f, 0.95f}, PRESET_BLOOM = {1.0f, 1.25f, 0.8f},
-        PRESET_LAMBDA = {0.55f, 0.40f, 0.70f}, PRESET_INSET = {0.20f, 0.16f, 0.24f},
-        PRESET_VL = {1.0f, 1.25f, 0.8f}, PRESET_SPECTRUM = {0.6f, 0.9f, 0.3f};
+    // looks: 0 EPIC, 1 STORYBOOK, 2 NATURAL, 3 PASTEL (alpha.25: "Leica Vibrant, but more pastel and cuter": vibrant midtones
+    // through the vibrance step, softer airy contrast, highlights that whiten sooner (inset), rosy lifted blacks and a faint pink
+    // highlight gain, pinker sunsets, a little more bloom)
+    private static final float[] PRESET_GAMMA = {1.0f, 1.15f, 0.9f, 1.05f}, PRESET_SAT = {0.08f, 0.14f, 0.02f, 0.22f},
+        PRESET_CONTRAST = {1.05f, 0.97f, 0.95f, 0.93f}, PRESET_BLOOM = {1.0f, 1.25f, 0.8f, 1.2f},
+        PRESET_LAMBDA = {0.55f, 0.40f, 0.70f, 0.50f}, PRESET_INSET = {0.20f, 0.16f, 0.24f, 0.24f},
+        PRESET_VL = {1.0f, 1.25f, 0.8f, 1.1f}, PRESET_SPECTRUM = {0.6f, 0.9f, 0.3f, 0.75f},
+        PRESET_VIBRANCE = {0.10f, 0.18f, 0.10f, 0.32f};
+    // display lift (linear, added after the tone curve) and gain per look
+    private static final float[][] PRESET_LIFT = {{0f, 0f, 0f}, {0f, 0f, 0f}, {0f, 0f, 0f}, {0.0075f, 0.0050f, 0.0080f}},
+        PRESET_GAIN = {{1f, 1f, 1f}, {1f, 1f, 1f}, {1f, 1f, 1f}, {1.0f, 0.972f, 0.988f}};
+    public static final int LOOKS = 4;
 
     static final float MID_IN = 0.18f, MID_OUT = 0.20f, WHITE = 12f, SHOULDER = 0.92f;
     static final float METER_KEY = 0.30f, EV_DOWN = 1.75f, EV_UP = 1.75f, EV_UP_NIGHT = 0.6f, TAU_UP = 0.6f, TAU_DOWN = 2.2f;
@@ -134,7 +142,12 @@ public final class ShadeLook {
     }
 
     public void setLookPreset(int preset) {
-        this.lookPreset = Math.max(0, Math.min(2, preset));
+        this.lookPreset = Math.max(0, Math.min(LOOKS - 1, preset));
+    }
+
+    /** The bloom pyramid's level weighting exponent for the current look. */
+    public float bloomSpectrum() {
+        return PRESET_SPECTRUM[this.lookPreset];
     }
 
     public int lookPreset() {
@@ -280,10 +293,11 @@ public final class ShadeLook {
         put4(b, SUN_ART, l[0], l[1], l[2], 1f);
         put4(b, AMBIENT_ART, this.ambientTint[0], this.ambientTint[1], this.ambientTint[2], 0.06f * (1f - 0.7f * f.rain) * this.l2Bounce);
         put4(b, BOUNCE, 0.62f, 0.56f, 0.44f, 0f);
-        put4(b, GRADE0, options == null ? 0f : options.post().exposureEv(), this.saturation, this.lookPreset == 1 ? 0.18f : 0.10f, 1f);
+        put4(b, GRADE0, options == null ? 0f : options.post().exposureEv(), this.saturation, PRESET_VIBRANCE[this.lookPreset], 1f);
         put4(b, GRADE1, this.wbGain[0], this.wbGain[1], this.wbGain[2], 0.55f);
-        put4(b, GRADE2, 0f, 0f, 0f, 0.0025f);
-        put4(b, GRADE3, 1f, 1f, 1f, this.inset);
+        float[] lift = PRESET_LIFT[this.lookPreset], gain = PRESET_GAIN[this.lookPreset];
+        put4(b, GRADE2, lift[0], lift[1], lift[2], 0.0025f);
+        put4(b, GRADE3, gain[0], gain[1], gain[2], this.inset);
         put4(b, TONEMAP, this.contrast, SHOULDER, this.toneB, this.toneBeta);
         float inverseMax = Math.min(0.80f, 0.95f / (this.toneB * SHOULDER));
         put4(b, OUTPUT, 1f, 1f, 1f, inverseMax);
@@ -464,7 +478,11 @@ public final class ShadeLook {
             c[r] = (float) Math.min(1.0, xa / (xad * this.toneB + this.toneBeta));
         }
         float[] y = new float[3];
-        for (int r = 0; r < 3; r++) y[r] = Math.max(0f, this.gradeOut[r][0] * c[0] + this.gradeOut[r][1] * c[1] + this.gradeOut[r][2] * c[2]);
+        float[] lift = PRESET_LIFT[this.lookPreset], gain = PRESET_GAIN[this.lookPreset];
+        for (int r = 0; r < 3; r++) {
+            y[r] = Math.max(0f, this.gradeOut[r][0] * c[0] + this.gradeOut[r][1] * c[1] + this.gradeOut[r][2] * c[2]);
+            y[r] = Math.max(0f, y[r] * gain[r] + lift[r]); // (shadeDisplay: gain, then lift)
+        }
         return y;
     }
 
@@ -475,6 +493,8 @@ public final class ShadeLook {
             s[i] = v <= 0.04045f ? v / 12.92f : (float) Math.pow((v + 0.055f) / 1.055f, 2.4f);
         }
         float max = Math.min(0.80f, 0.95f / (this.toneB * SHOULDER));
+        float[] lift = PRESET_LIFT[this.lookPreset], gain = PRESET_GAIN[this.lookPreset];
+        for (int i = 0; i < 3; i++) s[i] = (s[i] - lift[i]) / Math.max(gain[i], 1e-3f); // (shadeLdrToHdr: lift and gain first)
         for (int i = 0; i < 3; i++) y[i] = Math.min(max, Math.max(0f, this.gradeOutInv[i][0] * s[0] + this.gradeOutInv[i][1] * s[1] + this.gradeOutInv[i][2] * s[2]));
         for (int i = 0; i < 3; i++) {
             double yy = y[i], bb = this.toneB, d = SHOULDER, beta = this.toneBeta;

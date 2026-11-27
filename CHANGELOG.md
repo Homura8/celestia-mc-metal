@@ -20,6 +20,13 @@
   - **How:** every surface seen from inside water is attenuated per channel by Photon's underwater coefficients (absorption 0.20, 0.08, 0.04 and scattering 0.03), with sun and sky light scattered toward the eye. Vanilla's fog-colour blend is off while the camera is in water.
   - **Underside of the surface:** where it mirrors the water below, it now shows the same water colour.
   - **Cost:** the same frame time as before.
+- **New default colour look: Pastel.** It aims for "realistic and vibrant like Leica Vibrant, but more pastel and cuter".
+  - **Colour:** midtones are vibrant, and the vibrance step lifts muted colours most.
+  - **Tone:** contrast is softer and airier, highlights whiten a little sooner, blacks are lifted and slightly rosy, and highlights get a faint pink gain.
+  - **Sunsets and bloom:** sunsets are pinker and bloom is a touch stronger.
+  - **How:** it uses the display transform's lift and gain, which are now per look. `ShadeLook.ldrToHdr` and `display()` invert them exactly, so fog and clear colours stay correct.
+  - **Presets:** presets no longer set the look, because a look is a matter of taste, not of cost. Choose Epic, Storybook or Natural under Color Look.
+  - **Existing installs:** an instance that already saved a look keeps it until Pastel is picked.
 - The **Cloud Layer Thickness** option is replaced by **Cloud Coverage** (0–1.6, default 1.0). Cloud Samples still sets the march: that many steps at the zenith and twice as many at the horizon.
 
 ### Added

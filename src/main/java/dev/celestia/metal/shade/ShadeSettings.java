@@ -37,6 +37,7 @@ public record ShadeSettings(Shadows shadows, Lights lights, Sky sky, Water water
             new Post(switch (s.get("COLOR_LOOK")) {
                 case "STORYBOOK" -> 1;
                 case "NATURAL" -> 2;
+                case "PASTEL" -> 3;
                 default -> 0;
             }, s.getBoolean("BLOOM_ENABLED"), value(s, "BLOOM_STRENGTH"), value(s, "EXPOSURE"), value(s, "SATURATION"))
         );

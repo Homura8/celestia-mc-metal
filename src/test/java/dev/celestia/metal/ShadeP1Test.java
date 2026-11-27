@@ -94,6 +94,17 @@ class ShadeP1Test {
             float targetLin = (float) Math.pow(((i == 0 ? 0.5f : i == 1 ? 0.3f : 0.8f) + 0.055f) / 1.055f, 2.4);
             assertEquals(targetLin, disp[i], 0.015f);
         }
+        // (alpha.25) every look, PASTEL's lift and gain included, inverts exactly (fog and clear colours rely on it)
+        for (int preset = 0; preset < ShadeLook.LOOKS; preset++) {
+            look.setLookPreset(preset);
+            look.update(frame, 0, 0.016f);
+            float[] h = look.ldrToHdr(0.5f, 0.3f, 0.8f);
+            float[] d = look.display(h);
+            for (int i = 0; i < 3; i++) {
+                float targetLin = (float) Math.pow(((i == 0 ? 0.5f : i == 1 ? 0.3f : 0.8f) + 0.055f) / 1.055f, 2.4);
+                assertEquals(targetLin, d[i], 0.015f, "look " + preset + " channel " + i);
+            }
+        }
     }
 
     @Test
