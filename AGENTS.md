@@ -115,7 +115,12 @@ ls "$(xcrun --show-sdk-path)/System/Library/Frameworks/Metal.framework/Headers/"
    - Load world MSL only through `ShadeShaderPatcher.resource(name)`, never from a fixed path, so the active pack's file wins. Layouts Java writes go in `shaders/engine/shade_api.metal` (engine-owned, not overridable); keep it in sync with `ShadeFrame`/`ShadeLook`/`ShadeWater.packParams`.
    - Anything new that compiles world MSL must rebuild when `ShadeShaderPatcher.epoch()` changes: own it from `CelestiaShade` (closed and re-initialised by `reloadShaders`) or check the epoch as `CelestiaPipeline` does. GPU state that converges over frames goes in `ShadeGpu` (carried across rebuilds).
 
-11. **Privacy Check (`checkPrivacy`) & Workspace Boundaries**:
+11. **Lighting and shadows (Celestia Native)**:
+   - Axis-aligned cutout faces are lit as foliage (backlit, no self-shadow). Solid blocks with cutout quads (the grass block's side overlay) must be excluded: their atlas rect goes in `ShadeFrame.wxLine.yzw` (`CelestiaShade.solidCutoutRect`). Add new cases there rather than special-casing shaders.
+   - The shadow bias in `shade_common.metal` (`SHADE_SHADOW_NORMAL_K` 2.0, `SHADE_SHADOW_TAN_MAX` 30) was tuned against grazing-sun acne (`pond-corner-sunset`, `village-shore-sunset`) and noon contact shadows (`village-noon`). Re-check both when changing it. `-Dcelestiametal.shade.devDefine=NAME=VALUE;...` overrides world-shader defines for A/B.
+   - QA exports are 1100 px. Crop the full-resolution captures in `build/qa/run/screenshots/` before the next launch overwrites them.
+
+12. **Privacy Check (`checkPrivacy`) & Workspace Boundaries**:
    - `./gradlew check` scans tracked files and non-native resources to ensure no machine-specific home directory paths or local OS usernames are committed. Always use `~/` or environment variables in docs and scripts.
    - Do not modify external user launcher instances (e.g., PrismLauncher `mods/` or `options.txt`); only inspect logs/crash reports read-only when debugging user reports.
 

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0-alpha.26
+
+- README: a showcase of in-game captures (`docs/images/`) and in-game benchmarks at native resolution (Quality and Performance,
+  M1 Pro) replace the synthetic-only table. QA: the `nether` scene now starts in open air over the lava sea; it used to start inside the terrain. New `beach-sunset`, `pond-corner-sunset` and `village-sunset-back` scenes.
+
 - **No more glowing grass edges at sunset.** Celestia lit the grass block's side overlay as foliage, because it is a cutout
   quad like leaves. That meant light from behind and no self-shadowing, so when looking toward a low sun it drew bright yellow
   lines along grass edges facing away from it. The overlay's atlas rect is now passed to the terrain shader (`ShadeFrame.wxLine.yzw`),
