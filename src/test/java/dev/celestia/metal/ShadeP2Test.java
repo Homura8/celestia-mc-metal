@@ -6,6 +6,7 @@ import dev.celestia.metal.backend.MetalNative;
 import dev.celestia.metal.shade.ShadeShaderPatcher;
 import dev.celestia.metal.shade.shadow.ShadowCascade;
 import dev.celestia.metal.shade.shadow.ShadowCasterSource;
+import dev.celestia.metal.shade.shadow.SodiumShadowCasters;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
@@ -119,5 +120,11 @@ class ShadeP2Test {
             assertNotNull(cross);
             assertNotSame(a1.block(), cross.block());
         }
+    }
+
+    @Test
+    void sodiumShadowRingSlotsExceedInFlightCascades() {
+        assertTrue(SodiumShadowCasters.RING_SLOTS >= 16);
+        assertEquals(0, SodiumShadowCasters.RING_SLOTS & (SodiumShadowCasters.RING_SLOTS - 1));
     }
 }

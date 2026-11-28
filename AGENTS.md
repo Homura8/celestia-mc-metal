@@ -57,6 +57,7 @@ ls "$(xcrun --show-sdk-path)/System/Library/Frameworks/Metal.framework/Headers/"
 
 ## QA harness
 
+- **Automated in-game control (`tools/qa/run.sh`)**: You have a full in-game QA harness that launches and controls Minecraft automatically — teleporting and aiming the camera, setting time of day and weather, running server commands (`celestiaqa.commands`), switching shader packs/presets/options/upscalers live, capturing screenshots and motion bursts, and profiling Metal GPU passes. Always use it to visually verify rendering and shader changes in-game rather than guessing from code or synthetic tests alone.
 - **Judge looks and frame rate in the village suite**, the default for `shots`, `perf` and `profile`. It is a real plains village on the coast of the QA seed: houses, foliage, docks, shallow water, rain. The floating test pond is a water-only worst case; use it (`pond-*`, `underwater*`, the `frames` descent) only for water-specific work. `celestiaqa.scenes=all` runs every scene.
 - Keep the game window in front while measuring. macOS throttles background windows, and the probe raises the window and flags `UNFOCUSED` timings. Compare variants A/B/A in one session, never against another session's numbers.
 - Measure on the owner's settings unless told otherwise: `-PqaJvm=celestiaqa.preset=Quality,celestiaqa.renderScale=100`, which is native 3024 × 1744 on the M1 Pro, 12 chunks, Metal 4. Add `celestiaqa.measureFrames=300,celestiaqa.timedPanYaw=0.14` for FPS under a slow pan.
@@ -111,7 +112,8 @@ ls "$(xcrun --show-sdk-path)/System/Library/Frameworks/Metal.framework/Headers/"
 9. **Buffer Map Synchronization (`CelestiaBuffer.map`)**:
    - Mods are often written against OpenGL, where mapping a buffer for read implicitly waits for GPU writes. Every GPU write into a `CelestiaBuffer` (`copyTextureToBuffer`, `copyToBuffer`, `writeToBuffer`, and any new blit/compute path that writes buffers) must call `markGpuWrite(recordingSerial())` so `map(read = true)` can submit and wait. Keep write-only maps unsynchronized (Minecraft's ring buffers rely on fences instead).
 
-10. **World packs (`ShadeShaderPatcher`, `CelestiaShade.reloadShaders`)**:
+10. **World packs & renderer/shader separation (`ShadeShaderPatcher`, `CelestiaShade.reloadShaders`)**:
+   - **Always keep renderer/engine code strictly separate from shader-pack code**: engine/backend code (`dev.celestia.metal.backend`, `dev.celestia.metal.shade`, `shaders/engine/`) owns buffer layouts, uniform packing, render targets, passes, and hardware abstraction, while shader packs (`shaderpacks/<pack>/shaders/`) own look, lighting, atmosphere, water, and post-processing MSL. Never hard-code Celestia Native's look, shading math, or pack-specific assumptions into the renderer or engine ABI — every world pack must be able to override pack files cleanly and work alongside multiple packs.
    - Load world MSL only through `ShadeShaderPatcher.resource(name)`, never from a fixed path, so the active pack's file wins. Layouts Java writes go in `shaders/engine/shade_api.metal` (engine-owned, not overridable); keep it in sync with `ShadeFrame`/`ShadeLook`/`ShadeWater.packParams`.
    - Anything new that compiles world MSL must rebuild when `ShadeShaderPatcher.epoch()` changes: own it from `CelestiaShade` (closed and re-initialised by `reloadShaders`) or check the epoch as `CelestiaPipeline` does. GPU state that converges over frames goes in `ShadeGpu` (carried across rebuilds).
 
@@ -126,3 +128,4 @@ ls "$(xcrun --show-sdk-path)/System/Library/Frameworks/Metal.framework/Headers/"
 - **UI changes**: Respect `CelestiaTheme` palette/glass tokens, distribute tab/footer widths proportionally (`CelestiaWidgets.computeProportionalWidths`) so narrow/HiDPI windows never clip, and avoid instant viewport-mutating actions during slider drags.
 - **Shaders**: Keep native MSL packs fast-path and self-contained per `SHADER_PACK_SPEC.md`. When extending shader integration into `LevelRenderer`, verify compilation on all presets via `tools/test_metal_backend.m`.
 - **When fixing a backend or FFM bug**: Add a deterministic regression assertion in `tools/test_metal_backend.m` (runs on both Metal 4 and Metal 3) and/or `NativeFfmSmokeTest.java` before packaging a release.
+- **Versioning**: Increment `mod_version` in `gradle.properties` whenever landing significant fixes or features so local JAR builds stay in sync with releases.

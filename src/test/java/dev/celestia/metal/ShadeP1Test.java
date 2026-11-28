@@ -495,4 +495,163 @@ class ShadeP1Test {
         ShadeDims.pack(lb, fb, frame, new ShadeSettings.Dimensions(true, true, true), 0f, false);
         assertEquals(0, (((int) lb.getFloat(ShadeLook.DIM_TINT + 12)) >> 2) & 2);
     }
+
+    @Test
+    void sodiumFadeFactorAndSkyLookupHaveNoNadirCone() {
+        List<BindGroupLayout.UniformDescription> uniforms = List.of(
+            new BindGroupLayout.UniformDescription("u_Globals", UniformType.UNIFORM_BUFFER),
+            new BindGroupLayout.UniformDescription("u_BlockTex", UniformType.COMBINED_IMAGE_SAMPLER)
+        );
+        List<MetalShaderTranslator.SlotBinding> bindings = MetalShaderTranslator.buildBindings(uniforms);
+        String sodium093Vs = """
+            #include <metal_stdlib>
+            using namespace metal;
+            struct u_Globals { float4x4 u_ProjectionMatrix; float4x4 u_ModelViewMatrix; float3 u_CameraOffset; };
+            struct main0_in { uint2 a_Position [[attribute(0)]]; float4 a_Color [[attribute(1)]]; uint4 a_LightAndData [[attribute(3)]]; };
+            struct main0_out { float fadeFactor [[user(locn3)]]; float4 gl_Position [[position]]; };
+            vertex main0_out main0(main0_in in [[stage_in]], constant u_Globals& _19 [[buffer(0)]]) {
+                main0_out out = {};
+                float3 position = float3(in.a_Position.x, 0.0, in.a_Position.y) - _19.u_CameraOffset;
+                out.gl_Position = (_19.u_ProjectionMatrix * _19.u_ModelViewMatrix) * float4(position, 1.0);
+                out.gl_Position.y = -(out.gl_Position.y);
+                out.fadeFactor = 1.0;
+                return out;
+            }
+            """;
+        String sodium093Fs = """
+            #include <metal_stdlib>
+            using namespace metal;
+            struct u_Globals { float2 u_EnvironmentFog; float2 u_RenderFog; };
+            struct main0_in { float4 v_Color [[user(locn0)]]; float2 v_TexCoord [[user(locn1)]]; float fadeFactor [[user(locn3)]]; };
+            struct main0_out { float4 fragColor [[color(0)]]; };
+            fragment main0_out main0(main0_in in [[stage_in]], constant u_Globals& _19 [[buffer(0)]], texture2d<float> u_BlockTex [[texture(0)]], sampler u_BlockTexSmplr [[sampler(0)]]) {
+                main0_out out = {};
+                float4 color = u_BlockTex.sample(u_BlockTexSmplr, in.v_TexCoord);
+                color *= in.v_Color;
+                out.fragColor = color;
+                return out;
+            }
+            """;
+        var patched = ShadeShaderPatcher.patch("sodium:pipeline/block_layer_opaque",
+            sodium093Vs, "main0", sodium093Fs, "main0", uniforms, bindings, ShadeShaderPatcher.Variant.HDR_WORLD);
+        assertTrue(patched.patched());
+        assertTrue(patched.fsSource().contains("in.fadeFactor"));
+
+        long ctx = MetalNative.deviceCreate(true, false, "");
+        assertNotEquals(0L, ctx);
+        long lib = 0L, fn = 0L, pso = 0L;
+        long frameBuf = 0L, dirsBuf = 0L, outBuf = 0L, lutTex = 0L, samp = 0L;
+        try (var arena = java.lang.foreign.Arena.ofConfined()) {
+            String src = ShadeShaderPatcher.prelude(true, false, null, false) + """
+                kernel void test_sky_lookup(constant ShadeFrame &f [[buffer(0)]],
+                                            constant float4 *dirs [[buffer(1)]],
+                                            device float4 *out [[buffer(2)]],
+                                            texture2d<half> lut [[texture(0)]],
+                                            sampler s [[sampler(0)]],
+                                            uint gid [[thread_position_in_grid]]) {
+                    out[gid] = float4(shadeSkyLookup(dirs[gid].xyz, lut, s, f), 1.0);
+                }
+                """;
+            StringBuilder err = new StringBuilder();
+            lib = MetalNative.compileMslLibrary(ctx, src, "test.skylookup", true, err);
+            assertNotEquals(0L, lib, () -> err.toString());
+            fn = MetalNative.compileFunction(lib, "test_sky_lookup", false, 0, 0, err);
+            assertNotEquals(0L, fn, () -> err.toString());
+            pso = MetalNative.computePipelineCreate(ctx, fn, "test.skylookup.pso", err);
+            assertNotEquals(0L, pso, () -> err.toString());
+
+            int w = 128, h = 80;
+            lutTex = MetalNative.textureCreate(ctx, MetalConst.FMT_RGBA16_FLOAT, w, h, 1, 1,
+                false, false, true, false, "test.lut");
+            samp = MetalNative.samplerCreate(ctx, 1, 1, 1, 1, 0, 1, false, 0);
+            java.lang.foreign.MemorySegment lutSeg = arena.allocate((long) w * h * 8L, 8);
+            ByteBuffer lutBb = lutSeg.asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+            for (int y = 0; y < h; y++) {
+                float v = (y + 0.5f) / h;
+                for (int x = 0; x < w; x++) {
+                    float u = (x + 0.5f) / w;
+                    float val = 0.2f + 1.8f * (1f - u) * (1f - u) * (1f - 0.5f * v);
+                    short hf = Float.floatToFloat16(val);
+                    int idx = (y * w + x) * 8;
+                    lutBb.putShort(idx, hf).putShort(idx + 2, hf).putShort(idx + 4, hf).putShort(idx + 6, Float.floatToFloat16(1f));
+                }
+            }
+            MetalNative.blitWriteTexture(ctx, lutTex, lutSeg, (long) w * h * 8L, w * 8, 0, 0, 0, 0, w, h);
+
+            ShadeFrame frame = new ShadeFrame();
+            frame.sunDir.set(1f, 0.2f, 0f).normalize();
+            frame.moonDir.set(-1f, -0.2f, 0f).normalize();
+            frame.updateAtmosphere(0.016f, true);
+            frameBuf = MetalNative.bufferCreate(ctx, ShadeFrame.SIZE, null, "test.frame");
+            ByteBuffer frameBb = java.lang.foreign.MemorySegment.ofAddress(MetalNative.bufferContents(frameBuf))
+                .reinterpret(ShadeFrame.SIZE).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+            frame.pack(frameBb);
+
+            float[][] testDirs = {
+                {0.02f, 0f, 0f},
+                {-0.02f, 0f, 0f},
+                {0f, 0f, 0.02f},
+                {0f, 0f, -0.02f},
+                {0.02f, -0.9998f, 0f},
+                {-0.02f, -0.9998f, 0f},
+                {1f, 0f, 0f},
+                {-1f, 0f, 0f}
+            };
+            dirsBuf = MetalNative.bufferCreate(ctx, testDirs.length * 16L, null, "test.dirs");
+            ByteBuffer dirsBb = java.lang.foreign.MemorySegment.ofAddress(MetalNative.bufferContents(dirsBuf))
+                .reinterpret(testDirs.length * 16L).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+            for (int i = 0; i < testDirs.length; i++) {
+                dirsBb.putFloat(i * 16, testDirs[i][0])
+                    .putFloat(i * 16 + 4, testDirs[i][1])
+                    .putFloat(i * 16 + 8, testDirs[i][2])
+                    .putFloat(i * 16 + 12, 0f);
+            }
+            outBuf = MetalNative.bufferCreate(ctx, testDirs.length * 16L, null, "test.out");
+
+            var bufs = arena.allocate(24, 8);
+            var offs = arena.allocate(24, 8);
+            bufs.setAtIndex(java.lang.foreign.ValueLayout.JAVA_LONG, 0, frameBuf);
+            bufs.setAtIndex(java.lang.foreign.ValueLayout.JAVA_LONG, 1, dirsBuf);
+            bufs.setAtIndex(java.lang.foreign.ValueLayout.JAVA_LONG, 2, outBuf);
+            offs.setAtIndex(java.lang.foreign.ValueLayout.JAVA_LONG, 0, 0L);
+            offs.setAtIndex(java.lang.foreign.ValueLayout.JAVA_LONG, 1, 0L);
+            offs.setAtIndex(java.lang.foreign.ValueLayout.JAVA_LONG, 2, 0L);
+            var texs = arena.allocate(8, 8);
+            texs.setAtIndex(java.lang.foreign.ValueLayout.JAVA_LONG, 0, lutTex);
+            var samps = arena.allocate(8, 8);
+            samps.setAtIndex(java.lang.foreign.ValueLayout.JAVA_LONG, 0, samp);
+
+            MetalNative.computeDispatch(ctx, pso, bufs, offs, 3, texs, 1, samps, 1, 1, 1, 1, 8, 1, 1);
+            long serial = MetalNative.cmdSubmit(ctx, 2);
+            assertTrue(MetalNative.waitSubmit(ctx, serial, 5_000_000_000L));
+
+            ByteBuffer outBb = java.lang.foreign.MemorySegment.ofAddress(MetalNative.bufferContents(outBuf))
+                .reinterpret(testDirs.length * 16L).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
+            float minProj = Float.MAX_VALUE, maxProj = -Float.MAX_VALUE;
+            for (int i = 0; i < 4; i++) {
+                float r = outBb.getFloat(i * 16);
+                minProj = Math.min(minProj, r);
+                maxProj = Math.max(maxProj, r);
+            }
+            assertTrue(maxProj - minProj < 0.05f,
+                "Projected near-nadir sky lookup should be continuous without a bright cone, got spread " + (maxProj - minProj));
+            float unitDiff = Math.abs(outBb.getFloat(4 * 16) - outBb.getFloat(5 * 16));
+            assertTrue(unitDiff < 0.05f,
+                "Unit near-nadir sky lookup should be continuous without a bright cone, got diff " + unitDiff);
+            float sunHorizon = outBb.getFloat(6 * 16);
+            float antiSunHorizon = outBb.getFloat(7 * 16);
+            assertTrue(sunHorizon > antiSunHorizon + 1.0f,
+                "Horizon sun-side contrast must be preserved: sun=" + sunHorizon + " anti=" + antiSunHorizon);
+        } finally {
+            if (outBuf != 0L) MetalNative.bufferDestroy(ctx, outBuf);
+            if (dirsBuf != 0L) MetalNative.bufferDestroy(ctx, dirsBuf);
+            if (frameBuf != 0L) MetalNative.bufferDestroy(ctx, frameBuf);
+            if (samp != 0L) MetalNative.samplerDestroy(ctx, samp);
+            if (lutTex != 0L) MetalNative.textureDestroy(ctx, lutTex);
+            if (pso != 0L) MetalNative.computePipelineDestroy(ctx, pso);
+            if (fn != 0L) MetalNative.functionDestroy(fn);
+            if (lib != 0L) MetalNative.libraryDestroy(lib);
+            MetalNative.deviceDestroy(ctx);
+        }
+    }
 }

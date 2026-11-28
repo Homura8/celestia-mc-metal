@@ -153,7 +153,7 @@ static float3 shadeLit2(half3 albedo, half3 n, half sky, half block, half shadow
 	float3 Ld = f.lightDirWorld.xyz;
 	half nl = half(dot(float3(n), Ld));
 	half ndl = thin ? half(0.3) + half(0.5) * abs(nl)
-		: foliage ? half(0.25) + half(0.75) * saturate(nl) + half(0.5 * L.user0.z) * saturate(-nl)
+		: foliage ? half(0.20) + half(0.80) * saturate(nl) + half(0.15 * L.user0.z) * saturate(-nl)
 		: (nl > half(0.0) ? (nl + half(0.08)) / half(1.08) : half(0.0));
 	half gate = f.flags.z != 0 ? smoothstep(half(0.3), half(0.8), sky) : sky * sky * sky * sky;
 	half3 sun = half3(f.sunColor.xyz);
@@ -195,7 +195,7 @@ static float3 shadeLit2(half3 albedo, half3 n, half sky, half block, half shadow
 	float3 lit = float3(albedo) * float3((direct + ambient + fill + torch + minimum) * face);
 	if ((thin || foliage) && L.look2a.x > 0.0 && !SHADE_CAMERA_UNDERWATER(f))
 		lit += float3(sun) * mix(float3(1.0), saturate(float3(albedo) / max(dot(float3(albedo), float3(0.2126, 0.7152, 0.0722)), 0.02)), L.look2a.z)
-			* (L.look2a.x * look2Near * float(shadow * gate) * (thin ? 1.0 : 0.5));
+			* (L.look2a.x * look2Near * float(shadow * gate) * (thin ? 1.0 : 0.25));
 	return lit;
 }
 
