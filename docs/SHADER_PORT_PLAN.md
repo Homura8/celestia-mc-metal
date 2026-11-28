@@ -8,7 +8,7 @@ Sections 1–9 below are the original port plan and history; their "current stat
 Read `AGENTS.md` first, then this block, then `docs/QA.md`.
 
 - **Releases and PRs:**
-  - The latest release is `0.1.0-alpha.25` (`mod_version`). Everything since is under `## Unreleased` in `CHANGELOG.md`.
+  - The latest release is `0.1.0-alpha.26` (`mod_version`). Everything since is under `## Unreleased` in `CHANGELOG.md`.
   - `main` includes, through PR #35:
     - multi-pack world packs; the chunk-edge fix; labPBR;
     - the renderer audit, with working MetalFX Temporal (#31);
