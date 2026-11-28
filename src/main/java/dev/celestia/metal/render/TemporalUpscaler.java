@@ -17,14 +17,20 @@ import net.minecraft.client.renderer.state.level.CameraRenderState;
 import org.joml.Matrix4f;
 import org.slf4j.Logger;
 
-/** Jitters only the world projection and resolves before the 2D GUI is drawn. */
+/**
+ * Jitters only the world projection and resolves before the 2D GUI is drawn: Celestia's own TAAU (taa.metal), or MetalFX
+ * Temporal fed with the same jitter, the world's depth and camera motion vectors (taa_motion).
+ */
 public final class TemporalUpscaler implements AutoCloseable {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int PARAM_BYTES = 208;
+    private static final int MOTION_PARAM_BYTES = 256;
+    /** (dev) -Dcelestiametal.metalfx.jitterSign=xy: the signs MetalFX gets the jitter with ("++" default). */
+    private static final String JITTER_SIGN = System.getProperty("celestiametal.metalfx.jitterSign", "++");
     private static final int JITTER_PHASES = 16;
     private final long ctx;
     private final Arena scratch = Arena.ofShared();
-    private final MemorySegment params = scratch.allocate(PARAM_BYTES, 16);
+    private final MemorySegment params = scratch.allocate(MOTION_PARAM_BYTES, 16);
     private final ByteBuffer bytes = params.asByteBuffer().order(ByteOrder.nativeOrder());
     private final MemorySegment inputs = scratch.allocate(4 * 8L, 8);
     private final Matrix4f current = new Matrix4f();
@@ -33,7 +39,9 @@ public final class TemporalUpscaler implements AutoCloseable {
     private final Matrix4f reproject = new Matrix4f();
     private final long[] history = new long[2];
 
-    private long resolvePso, outputRgba, outputBgra;
+    private long resolvePso, outputRgba, outputBgra, motionPso;
+    private long motionTex;
+    private boolean metalFx, metalFxFailed, targetsMetalFx;
     private long worldDepth;
     private CelestiaTexture handDepth;
     private int inputW, inputH, outputW, outputH, historyIndex, phase;
@@ -48,7 +56,10 @@ public final class TemporalUpscaler implements AutoCloseable {
         this.ctx = ctx;
     }
 
-    public void begin(RenderTarget world, RenderTarget output, ClientLevel level) {
+    /** @param metalFx MetalFX Temporal instead of Celestia's TAAU (falls back to TAAU if MetalFX can't run) */
+    public void begin(RenderTarget world, RenderTarget output, ClientLevel level, boolean metalFx) {
+        if (this.metalFx != (metalFx && !metalFxFailed)) historyValid = false;
+        this.metalFx = metalFx && !metalFxFailed;
         projectionReady = depthReady = false;
         handDepth = null;
         enabled = level != null && world.getDepthTexture() instanceof CelestiaTexture depth
@@ -95,9 +106,22 @@ public final class TemporalUpscaler implements AutoCloseable {
         depthReady = true;
     }
 
+    /** True when the last {@link #resolve} went through MetalFX Temporal. */
+    public boolean usingMetalFx() {
+        return metalFx;
+    }
+
     public boolean resolve(CelestiaTexture src, CelestiaTexture dst) {
         if (!enabled || !depthReady) {
             historyValid = false;
+            return false;
+        }
+        if (metalFx) {
+            if (resolveMetalFx(src, dst)) return true;
+            metalFxFailed = true; // (no MetalFX Temporal on this device / format: TAAU from the next frame)
+            metalFx = false;
+            historyValid = false;
+            LOGGER.warn("MetalFX Temporal unavailable, using Celestia TAAU");
             return false;
         }
         int write = 1 - historyIndex;
@@ -127,6 +151,30 @@ public final class TemporalUpscaler implements AutoCloseable {
         return true;
     }
 
+    private boolean resolveMetalFx(CelestiaTexture src, CelestiaTexture dst) {
+        inverse.get(0, bytes);
+        current.get(64, bytes);
+        reproject.get(128, bytes);
+        previous.get(192, bytes);
+        inputs.setAtIndex(ValueLayout.JAVA_LONG, 0, worldDepth);
+        inputs.setAtIndex(ValueLayout.JAVA_LONG, 1, handDepth.handle());
+        MetalNative.shadeFullscreenPass(ctx, motionPso, motionTex, inputs, 2,
+            MemorySegment.NULL, 0, params, MOTION_PARAM_BYTES);
+        // TAAU's jitter is a UV offset; MetalFX takes input pixels, texture space (TAA's UV has +y down already)
+        float jx = (JITTER_SIGN.charAt(0) == '-' ? -1f : 1f) * jitterX * inputW;
+        float jy = (JITTER_SIGN.length() > 1 && JITTER_SIGN.charAt(1) == '-' ? -1f : 1f) * jitterY * inputH;
+        if (!MetalNative.upscaleTemporal(ctx, src.handle(), worldDepth, motionTex, dst.handle(), jx, jy, !historyValid)) {
+            return false;
+        }
+        previous.set(current);
+        lastX = x;
+        lastY = y;
+        lastZ = z;
+        lastResolve = System.nanoTime();
+        historyValid = true;
+        return true;
+    }
+
     private static boolean supportedOutput(int format) {
         return format == MetalConst.FMT_RGBA8_UNORM || format == MetalConst.FMT_BGRA8_UNORM;
     }
@@ -145,6 +193,12 @@ public final class TemporalUpscaler implements AutoCloseable {
             resolvePso = CelestiaShade.createFullscreenPso(ctx, vertex, resolve, MetalConst.FMT_RGBA16_FLOAT, "TAAU Resolve", error);
             outputRgba = CelestiaShade.createFullscreenPso(ctx, vertex, output, MetalConst.FMT_RGBA8_UNORM, "TAAU Output RGBA", error);
             outputBgra = CelestiaShade.createFullscreenPso(ctx, vertex, output, MetalConst.FMT_BGRA8_UNORM, "TAAU Output BGRA", error);
+            long motion = MetalNative.compileFunction(library, "taa_motion", false, 0, 0, error);
+            try {
+                motionPso = CelestiaShade.createFullscreenPso(ctx, vertex, motion, MetalConst.FMT_RG16_FLOAT, "MetalFX Motion", error);
+            } finally {
+                if (motion != 0L) MetalNative.functionDestroy(motion);
+            }
             return true;
         } catch (RuntimeException e) {
             failed = true;
@@ -159,13 +213,22 @@ public final class TemporalUpscaler implements AutoCloseable {
     }
 
     private boolean ensureTargets(int iw, int ih, int ow, int oh) {
-        if (iw == inputW && ih == inputH && ow == outputW && oh == outputH) {
+        if (iw == inputW && ih == inputH && ow == outputW && oh == outputH && targetsMetalFx == metalFx) {
             return worldDepth != 0L;
         }
         releaseTargets();
         inputW = iw; inputH = ih; outputW = ow; outputH = oh;
+        targetsMetalFx = metalFx;
         worldDepth = MetalNative.textureCreate(ctx, MetalConst.FMT_D32_FLOAT, iw, ih, 1, 1,
             false, false, true, false, "TAAU World Depth");
+        if (metalFx) {
+            // (MetalFX keeps its own history: only the motion vectors)
+            motionTex = MetalNative.textureCreate(ctx, MetalConst.FMT_RG16_FLOAT, iw, ih, 1, 1,
+                false, true, true, false, "MetalFX Motion");
+            if (worldDepth != 0L && motionTex != 0L) return true;
+            releaseTargets();
+            return false;
+        }
         for (int i = 0; i < 2; i++) {
             history[i] = MetalNative.textureCreate(ctx, MetalConst.FMT_RGBA16_FLOAT, ow, oh, 1, 1,
                 false, true, true, false, "TAAU History " + i);
@@ -186,6 +249,8 @@ public final class TemporalUpscaler implements AutoCloseable {
     private void releaseTargets() {
         if (worldDepth != 0L) MetalNative.textureDestroy(ctx, worldDepth);
         worldDepth = 0L;
+        if (motionTex != 0L) MetalNative.textureDestroy(ctx, motionTex);
+        motionTex = 0L;
         for (int i = 0; i < 2; i++) {
             if (history[i] != 0L) MetalNative.textureDestroy(ctx, history[i]);
             history[i] = 0L;
@@ -199,6 +264,7 @@ public final class TemporalUpscaler implements AutoCloseable {
         if (resolvePso != 0L) MetalNative.pipelineDestroy(ctx, resolvePso);
         if (outputRgba != 0L) MetalNative.pipelineDestroy(ctx, outputRgba);
         if (outputBgra != 0L) MetalNative.pipelineDestroy(ctx, outputBgra);
+        if (motionPso != 0L) MetalNative.pipelineDestroy(ctx, motionPso);
         scratch.close();
     }
 }

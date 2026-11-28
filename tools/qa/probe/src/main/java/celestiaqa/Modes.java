@@ -187,6 +187,7 @@ final class Modes {
         scaleStep(steps, "native", 100, "TAAU", "native", nativeContrast);
         scaleStep(steps, "taau", 65, "TAAU", "TAAU ", nativeContrast);
         scaleStep(steps, "spatial", 75, "METALFX_SPATIAL", "MetalFX Spatial ", nativeContrast);
+        scaleStep(steps, "temporal", 75, "METALFX_TEMPORAL", "MetalFX Temporal ", nativeContrast);
         scaleStep(steps, "native-again", 100, "TAAU", "native", nativeContrast);
         steps.add(once(mc -> CelestiaHooks.setRenderScale(Integer.getInteger("celestiaqa.renderScale", 100))));
     }

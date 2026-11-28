@@ -86,3 +86,31 @@ fragment half4 taa_output(TaaIn in [[stage_in]], texture2d<half> history [[textu
     half3 sharpened = center.rgb + 0.22h * (center.rgb - 0.25h * (a + b + c + d));
     return half4(clamp(sharpened, lo, hi), 1.0h);
 }
+
+// MetalFX Temporal's camera motion (TemporalUpscaler, METALFX_TEMPORAL): per input pixel, where the surface it shows was
+// last frame, as previous - current in un-jittered UV (+y down). First-person overlays move with the camera: zero.
+struct TaaMotionParams {
+    float4x4 inverseCurrent;      // jittered: reconstructs the depth texel's camera-relative position
+    float4x4 currentViewProj;     // un-jittered
+    float4x4 previousFromCurrent; // last frame's un-jittered view-projection, moved by the camera's step
+    float4x4 previousViewProj;    // the same without the step (directions: the sky)
+};
+
+static_assert(sizeof(TaaMotionParams) == 256, "TaaMotionParams layout");
+
+fragment half2 taa_motion(TaaIn in [[stage_in]], constant TaaMotionParams &p [[buffer(0)]],
+                          depth2d<float> depth [[texture(0)]], depth2d<float> hand [[texture(1)]]) {
+    uint2 px = uint2(in.position.xy);
+    if (hand.read(px) > 0.0) return half2(0.0h);
+    float2 size = float2(depth.get_width(), depth.get_height());
+    float2 uv = (float2(px) + 0.5) / size;
+    float z = depth.read(px);
+    // (TAA's convention: the matrices are GL's, flipped after projection, so UV = NDC * 0.5 + 0.5 with no y flip)
+    float4 world = p.inverseCurrent * float4(uv * 2.0 - 1.0, z, 1.0);
+    float4 cur = z > 0.0 ? p.currentViewProj * world : p.currentViewProj * float4(world.xyz, 0.0);
+    float4 last = z > 0.0 ? p.previousFromCurrent * world : p.previousViewProj * float4(world.xyz, 0.0);
+    if (cur.w <= 1e-6 || last.w <= 1e-6) return half2(0.0h);
+    float2 curUv = cur.xy / cur.w * 0.5 + 0.5;
+    float2 lastUv = last.xy / last.w * 0.5 + 0.5;
+    return half2(lastUv - curUv);
+}

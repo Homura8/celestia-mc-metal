@@ -705,6 +705,47 @@ static void verify_backend_ops(int32_t preferMetal4) {
                 printf("[Backend %s] Test 2k upscale %s OK (path used: %s)\n", preferMetal4 ? "Metal 4" : "Metal 3",
                        mode ? "MetalFX Spatial" : "bilinear", used ? "MetalFX Spatial" : "bilinear");
             }
+            // 2k (temporal). MetalFX Temporal (cm_upscale_temporal): a still image with zero motion and no jitter converges to
+            // the same layout; it must flush the soft-ended source pass first (Test 2g's rule) and leave no GPU errors.
+            {
+                int64_t depthT = cm_texture_create(ctx, CM_FMT_D32_FLOAT, SW, SH, 1, 1, 0, 1, 1, 0, "UpscaleDepth");
+                int64_t motionT = cm_texture_create(ctx, CM_FMT_RG16_FLOAT, SW, SH, 1, 1, 0, 1, 1, 0, "UpscaleMotion");
+                assert(depthT && motionT);
+                int32_t usedT = 0;
+                for (int frame = 0; frame < 4; frame++) {
+                    cm_cmd_begin(ctx);
+                    cm_blit_clear_depth(ctx, depthT, 0.5);
+                    cm_blit_clear_color(ctx, motionT, 0.0f, 0.0f, 0.0f, 0.0f);
+                    assert(cm_pass_begin(ctx, &srcV, &clearFlag, clearCol, 1, 0, 0, 0.0, 0, 0, SW, SH, "UpscaleSrcPass") == 1);
+                    cm_pass_set_pipeline(ctx, psoH);
+                    cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+                    cm_pass_finish(ctx);
+                    usedT = cm_upscale_temporal(ctx, srcT, depthT, motionT, dstT, 0.0f, 0.0f, frame == 0);
+                    cm_blit_copy_texture_to_buffer(ctx, dstT, 0, 0, 0, 0, DW, DH, upRead, 0, DW * 4);
+                    uint64_t sT = cm_cmd_submit(ctx, 2);
+                    assert(cm_wait_submit(ctx, sT, 5000000000ULL) == 1);
+                }
+                char drainedT[1024] = {0};
+                if (cm_device_drain_errors(ctx, drainedT, sizeof(drainedT)) > 0) {
+                    fprintf(stderr, "FAIL 2k temporal: GPU errors: %s\n", drainedT);
+                    exit(1);
+                }
+                if (usedT) {
+                    const uint8_t *u = (const uint8_t *)(uintptr_t)cm_buffer_contents(upRead);
+                    const uint8_t *top = &u[((size_t)4 * DW + 48) * 4];
+                    const uint8_t *left = &u[((size_t)40 * DW + 16) * 4];
+                    const uint8_t *right = &u[((size_t)40 * DW + 80) * 4];
+                    if (!(top[2] > 200 && top[0] < 60 && left[0] > 200 && left[1] < 60 && right[1] > 200 && right[0] < 60)) {
+                        fprintf(stderr, "FAIL 2k temporal: top=%d,%d,%d left=%d,%d,%d right=%d,%d,%d\n",
+                                top[0], top[1], top[2], left[0], left[1], left[2], right[0], right[1], right[2]);
+                        exit(1);
+                    }
+                }
+                printf("[Backend %s] Test 2k upscale MetalFX Temporal %s\n", preferMetal4 ? "Metal 4" : "Metal 3",
+                       usedT ? "OK" : "unavailable (caller falls back)");
+                cm_texture_destroy(ctx, motionT);
+                cm_texture_destroy(ctx, depthT);
+            }
             cm_pipeline_destroy(ctx, psoH);
             cm_function_destroy(fsH); cm_function_destroy(vsH); cm_library_destroy(libH);
             cm_buffer_destroy(ctx, upRead);

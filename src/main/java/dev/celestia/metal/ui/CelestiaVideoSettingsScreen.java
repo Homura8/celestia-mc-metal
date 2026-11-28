@@ -278,7 +278,7 @@ public final class CelestiaVideoSettingsScreen extends Screen {
                     () -> workingConfig.appleSilicon.upscaler,
                     v -> { workingConfig.appleSilicon.upscaler = v; dirty = true; },
                     u -> switch (u) {
-                        case METALFX_TEMPORAL -> "MetalFX Temporal (Spatial for now)";
+                        case METALFX_TEMPORAL -> "MetalFX Temporal";
                         case METALFX_SPATIAL -> "MetalFX Spatial";
                         case BILINEAR -> "Bilinear";
                         case TAAU -> "TAAU";

@@ -171,6 +171,7 @@ public final class MetalNative {
         static final MethodHandle mhDeviceStats = downcallCritical("cm_device_stats", FunctionDescriptor.ofVoid(L, P, I));
         static final MethodHandle mhDeviceSetOption = downcall("cm_device_set_option", FunctionDescriptor.ofVoid(L, I, I));
         static final MethodHandle mhUpscaleTo = downcall("cm_upscale_to", FunctionDescriptor.of(I, L, L, L, I));
+        static final MethodHandle mhUpscaleTemporal = downcall("cm_upscale_temporal", FunctionDescriptor.of(I, L, L, L, L, L, F, F, I));
         static final MethodHandle mhSurfaceSetNonblocking = downcall("cm_surface_set_nonblocking", FunctionDescriptor.ofVoid(L, I));
 
         private Hot() {}
@@ -714,6 +715,13 @@ public final class MetalNative {
     }
 
     /** Upscales all of srcTex into dstTex. mode 0 = bilinear, 1 = MetalFX Spatial. Returns the mode used, -1 on error. */
+    /** MetalFX Temporal world upscale (cm_upscale_temporal); false when unavailable. */
+    public static boolean upscaleTemporal(long ctx, long srcTex, long depthTex, long motionTex, long dstTex,
+                                          float jitterX, float jitterY, boolean reset) {
+        try { return (int) Hot.mhUpscaleTemporal.invokeExact(ctx, srcTex, depthTex, motionTex, dstTex, jitterX, jitterY, reset ? 1 : 0) != 0; }
+        catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
     public static int upscaleTo(long ctx, long srcTex, long dstTex, int mode) {
         try { return (int) Hot.mhUpscaleTo.invokeExact(ctx, srcTex, dstTex, mode); }
         catch (Throwable t) { throw new RuntimeException(t); }

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **MetalFX Temporal upscaling now works.** Before, choosing it silently used MetalFX Spatial ("Spatial for now").
+  - **How:** world render scale feeds MetalFX Temporal the same Halton jitter Celestia's TAAU uses, the world's reversed-Z depth, and camera motion vectors from a new `taa_motion` pass. The hand gets zero motion.
+  - **Quality:** at 75% on a 3024 × 1744 screen, the result is within 1.5/255 of native on average, and sharper than MetalFX Spatial or wrong-sign jitter.
+  - **Cost:** about 5.5 ms on an M1 Pro at that output size. On a Retina laptop screen, TAAU or native is faster. Temporal is aimed at large external displays at lower input scales.
+  - **Fallback:** if MetalFX Temporal is unavailable, Celestia uses its own TAAU.
+
 - Alternate HDR world targets to retain reflection history without a full-resolution copy each frame. Reset reflection
   and motion-blur history at camera cuts and medium changes.
 - Keep Auto Render Scale at or below the configured internal render-scale limit, including before the first frame, and use the

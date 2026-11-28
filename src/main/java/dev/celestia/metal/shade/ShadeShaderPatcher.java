@@ -550,6 +550,11 @@ public final class ShadeShaderPatcher {
             boolean screenReflections = waterVariant == Variant.HDR_WORLD || waterVariant == Variant.HDR_WORLD_WATER_ABOVE;
             String defines = waterDefines(screenReflections) + "#define SHADE_WEATHER 1\n#define SHADE_RIPPLES 1\n#define SHADE_RIPPLE_LAYERS 1\n";
             if (withoutSwellOrCaustics) defines += "#undef SHADE_WATER_SWELL\n#undef SHADE_CAUSTICS\n";
+            // (pricing, dev only) -Dcelestiametal.shade.water.devUndef=WATER_PANO,CAUSTICS,...: compile those SHADE_* features out
+            // of the water shader, to price each one with its share of the register pressure (a branch skipping it doesn't)
+            for (String f : System.getProperty("celestiametal.shade.water.devUndef", "").split(",")) {
+                if (f.matches("[A-Z0-9_]+")) defines += "#undef SHADE_" + f + "\n";
+            }
             if (fastSky) defines += "#define SHADE_OWN_TRANSLUCENT 1\n#define SHADE_WOFF_FAST 1\n";
             if (waterVariant != Variant.HDR_WORLD && waterVariant != Variant.HDR_WORLD_WATER_SKY_ONLY) {
                 defines += "#define SHADE_LEAN_ABOVE 1\n";

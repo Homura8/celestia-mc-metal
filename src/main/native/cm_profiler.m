@@ -152,7 +152,9 @@ void cm_prof_done(int s) {
                 double ms = (double)(ts[i + 1] - ts[i]) * profTicksToMs;
                 id enc = profEncoders[s][i];
                 NSString *label = (enc != [NSNull null] && [enc respondsToSelector:@selector(label)]) ? [enc label] : nil;
-                if (!label.length) label = i == 0 ? @"(start)" : @"(unlabelled)";
+                // (unlabelled encoders: name the encoder class, render / compute / blit, so the time is at least placed)
+                if (!label.length) label = i == 0 ? @"(start)"
+                    : enc != [NSNull null] ? [NSString stringWithFormat:@"(unlabelled %@)", NSStringFromClass([enc class])] : @"(unlabelled)";
                 profSums[label] = @(profSums[label].doubleValue + ms);
                 frame += ms;
             }

@@ -397,4 +397,22 @@ Settled: the pink-lavender distant haze stays, as part of the Pastel look (owner
   On land the village clears 60 FPS. With the bay in view, the water pass takes 9–10 ms of a ~23 ms frame (village-shore
   profile), the same as on the test pond. Rain spends ~4.1 ms in `Main` and ~2.9 ms unlabelled. This confirms water as the
   native-Quality blocker in real play, and the SSR-split pass above as the next step.
+- **MetalFX Temporal** (`TemporalUpscaler` METALFX_TEMPORAL mode and `cm_upscale_temporal`; it used to fall back to Spatial):
+  - **Inputs:** TAAU's Halton jitter in input pixels (the `++` sign is verified: sharpest and closest to native), D32 depth, and
+    RG16F camera motion from `taa_motion` (previous − current UV, scaled to pixels natively).
+  - **Cost on the M1 Pro at 3024 × 1744 output:** MetalFX takes ~5.5 ms (pre 1.3, mid 2.3, post 1.8) plus 0.4 ms for motion.
+  - **Village timings, Quality:**
+
+    | Scale | Noon | Sunset | Night | Over the bay | Waterfront | Waterfront sunset | Rain |
+    | --- | --- | --- | --- | --- | --- | --- | --- |
+    | 75% | 62.8 | 58.2 | 59.6 | 51.2 | 50.2 | 46.5 | 49.0 |
+    | 85% | 50.9 | 48.7 | 51.4 | 44.0 | 42.7 | 39.5 | 43.9 |
+
+    Both are slower than native on this screen, because the upscaler's cost follows the output size.
+  - **When to use it:** on the laptop's Retina screen, native or TAAU gives more FPS. For a 4K output, use a lower input scale
+    (≤ 67%), where the saved world shading outweighs MetalFX's ~8 ms (extrapolated, not measured: QA can't drive a 4K window).
+  - **Water and rain are the frame-rate limit, not upscaling.** Real-play land views clear 60 FPS at native Quality.
+    Waterfront and rain need ~6 ms that no image-preserving change found here provides. Pricing the water features one at a time
+    by compiling each out (`-Dcelestiametal.shade.water.devUndef=…`) on `village-shore`: detail 1.25 ms, swell 1.2, foam 1.15,
+    caustics 1.07, glitter 0.77, glossy 0.38, rain ripples 0.13. The cost is spread across the shader's register pressure.
 

@@ -593,6 +593,10 @@ void cm_upscaler_destroy(int64_t ctxPtr, int64_t upscalerPtr);
 // Upscales the whole of srcTex into the whole of dstTex (world render scale). mode 0 = bilinear, 1 = MetalFX Spatial
 // (falls back to bilinear when MetalFX is unavailable). Returns the mode actually used, or -1 on bad arguments.
 int32_t cm_upscale_to(int64_t ctxPtr, int64_t srcTexPtr, int64_t dstTexPtr, int32_t mode);
+// MetalFX Temporal world upscale: color, reversed-Z D32 depth and RG16F motion (UV, previous - current, +y down) at the
+// input size; jitter in input pixels. Copies into dst. Returns 1, or 0 when unavailable (the caller falls back).
+int32_t cm_upscale_temporal(int64_t ctxPtr, int64_t srcTexPtr, int64_t depthTexPtr, int64_t motionTexPtr,
+                            int64_t dstTexPtr, float jitterX, float jitterY, int32_t reset);
 void cm_upscaler_encode(int64_t ctxPtr, int64_t upscalerPtr, int64_t colorTexPtr,
                         int64_t depthTexPtr, int64_t motionTexPtr, int64_t outTexPtr,
                         float jitterX, float jitterY, int32_t resetHistory);
