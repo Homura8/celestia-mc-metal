@@ -75,7 +75,8 @@ tasks.register('qaClient', JavaExec) {
         environment 'CELESTIA_GPU_PROFILE', '1'
         environment 'CELESTIA_GPU_PROFILE_EVERY', every
         props['celestiaqa.profileEvery'] = every
-        props['celestiametal.noPassMerge'] = 'true'
+        // (-PqaProfileMerge: keep render-pass merging, to see the encoders as they run in play; per-pass times then blur)
+        if (!project.hasProperty('qaProfileMerge')) props['celestiametal.noPassMerge'] = 'true'
     }
     systemProperties props
     def assets = new File(gradle.gradleUserHomeDir, 'caches/fabric-loom/assets')

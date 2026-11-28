@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Faster water reflections, same image.** The reflection march's full-resolution search now first checks a dilated 8-pixel
+  depth level (a new `Pyr8Ring` pass, built from blocks the pyramid already made). It skips the four depth reads of a half
+  interval its ray is provably in front of, which is exact: the same hits. On an M1 Pro at native 3024 × 1744 (Quality), the
+  water pass drops ~0.5 ms at the village waterfront and ~0.25 ms over the bay. Back to back, waterfront views go from
+  47.1 to 48.7 FPS and 41.5 to 43.9 FPS at sunset, with no difference beyond run noise in frozen-time comparisons.
+- QA: the probe keeps the game window in front and marks `UNFOCUSED` timings (macOS throttles background windows).
+  New profiling aids: `-PqaProfileMerge`, `CELESTIA_GPU_PROFILE_ORDER=1`, `celestiametal.shade.water.devDefine`
+  (`DEV_SSR_ONLY`, `DEV_NORMAL_ONLY`) and `celestiametal.shade.freezeTime`.
+
 - **New default Color Look: Balanced.** It keeps Pastel's palette and vibrance, with deeper shadows: lift 0.012 instead of
   0.030, contrast 0.92 instead of 0.84, and a gentler highlight gain. In a noon village, the darkest 1 % goes from 56 to 40 of
   255 and saturation from 0.28 to 0.33, with midtones unchanged. Pastel is unchanged and still selectable, and Pastel

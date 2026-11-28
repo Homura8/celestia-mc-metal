@@ -67,6 +67,7 @@ public final class CelestiaShade {
     private static final int MILKY_WAY_W = 1024, MILKY_WAY_H = 512;
     private static final int BLOOM_LEVELS = 6;
     private static final int BLOOM_FORMAT = MetalConst.FMT_RG11B10_FLOAT;
+    private static final boolean FREEZE_TIME = Boolean.getBoolean("celestiametal.shade.freezeTime");
     private static final boolean SSAO = !"false".equalsIgnoreCase(System.getProperty("celestiametal.shade.ssao"));
 
     private static final float[] MOON_BRIGHTNESS = {1f, 0.75f, 0.5f, 0.25f, 0f, 0.25f, 0.5f, 0.75f};
@@ -473,7 +474,9 @@ public final class CelestiaShade {
         boolean resetHistory = snap || cameraCut || frame.fogType != previousFogType;
         snapRequested = false;
         settings = applied;
-        double clampedDt = Math.min(Math.max(dt, 0f), 0.25);
+        // (dev, image A/B) -Dcelestiametal.shade.freezeTime=true: the water, sky and cloud clocks stand still, so two runs of a
+        // still camera draw the same water (tools/qa/analyze sharp: mean difference to a reference)
+        double clampedDt = FREEZE_TIME ? 0.0 : Math.min(Math.max(dt, 0f), 0.25);
         motionEligible = !resetHistory && clampedDt > 0.0 && clampedDt <= 0.1
             && !frame.viewProj.equals(frame.prevViewProj, 1e-5f);
         waterClock = (waterClock + clampedDt) % 4096.0;

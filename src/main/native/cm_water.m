@@ -419,7 +419,8 @@ int32_t cm_water_capture(int64_t ctxPtr, int64_t pyrPsoPtr, int64_t pyr2PsoPtr) 
         if (buildPyr) {
             ctx.waterPyrTmp8 = ensure_pyr_tex(ctx, ctx.waterPyrTmp8, w8, h8, @"CelestiaWater.Pyr8");
             ctx.waterPyrTmp16 = ensure_pyr_tex(ctx, ctx.waterPyrTmp16, w16, h16, @"CelestiaWater.Pyr16");
-            ctx.waterPyrTex = ensure_pyr_tex(ctx, ctx.waterPyrTex, w16, h16 + h128, @"CelestiaWater.DepthPyramid");
+            // 16-px blocks at (0, 0), 128-px at (0, h16), dilated 8-px blocks at (0, h16 + h128) (water.metal shadeSsrhRange8)
+            ctx.waterPyrTex = ensure_pyr_tex(ctx, ctx.waterPyrTex, MAX(w16, w8), h16 + h128 + h8, @"CelestiaWater.DepthPyramid");
             if (!ctx.waterPyrTmp8 || !ctx.waterPyrTmp16 || !ctx.waterPyrTex) buildPyr = NO;
         }
         cm_commit_residency_if_dirty(ctx);
@@ -500,6 +501,12 @@ int32_t cm_water_capture(int64_t ctxPtr, int64_t pyrPsoPtr, int64_t pyr2PsoPtr) 
             int32_t u2[8] = { 8, 0, (int32_t)h16, 4, (int32_t)w16, (int32_t)h16, 0, 0 };
             encode_pyr_fullscreen_pass(ctx, pyr2Box.state, ctx.waterPyrTmp16, ctx.waterPyrTex,
                                        h16, w128, h128, YES, u2, sizeof(u2), @"CelestiaWater.Pyr128");
+
+            // The 8-px blocks with their 8 neighbours (a texel bounds everything within 8 px of any point in its block): lets the
+            // fine march skip the 4 depth reads of a half 16-px interval its ray is in front of (water.metal, SHADE_SSRH_L2)
+            int32_t u3[8] = { 1, 0, (int32_t)(h16 + h128), 1, (int32_t)w8, (int32_t)h8, 0, 0 };
+            encode_pyr_fullscreen_pass(ctx, pyr2Box.state, ctx.waterPyrTmp8, ctx.waterPyrTex,
+                                       h16 + h128, w8, h8, YES, u3, sizeof(u3), @"CelestiaWater.Pyr8Ring");
         }
 
         // Step 3: Reopen original render pass with MTLLoadActionLoad to preserve opaque world + sky.

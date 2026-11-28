@@ -160,6 +160,27 @@ void cm_prof_done(int s) {
             }
             profFrameSum += frame;
             profFrames++;
+            // (CELESTIA_GPU_PROFILE_ORDER=1) once: this command buffer's encoders in order, with their times
+            static BOOL orderPrinted;
+            BOOL worldFrame = NO;
+            if (!orderPrinted && getenv("CELESTIA_GPU_PROFILE_ORDER")) {
+                for (uint32_t i = 0; i < n && !worldFrame; i++) {
+                    id e = profEncoders[s][i];
+                    worldFrame = e != [NSNull null] && [e respondsToSelector:@selector(label)] && [[e label] isEqualToString:@"Sky"];
+                }
+            }
+            static int worldFrames;
+            if (worldFrame && ++worldFrames == 300) {
+                orderPrinted = YES;
+                NSMutableString *order = [NSMutableString stringWithString:@"[GPU] order |"];
+                for (uint32_t i = 0; i + 1 < n; i++) {
+                    id enc = profEncoders[s][i];
+                    NSString *lb = (enc != [NSNull null] && [enc respondsToSelector:@selector(label)]) ? [enc label] : nil;
+                    double ms = ts[i + 1] >= ts[i] ? (double)(ts[i + 1] - ts[i]) * profTicksToMs : 0.0;
+                    [order appendFormat:@" %@ %.2f |", lb.length ? lb : (enc != [NSNull null] ? NSStringFromClass([enc class]) : @"-"), ms];
+                }
+                fprintf(stderr, "%s\n", order.UTF8String);
+            }
         }
         profSlots[s].busy = NO;
         if (profFrames >= profEvery) {

@@ -57,6 +57,8 @@ public final class Qa {
     private static int captures;
 
     static void startSampling() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc != null) focus(mc);
         samples = 0;
         sampling = true;
     }
@@ -72,12 +74,17 @@ public final class Qa {
         float pan = Float.parseFloat(System.getProperty("celestiaqa.timedPanYaw", "0"));
         if (!Float.isFinite(pan)) throw new IllegalArgumentException("Invalid timed pan yaw");
         steps.add(once(mc -> {
+            focus(mc);
+            focusLost = false;
             frameTimes = new double[count];
             timedFrames = 0;
             lastFrameTime = 0L;
             timedPanYaw = pan;
         }));
-        steps.add(mc -> timedFrames == count);
+        steps.add(mc -> {
+            if (!mc.getWindow().isFocused()) focusLost = true;
+            return timedFrames == count;
+        });
         steps.add(once(mc -> {
             double[] times = frameTimes;
             frameTimes = null;
@@ -87,8 +94,19 @@ public final class Qa {
             String scale = CELESTIA ? CelestiaHooks.renderScaleLabel() : "native";
             log(fmt("timing %-16s %6.1f fps | p99 %5.2f ms | %d frames | %s | output %dx%d%s", scene, 1000.0 / mean,
                 p99, count, scale, mc.gameRenderer.mainRenderTarget().width, mc.gameRenderer.mainRenderTarget().height,
-                pan == 0f ? "" : fmt(" | pan %.2f°/frame", pan)));
+                pan == 0f ? "" : fmt(" | pan %.2f°/frame", pan)) + (focusLost ? " | UNFOCUSED (macOS throttles background windows: discard)" : ""));
         }));
+    }
+
+    private static boolean focusLost;
+
+    /**
+     * Brings the game window to the front. macOS throttles a window behind others (occlusion, App Nap), so a run started in
+     * the background, or clicked into focus halfway, times differently: timings are taken in front, and say when focus was lost.
+     */
+    static void focus(Minecraft mc) {
+        long handle = mc.getWindow().handle();
+        if (handle != 0L) org.lwjgl.sdl.SDLVideo.SDL_RaiseWindow(handle);
     }
 
     private Qa() {}
@@ -220,6 +238,7 @@ public final class Qa {
      */
     private static void buildScene(List<Step> s) {
         s.add(once(mc -> {
+            focus(mc); // (in front for the whole run: see focus)
             cmd(mc, "gamemode spectator @a");
             cmd(mc, "difficulty peaceful");
             cmd(mc, "gamerule minecraft:advance_time false");
