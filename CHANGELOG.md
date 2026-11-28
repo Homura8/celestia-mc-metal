@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0-alpha.26
+
 - README: a showcase of in-game captures (`docs/images/`) and in-game benchmarks at native resolution (Quality and Performance,
   M1 Pro) replace the synthetic-only table. QA: the `nether` scene now starts in open air over the lava sea; it used to start inside the terrain. New `beach-sunset`, `pond-corner-sunset` and `village-sunset-back` scenes.
 
