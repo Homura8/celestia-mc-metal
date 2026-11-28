@@ -341,6 +341,13 @@ Owner priorities (2026-11-28), in order:
 
 Settled: the pink-lavender distant haze stays, as part of the Pastel look (owner).
 
+Future features (owner, look-polish pass):
+- [ ] **Shore-aware waves.** Every wave set (the baked near waves and the swell) travels one fixed world direction, so on beaches
+      facing the other way they roll out to sea. Plan: a CPU distance-to-shore map around the player (upstream's WaterOpenScan
+      idea: 256² texels at 2 blocks, rebuilt in the background), read once per water pixel. The swell turns so its crests
+      run parallel to the shoreline and move toward it, and sheltered water calms. Estimated ~0.05 ms GPU. Until then the swell
+      default is 0.6 (was 1.3): about a quarter less open-water motion in `beach` (frame-to-frame change 0.35 -> 0.27).
+
 ## 11. Renderer audit (2026-11-28)
 
 - The renderer now alternates HDR world targets for previous-frame reflections. A same-process A/B/A on an M1 Pro compared

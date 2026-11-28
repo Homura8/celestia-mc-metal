@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **New default Color Look: Balanced.** It keeps Pastel's palette and vibrance, with deeper shadows: lift 0.012 instead of
+  0.030, contrast 0.92 instead of 0.84, and a gentler highlight gain. In a noon village, the darkest 1 % goes from 56 to 40 of
+  255 and saturation from 0.28 to 0.33, with midtones unchanged. Pastel is unchanged and still selectable, and Pastel
+  Strength applies to both. The cost is the same as before: only the tonemap's values differ.
+- **Sea Swell defaults to 0.6 (was 1.3).** The swell travels one fixed world direction, so on some beaches it rolled away
+  from the shore. It is now gentler until waves can follow the shoreline (see the roadmap). Saved settings keep their value.
+- QA: a `beach` scene (the sandbar by the village), and `celestiametal.look.pastel` for tuning Pastel's lift, gain and contrast.
+
 - **MetalFX Temporal upscaling now works.** Before, choosing it silently used MetalFX Spatial ("Spatial for now").
   - **How:** world render scale feeds MetalFX Temporal the same Halton jitter Celestia's TAAU uses, the world's reversed-Z depth, and camera motion vectors from a new `taa_motion` pass. The hand gets zero motion.
   - **Quality:** at 75% on a 3024 × 1744 screen, the result is within 1.5/255 of native on average, and sharper than MetalFX Spatial or wrong-sign jitter.

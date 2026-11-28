@@ -37,6 +37,8 @@ final class Shots {
         new Scene("village-night", 18000, "clear", "tp @a -330.5 65 256.5 90 4"),
         new Scene("village-high", 6000, "clear", "tp @a -318.5 78 256.5 90 18"),
         new Scene("village-shore", 6000, "clear", "tp @a -330.5 67 240.5 135 6"),
+        // the sandbar next to the village: shallow water over sand (shore foam, caustics, the waves' travel direction)
+        new Scene("beach", 6000, "clear", "tp @a -380.5 72 232.5 100 25"),
         new Scene("village-shore-sunset", 12300, "clear", "tp @a -330.5 67 240.5 135 6"),
         new Scene("vista-noon", 6000, "clear", "tp @a 40.5 210 40.5 135 12"),
         new Scene("vista-sunset", 12300, "clear", "tp @a 40.5 210 40.5 135 12"),

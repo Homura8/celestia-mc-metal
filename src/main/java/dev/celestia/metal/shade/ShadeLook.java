@@ -69,37 +69,56 @@ public final class ShadeLook {
     private static final float[][] SKY_ROSE = {
         {-6, 0f}, {-3, 0.32f}, {0, 0.64f}, {4, 0.70f}, {9, 0.56f}, {16, 0.28f}, {26, 0.07f}, {34, 0f}
     };
-    private static final float[] ROSE_LOOK = {1f, 1.15f, 0.6f, 1.4f};
+    private static final float[] ROSE_LOOK = {1f, 1.15f, 0.6f, 1.4f, 1.4f};
     static final float ROSE_AMOUNT = 0.25f;
 
     private static final int K_GAMMA = 1, K_LIGHT = 2, K_AMB = 3, K_SAT = 6, K_CONTRAST = 7, K_BLOOM = 8, K_VL = 9, K_MIST = 10, K_WB = 11;
 
     // looks: 0 EPIC, 1 STORYBOOK, 2 NATURAL, 3 PASTEL (alpha.25: "Leica Vibrant, but more pastel and cuter": vibrant midtones
     // through the vibrance step, softer airy contrast, highlights that whiten sooner (inset), rosy lifted blacks and a faint pink
-    // highlight gain, pinker sunsets, a little more bloom)
-    private static final float[] PRESET_GAMMA = {1.0f, 1.15f, 0.9f, 1.05f}, PRESET_SAT = {0.08f, 0.14f, 0.02f, 0.26f},
-        PRESET_CONTRAST = {1.05f, 0.97f, 0.95f, 0.84f}, PRESET_BLOOM = {1.0f, 1.25f, 0.8f, 1.45f},
-        PRESET_LAMBDA = {0.55f, 0.40f, 0.70f, 0.50f}, PRESET_INSET = {0.20f, 0.16f, 0.24f, 0.34f},
-        PRESET_VL = {1.0f, 1.25f, 0.8f, 1.1f}, PRESET_SPECTRUM = {0.6f, 0.9f, 0.3f, 0.75f},
-        PRESET_VIBRANCE = {0.10f, 0.18f, 0.10f, 0.36f},
-        PRESET_EV = {0f, 0f, 0f, 0.3f}; // exposure bias (EV): pastel is a bright, high-key look
+    // highlight gain, pinker sunsets, a little more bloom), 4 BALANCED (the default since the look-polish pass: Pastel's palette
+    // and vibrance with deeper blacks: lift 0.012 instead of 0.030, contrast 0.92 instead of 0.84, gentler highlight gain; the
+    // darkest 1 % of a noon village goes 56 -> 40 of 255, saturation 0.28 -> 0.33, midtones unchanged)
+    private static final float[] PRESET_GAMMA = {1.0f, 1.15f, 0.9f, 1.05f, 1.05f}, PRESET_SAT = {0.08f, 0.14f, 0.02f, 0.26f, 0.26f},
+        PRESET_CONTRAST = {1.05f, 0.97f, 0.95f, 0.84f, 0.92f}, PRESET_BLOOM = {1.0f, 1.25f, 0.8f, 1.45f, 1.45f},
+        PRESET_LAMBDA = {0.55f, 0.40f, 0.70f, 0.50f, 0.50f}, PRESET_INSET = {0.20f, 0.16f, 0.24f, 0.34f, 0.34f},
+        PRESET_VL = {1.0f, 1.25f, 0.8f, 1.1f, 1.1f}, PRESET_SPECTRUM = {0.6f, 0.9f, 0.3f, 0.75f, 0.75f},
+        PRESET_VIBRANCE = {0.10f, 0.18f, 0.10f, 0.36f, 0.36f},
+        PRESET_EV = {0f, 0f, 0f, 0.3f, 0.3f}; // exposure bias (EV): pastel is a bright, high-key look
     // display lift (linear, added after the tone curve) and gain per look
-    private static final float[][] PRESET_LIFT = {{0f, 0f, 0f}, {0f, 0f, 0f}, {0f, 0f, 0f}, {0.030f, 0.019f, 0.030f}},
-        PRESET_GAIN = {{1f, 1f, 1f}, {1f, 1f, 1f}, {1f, 1f, 1f}, {1.0f, 0.93f, 0.965f}};
+    private static final float[][] PRESET_LIFT = {{0f, 0f, 0f}, {0f, 0f, 0f}, {0f, 0f, 0f}, {0.030f, 0.019f, 0.030f}, {0.012f, 0.006f, 0.012f}},
+        PRESET_GAIN = {{1f, 1f, 1f}, {1f, 1f, 1f}, {1f, 1f, 1f}, {1.0f, 0.93f, 0.965f}, {1.0f, 0.97f, 0.985f}};
     // a white-balance tint per look, applied with the white balance before the tone curve (PASTEL: rose through the midtones)
-    private static final float[][] PRESET_TINT = {{1f, 1f, 1f}, {1f, 1f, 1f}, {1f, 1f, 1f}, {1.03f, 0.96f, 1.0f}};
-    public static final int LOOKS = 4, PASTEL = 3;
+    private static final float[][] PRESET_TINT = {{1f, 1f, 1f}, {1f, 1f, 1f}, {1f, 1f, 1f}, {1.03f, 0.96f, 1.0f}, {1.03f, 0.96f, 1.0f}};
+    // (dev, look tuning) -Dcelestiametal.look.pastel=lift r,g,b;gain r,g,b;contrast: overrides PASTEL's lift, gain and contrast
+    static {
+        String dev = System.getProperty("celestiametal.look.pastel");
+        if (dev != null) {
+            String[] parts = dev.split(";");
+            float[] l = parse3(parts[0]), g = parse3(parts[1]);
+            System.arraycopy(l, 0, PRESET_LIFT[3], 0, 3);
+            System.arraycopy(g, 0, PRESET_GAIN[3], 0, 3);
+            PRESET_CONTRAST[3] = Float.parseFloat(parts[2].trim());
+        }
+    }
+
+    private static float[] parse3(String v) {
+        String[] c = v.split(",");
+        return new float[] {Float.parseFloat(c[0].trim()), Float.parseFloat(c[1].trim()), Float.parseFloat(c[2].trim())};
+    }
+
+    public static final int LOOKS = 5, PASTEL = 3, BALANCED = 4;
     private float pastelK = 1f;
 
     /** A look parameter: PASTEL blends from EPIC's value by Pastel Strength (0 = Epic, 1 = Pastel, up to 1.5 beyond it). */
     private float lk(float[] a) {
-        return this.lookPreset == PASTEL ? a[0] + (a[PASTEL] - a[0]) * this.pastelK : a[this.lookPreset];
+        return pastelFamily() ? a[0] + (a[this.lookPreset] - a[0]) * this.pastelK : a[this.lookPreset];
     }
 
     private float[] lk3(float[][] a) {
-        if (this.lookPreset != PASTEL) return a[this.lookPreset];
+        if (!pastelFamily()) return a[this.lookPreset];
         float[] r = new float[3];
-        for (int i = 0; i < 3; i++) r[i] = a[0][i] + (a[PASTEL][i] - a[0][i]) * this.pastelK;
+        for (int i = 0; i < 3; i++) r[i] = a[0][i] + (a[this.lookPreset][i] - a[0][i]) * this.pastelK;
         return r;
     }
 
@@ -171,6 +190,11 @@ public final class ShadeLook {
     /** The bloom pyramid's level weighting exponent for the current look. */
     public float bloomSpectrum() {
         return lk(PRESET_SPECTRUM);
+    }
+
+    /** Pastel and Balanced both blend from Epic by Pastel Strength. */
+    private boolean pastelFamily() {
+        return this.lookPreset == PASTEL || this.lookPreset == BALANCED;
     }
 
     public int lookPreset() {

@@ -57,6 +57,7 @@ public record ShadeSettings(Shadows shadows, Lights lights, Sky sky, Water water
                 case "STORYBOOK" -> 1;
                 case "NATURAL" -> 2;
                 case "PASTEL" -> 3;
+                case "BALANCED" -> 4;
                 default -> 0;
             }, s.getBoolean("BLOOM_ENABLED"), value(s, "BLOOM_STRENGTH"), value(s, "EXPOSURE"), value(s, "SATURATION"),
                 value(s, "PASTEL_STRENGTH"), s.getBoolean("MOTION_BLUR_ENABLED"), value(s, "MOTION_BLUR_STRENGTH")),
