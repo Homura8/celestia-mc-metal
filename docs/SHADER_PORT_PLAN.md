@@ -2,40 +2,52 @@
 
 Audience: the next agent picking this up. Read `AGENTS.md` first (build/test commands, invariants), then this file.
 
-## Start here (state on 2026-11-28, after PR #32)
+## Start here (state on 2026-11-28, after PR #35)
 
 Sections 1–9 below are the original port plan and history; their "current state" notes are dated. This block is current.
+Read `AGENTS.md` first, then this block, then `docs/QA.md`.
 
 - **Releases and PRs:**
-  - The latest release is `0.1.0-alpha.25`. Everything since is under `## Unreleased` in `CHANGELOG.md`.
-  - `main` includes, through PR #32:
-    - multi-pack world packs;
-    - the chunk-edge fix and labPBR;
-    - the renderer audit, with working MetalFX Temporal (PR #31);
-    - the look-polish pass: the Balanced look and a gentler swell (PR #32).
+  - The latest release is `0.1.0-alpha.25` (`mod_version`). Everything since is under `## Unreleased` in `CHANGELOG.md`.
+  - `main` includes, through PR #35:
+    - multi-pack world packs; the chunk-edge fix; labPBR;
+    - the renderer audit, with working MetalFX Temporal (#31);
+    - the Balanced look and a gentler swell (#32);
+    - QA defaulting to the village suite (#33);
+    - faster water reflections (#34);
+    - the sunset fixes for glowing grass edges and shadow acne (#35).
 - **The owner, their machine and how they play:**
-  - An M1 Pro MacBook Pro with a 3024 × 1964 Retina screen; the game window is 3024 × 1744.
+  - An M1 Pro MacBook Pro whose game window is 3024 × 1744.
   - Prism Launcher instance `26.3 Celestia Metal`: Quality preset, 100% render scale (native), 12 chunks, Metal 4, VSync off.
     Read it only, never modify it.
   - A 4K 144 Hz external monitor, where they plan to use MetalFX Temporal.
-  - Their own install keeps the Pastel look and swell 1.3. They like Pastel's softer pastel; Balanced is the default for
-    everyone else.
+  - Their own install keeps the Pastel look and swell 1.3; Balanced is the default for everyone else.
 - **Goals:**
-  1. **60 FPS in usual play at native resolution** on the Mac screen, including built-up areas on servers.
-  2. **Better looks at the same or lower cost.** Ask the owner before any big visual change, and show them A/B images
-     or a GIF.
-- **Where things stand** (village suite, Quality, native; numbers in §11):
-  - Land views run at 63–73 FPS. Waterfront views and rain run at 43–52 FPS.
-  - The water pass costs 9–10 ms whenever water is in view. It is register-bound, and its cost is spread across features
-    (§11 prices).
-  - MetalFX Temporal costs ~5.5 ms at Retina output on the M1 Pro, so on this screen it is slower than native.
-- **Open directions, each waiting on the owner's go-ahead:**
-  - **Tile-memory shading:** shade each pixel once in tile memory, using imageblocks or tile shaders. Cutout foliage defeats
-    Apple's hidden-surface removal, so overlapping leaves and grass are shaded several times over. This is the big
-    Apple-GPU-specific win, and the owner supports optimising for Apple GPUs.
+  1. 60 FPS in usual play at native resolution on the Mac screen, including built-up areas on servers.
+  2. Better looks at the same or lower cost.
+- **Benchmarks** (window in front; Quality, native 3024 × 1744, M1 Pro, 300 frames under a 0.14°/frame pan, 2026-11-28):
+
+  | Scene | FPS | p99 |
+  | --- | --- | --- |
+  | village-noon | 73.3 | 16.3 ms |
+  | village-sunset | 63.5 | 18.0 ms |
+  | village-night | 65.6 | 17.4 ms |
+  | village-high | 53.3 | 21.2 ms |
+  | village-shore | 48.5 | 23.2 ms |
+  | village-shore-sunset | 42.1 | 27.0 ms |
+  | beach | 35.5 | 30.0 ms |
+  | village-rain | 51.5 | 22.5 ms |
+  | nether | 137.8 | 13.1 ms |
+  | end | 168.6 | 6.8 ms |
+
+  Land views clear 60 FPS. Water fills `beach` and `village-shore`, and that is where frames are lost: the water pass costs
+  9–10 ms, of which the reflection march is ~2.8 ms (§11 has the per-stage prices). The Performance preset row is in the
+  README.
+- **Next candidates** (confirm with the owner before starting any of them):
+  - **Water reflection march:** apply the same exact skip to its 128/16-pixel per-lane reads, and remove the crossing re-reads.
+  - **Water shading after the march** (~4 ms): price its stages with `DEV_*` early returns, then optimise without changing the image.
   - **Shore-aware waves:** see "Future features" in §10.
-  - **16-bit maths in water:** looked at and found low-yield. Wave patterns run on world positions up to 2048 blocks, and
-    pre-exposure night radiance would band in 16-bit.
+  - **Tile-memory shading for cutout foliage:** the owner supports Apple-GPU-specific work.
 - **Standing decisions:**
   - Native MSL packs only; Iris stays hidden.
   - The pink-lavender haze stays.
@@ -43,13 +55,16 @@ Sections 1–9 below are the original port plan and history; their "current stat
   - Port Photon code only from MIT commit `26c2906e`; v1.4 is a visual reference only.
 - **Workflow:**
   - Ask before committing, pushing or opening a PR.
-  - After a merge, look at what's next and confirm with the owner before starting.
-  - The owner often works over Remote Control: send images and GIFs with the file tool, and end with a clear question.
+  - After a merge, look at what's next and confirm with the owner.
+  - Ask before any big visual change, and show A/B crops or a GIF.
+  - The owner often works over Remote Control: send images with the file tool, and end with one clear question.
+  - Measure before building: price a change with dev switches first (§11 shows why).
 - **Verify:**
   - Run `JAVA_HOME=/opt/homebrew/opt/openjdk@25 ./gradlew build check runNativeTests`.
-  - Then run the QA harness in the village (`tools/qa/run.sh shots`, `perf`, `profile`; see `docs/QA.md` "Default scenes").
-  - `clean` wipes `build/qa`, including the Photon reference, so restage it as `docs/QA.md` describes.
-  - Keep each `/fill` under 32k blocks.
+  - Then run the QA harness in the village (`tools/qa/run.sh shots`, `perf`, `profile`), with the window in front.
+  - Compare variants A/B/A in one session. For image A/B, use `celestiametal.shade.freezeTime=true`, and crop the full-resolution
+    captures in `build/qa/run/screenshots/`; exports are 1100 px.
+  - `clean` wipes `build/qa`. Keep each `/fill` under 32k blocks.
 - **Known open items:**
   - The first compile of a new world pack pauses the game ~7 s.
   - Packs can't change engine-side passes yet.

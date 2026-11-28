@@ -2,7 +2,21 @@
 
 **An independent, single-JAR, Apple Silicon-first Metal 4 / Metal 3 rendering engine and native MSL shader ecosystem for Minecraft: Java Edition 26.3 (Fabric).**
 
-Celestia Metal replaces Minecraft's legacy OpenGL path with Apple's native **Metal 4** (`MTL4CommandQueue`, `MTL4ArgumentTable`, `MTL4Compiler`, `MTLResidencySet`) on macOS 26+ and **Metal 3** on macOS 15+, paired with an extensible **native Metal Shading Language (MSL) shader pack system**, **MetalFX Spatial upscaling and TAAU**, **HDR / EDR (Display P3)** support, **120 Hz ProMotion** awareness, and a **CelestiaGlow**-inspired frosted observatory UI.
+Celestia Metal replaces Minecraft's legacy OpenGL path with Apple's native **Metal 4** (`MTL4CommandQueue`, `MTL4ArgumentTable`, `MTL4Compiler`, `MTLResidencySet`) on macOS 26+ and **Metal 3** on macOS 15+, paired with an extensible **native Metal Shading Language (MSL) shader pack system**, **MetalFX Temporal and Spatial upscaling and TAAU**, **HDR / EDR (Display P3)** support, **120 Hz ProMotion** awareness, and a **CelestiaGlow**-inspired frosted observatory UI.
+
+---
+
+## Showcase
+
+Celestia Native on an M1 Pro at native 3024 × 1744, Quality preset, Balanced look. The captures come from the in-game QA
+harness (`tools/qa/run.sh shots`) in a natural plains village on the coast.
+
+| | |
+| --- | --- |
+| ![Plains village by the sea at noon](docs/images/village.jpg) | ![Waterfront at sunset with reflections](docs/images/waterfront-sunset.jpg) |
+| ![Village street at sunset](docs/images/village-sunset.jpg) | ![Village at night under an aurora](docs/images/village-night.jpg) |
+| ![Sandbar and dock at sunset](docs/images/beach-sunset.jpg) | ![Underwater sunlight shafts](docs/images/underwater.jpg) |
+| ![Nether lava sea](docs/images/nether.jpg) | ![The End](docs/images/end.jpg) |
 
 ---
 
@@ -15,12 +29,21 @@ Celestia Metal replaces Minecraft's legacy OpenGL path with Apple's native **Met
   - Native multi-draw batching, indirect draws, persistent `MTLBinaryArchive` pipeline caching, and deferred resource retirement tied to `MTLSharedEvent` completion.
   - Automatic SPIR-V → MSL 3.1 translation via LWJGL SPIRV-Cross for vanilla & modded RenderPearl pipelines, with selective relaxed IEEE math for terrain shaders.
 - **Apple Silicon Hardware Features**:
-  - **MetalFX Spatial Upscaling and TAAU** with optional **Auto Render Scale** (65%–100%).
+  - **MetalFX Temporal, MetalFX Spatial and Celestia TAAU upscaling** with optional **Auto Render Scale** (65%–100%). Temporal suits large external displays. On a Retina laptop screen, native resolution or TAAU is faster, because MetalFX Temporal costs ~5.5 ms at 3024 × 1744 on an M1 Pro.
   - **HDR / EDR Highlights**: `RGBA16Float` Extended Linear Display P3 swapchain with configurable peak luminance.
   - **ProMotion & Thermal / Battery Awareness**: Detects 120 Hz ProMotion displays, macOS thermal state, and Low Power Mode.
   - **Startup Crash Guard**: Protects against crash loops without falsely locking the game into OpenGL if a crash wasn't caused by Metal.
 - **Extensible Native MSL Shader Pack Ecosystem (API v1)**:
-  - **Celestia Native** includes an atmospheric sky, two-cascade sun and moon shadows, SSAO, water refraction and reflections, volumetric clouds and light, surface weather, bloom, and filmic tone mapping.
+  - **Celestia Native** includes:
+    - an atmospheric sky with stars, the Milky Way and aurora;
+    - two-cascade sun and moon shadows and SSAO;
+    - water with refraction, screen-space reflections, caustics, foam, swell, underwater light shafts and an optional physically correct Snell's window;
+    - volumetric clouds, including cumulus congestus, and volumetric light;
+    - surface weather;
+    - dynamic and coloured block light;
+    - Nether and End looks;
+    - camera motion blur, bloom, and filmic tone mapping.
+  - Five color looks: **Balanced** (default), Pastel, Epic, Storybook and Natural.
   - Celestia Native reads **labPBR 1.3** materials from active resource packs for vanilla and Sodium terrain. The **Materials** tab controls this feature.
   - Apply **Performance**, **Balanced**, **Quality**, or **Ultra** from Shader Packs, or tune individual effects in Shader Options. Changes take effect in the current world.
   - Install other native MSL packs as folders or `.zip` files in `shaderpacks/`, and switch packs in game without restarting. A **world pack** (`"kind": "world"`) replaces the world renderer's shaders file by file over Celestia Native's; see [SHADER_PACK_SPEC.md](SHADER_PACK_SPEC.md) §5 and the starter pack in [examples/shaderpacks/celestia-example-world](examples/shaderpacks/celestia-example-world).
@@ -50,18 +73,34 @@ Celestia Metal replaces Minecraft's legacy OpenGL path with Apple's native **Met
 
 ---
 
-## Measured Apple Silicon GPU Benchmarks (Synthetic Post + Lighting Frame)
+## In-Game Benchmarks (Apple M1 Pro, native 3024 × 1744)
 
-Measured via `tools/test_metal_backend.m` (`./gradlew runNativeTests`) on an **Apple M1 Pro (macOS 27.2.1, 120 Hz ProMotion, 16.00x EDR headroom)** rendering full **3024 × 1752** offscreen frames (20 measured iterations after 4 warmup frames, averaging GPU timestamps from `MTL4CommitFeedback` / `MTLCommandBuffer`):
+Measured with the in-game QA harness: 300 frames per scene under a slow camera pan, game window in front, Metal 4, 12 chunks,
+2026-11-28. The village scenes are a natural plains village on the coast of the QA seed.
 
-| Legacy Shader Fixture | Metal API | Resolution | Avg GPU Time | Post + Lighting Ceiling |
-| --- | --- | --- | --- | --- |
-| **Full fixture** | **Metal 4** | 3024 × 1752 | **3.363 ms** | **297.3 FPS** |
-| **Full fixture** | Metal 3 | 3024 × 1752 | 3.486 ms | 286.9 FPS |
-| **Minimal fixture** | **Metal 4** | 3024 × 1752 | **2.474 ms** | **404.2 FPS** |
-| **Minimal fixture** | Metal 3 | 3024 × 1752 | 2.567 ms | 389.6 FPS |
+| Scene | Quality | Performance |
+| --- | --- | --- |
+| Village, noon | 73.3 FPS | 96.9 FPS |
+| Village, sunset | 63.5 FPS | 84.0 FPS |
+| Village, night | 65.6 FPS | — |
+| Over the bay | 53.3 FPS | 76.7 FPS |
+| Waterfront, noon | 48.5 FPS | 77.2 FPS |
+| Waterfront, sunset | 42.1 FPS | 67.4 FPS |
+| Beach (mostly water) | 35.5 FPS | — |
+| Village, rain | 51.5 FPS | 69.5 FPS |
+| Nether | 137.8 FPS | — |
+| The End | 168.6 FPS | — |
 
-> These legacy fixtures live in `tools/fixtures/shaderpacks/`. The measurements time the full multi-pass compute + fullscreen shader pipeline (sky LUT, deferred lighting with 2-cascade PCF + SSAO, water reflections/refraction, half-res volumetric clouds, bloom downsample, and HDR tonemap composite) on synthetic G-buffer targets. Full in-game frame rates also depend on CPU chunk meshing, terrain vertex throughput, entity count, and render distance.
+Land views clear 60 FPS at native resolution on Quality. Water is the main cost, and Performance clears 60 FPS everywhere
+measured. Reproduce with:
+
+```sh
+JAVA_HOME=/opt/homebrew/opt/openjdk@25 tools/qa/run.sh shots \
+  -PqaJvm=celestiaqa.preset=Quality,celestiaqa.renderScale=100,celestiaqa.measureFrames=300,celestiaqa.timedPanYaw=0.14
+```
+
+See [docs/QA.md](docs/QA.md). `./gradlew runNativeTests` also runs synthetic 3024 × 1752 GPU benchmarks of the legacy
+shader fixtures in `tools/fixtures/shaderpacks/`.
 
 ---
 
@@ -77,7 +116,7 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@25 ./gradlew build check
 JAVA_HOME=/opt/homebrew/opt/openjdk@25 ./gradlew runNativeTests
 ```
 
-The output single JAR is written to `build/libs/celestia-metal-0.1.0-alpha.15.jar`.
+The output single JAR is written to `build/libs/celestia-metal-<version>.jar` (`mod_version` in `gradle.properties`).
 
 ---
 
@@ -87,6 +126,8 @@ The output single JAR is written to `build/libs/celestia-metal-0.1.0-alpha.15.ja
 - [DEVELOPMENT.md](DEVELOPMENT.md) — Engineering retrospective, design rationale, and debugging postmortems across `0.1.0-alpha.1`–`0.1.0-alpha.8`.
 - [AGENTS.md](AGENTS.md) — Practical guide for AI agents and contributors (commands, invariants, FFM & Metal 4 pitfalls).
 - [SHADER_PACK_SPEC.md](SHADER_PACK_SPEC.md) — Celestia Shader Pack API v1 guide for writing and porting native MSL shader packs (including Celestia Shaders).
+- [docs/QA.md](docs/QA.md): the in-game QA harness (scenes, modes, profiling, image measurements).
+- [docs/SHADER_PORT_PLAN.md](docs/SHADER_PORT_PLAN.md): the current state, roadmap and handoff notes, plus the shader-port history.
 - [CREDITS.md](CREDITS.md) — Explicit attributions and licenses for the Apple Silicon Minecraft Metal ecosystem.
 - [CHANGELOG.md](CHANGELOG.md) — Release history.
 
