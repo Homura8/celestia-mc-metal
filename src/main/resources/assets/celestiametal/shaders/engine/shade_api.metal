@@ -162,7 +162,8 @@ struct ShadeFrame {
 	int4 flags;                 // 960
 	int4 flags2;                // 976
 	float4 sunPath;             // 992
-	float4 wxLine;              // 1008 x distance to still water directly below the eye near the camera plane, yzw reserved
+	float4 wxLine;              // 1008 x distance to still water directly below the eye near the camera plane, yz the grass block side
+	                            //      overlay's atlas uv origin, w its size (half2 bits); cutout on a solid block, lit as one (0: unknown)
 };
 
 static_assert(sizeof(ShadeFrame) == 1024, "ShadeFrame size must be 1024 bytes");

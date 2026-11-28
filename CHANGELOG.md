@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **No more glowing grass edges at sunset.** Celestia lit the grass block's side overlay as foliage, because it is a cutout
+  quad like leaves. That meant light from behind and no self-shadowing, so when looking toward a low sun it drew bright yellow
+  lines along grass edges facing away from it. The overlay's atlas rect is now passed to the terrain shader (`ShadeFrame.wxLine.yzw`),
+  and that sprite is lit like the solid block it belongs to.
+- **No more shadow acne on surfaces a low sun grazes** (striped sand, paths and walls at sunset, zigzags on the pond wall).
+  The shadow lookup's normal offset rises from 0.75 to 2 shadow texels, and its slope term's limit from 12 to 30 (about 2°
+  above a face instead of 5°). Contact shadows at noon look unchanged.
+
 - **Faster water reflections, same image.** The reflection march's full-resolution search now first checks a dilated 8-pixel
   depth level (a new `Pyr8Ring` pass, built from blocks the pyramid already made). It skips the four depth reads of a half
   interval its ray is provably in front of, which is exact: the same hits. On an M1 Pro at native 3024 × 1744 (Quality), the

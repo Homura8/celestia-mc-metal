@@ -301,8 +301,14 @@ static half shadeShadow(depth2d_array<float> map, sampler cmp, constant ShadeFra
 	float3 L = f.lightDirWorld.xyz;
 	float nl = thin ? 1.0 : dot(float3(n), L);
 	if (nl <= 0.0) return half(1.0);
-	float tanT = clamp(sqrt(max(1.0 - nl * nl, 0.0)) / max(nl, 0.02), 0.0, 12.0);
-	float3 dir = thin ? L * 1.5 : float3(n) * 0.75 + L * (0.5 + 0.75 * tanT);
+#ifndef SHADE_SHADOW_TAN_MAX
+#define SHADE_SHADOW_TAN_MAX 30.0
+#endif
+	float tanT = clamp(sqrt(max(1.0 - nl * nl, 0.0)) / max(nl, 0.02), 0.0, SHADE_SHADOW_TAN_MAX);
+#ifndef SHADE_SHADOW_NORMAL_K
+#define SHADE_SHADOW_NORMAL_K 2.0
+#endif
+	float3 dir = thin ? L * 1.5 : float3(n) * SHADE_SHADOW_NORMAL_K + L * (0.5 + 0.75 * tanT);
 	float texelUv = f.shadowParams.x;
 	float softness = f.shadowParams.w > 0.0 ? f.shadowParams.w : 1.0;
 	float m0, m1;

@@ -47,6 +47,13 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
 	bool axisAligned = max(max(an.x, an.y), an.z) > half(0.92);
 	bool thin = isCutout && !axisAligned;
 	bool foliage = isCutout && axisAligned;
+	// (look-polish 2) the grass block's side overlay is a cutout quad on a solid block: lit as the block, not as a leaf (backlit
+	// foliage drew bright yellow lines along grass edges facing away from a low sun)
+	if (foliage && f.wxLine.w != 0.0) {
+		float2 o = f.wxLine.yz, sz = float2(as_type<half2>(f.wxLine.w));
+		float2 q = (uv - o) / max(sz, float2(1e-6));
+		if (all(q >= 0.0) && all(q <= 1.0)) foliage = false;
+	}
 	bool pbr = shadeMaterialEnabled(L);
 	ShadeMaterial material;
 	if (pbr) material = shadeMaterial(n, float3(albedo), uv, dpx, dpy, dfdx(uv), dfdy(uv), L, sr);

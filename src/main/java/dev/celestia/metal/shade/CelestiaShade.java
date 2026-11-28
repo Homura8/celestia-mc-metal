@@ -448,6 +448,7 @@ public final class CelestiaShade {
             ? WaterFrame.surfaceAbove(level, x, y, z) : 0f;
         frame.waterSurfaceBelow = frame.fogType == ShadeFrame.FOG_AIR && frame.dimension == ShadeFrame.DIM_OVERWORLD
             && applied.water().enabled() ? WaterFrame.surfaceJustBelow(level, camera.blockPos, y) : 0f;
+        solidCutoutRect(frame.solidCutoutRect);
         Vector4f fogColor = fog.color;
         frame.fogColor[0] = fogColor.x;
         frame.fogColor[1] = fogColor.y;
@@ -890,6 +891,29 @@ public final class CelestiaShade {
         activeBloomLevels = count;
         bloomWidth = w;
         bloomHeight = h;
+    }
+
+    private static final net.minecraft.resources.Identifier GRASS_SIDE_OVERLAY =
+        net.minecraft.resources.Identifier.withDefaultNamespace("block/grass_block_side_overlay");
+
+    /**
+     * The grass block side overlay's atlas rect into out (u0, v0, du, dv), or zeros. Its quad is cutout like leaves, but on a solid
+     * block: the terrain shader must not light it as foliage (lit from behind, it drew bright lines along block edges facing away
+     * from a low sun).
+     */
+    private static void solidCutoutRect(float[] out) {
+        java.util.Arrays.fill(out, 0f);
+        try {
+            var atlas = Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(net.minecraft.data.AtlasIds.BLOCKS);
+            var sprite = atlas.getSprite(GRASS_SIDE_OVERLAY);
+            if (sprite == null || sprite == atlas.missingSprite()) return;
+            out[0] = sprite.getU0();
+            out[1] = sprite.getV0();
+            out[2] = sprite.getU1() - sprite.getU0();
+            out[3] = sprite.getV1() - sprite.getV0();
+        } catch (RuntimeException e) {
+            java.util.Arrays.fill(out, 0f);
+        }
     }
 
     /**

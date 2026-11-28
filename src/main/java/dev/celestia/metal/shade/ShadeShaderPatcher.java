@@ -183,6 +183,11 @@ public final class ShadeShaderPatcher {
             if (!extraDefines.endsWith("\n")) sb.append('\n');
         }
         sb.append(worldPackDefines);
+        // (dev, look and bias A/B) -Dcelestiametal.shade.devDefine=NAME=VALUE;...: #defines in front of every world shader
+        for (String d : System.getProperty("celestiametal.shade.devDefine", "").split(";")) {
+            String[] kv = d.split("=", 2);
+            if (kv[0].matches("[A-Z0-9_]+")) sb.append("#define ").append(kv[0]).append(' ').append(kv.length > 1 ? kv[1] : "1").append('\n');
+        }
         sb.append(resource("shade_slots.metal")).append('\n');
         sb.append(resource("shade_api.metal")).append('\n');
         sb.append(resource("shade_look.metal")).append('\n');

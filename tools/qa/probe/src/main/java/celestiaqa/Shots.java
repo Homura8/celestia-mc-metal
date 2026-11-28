@@ -24,6 +24,8 @@ final class Shots {
         new Scene("pond-noon", 6000, "clear", "tp @a 0.5 149.3 -14.5 0 -8"),
         new Scene("pond-sunset", 12300, "clear", "tp @a 0.5 149.3 -14.5 -90 -6"),
         new Scene("pond-night", 18000, "clear", "tp @a 0.5 149.3 -14.5 0 -10"),
+        // the spawn spot looking into the pond's corner at sunset: the low sun grazes the north wall edge-on (shadow acne's worst case)
+        new Scene("pond-corner-sunset", 12300, "clear", "tp @a 0.5 150.5 0.5 135 6"),
         new Scene("underwater", 1500, "clear", "tp @a 0.5 144.0 -14.5 0 -4"),
         new Scene("underwater-noon", 6000, "clear", "tp @a 0.5 143.0 -14.5 0 0"), // (sun overhead: the shafts come down)
         new Scene("underwater-up", 6000, "clear", "tp @a 0.5 143.0 -14.5 0 -45"),
@@ -39,6 +41,8 @@ final class Shots {
         new Scene("village-shore", 6000, "clear", "tp @a -330.5 67 240.5 135 6"),
         // the sandbar next to the village: shallow water over sand (shore foam, caustics, the waves' travel direction)
         new Scene("beach", 6000, "clear", "tp @a -380.5 72 232.5 100 25"),
+        new Scene("beach-sunset", 12300, "clear", "tp @a -380.5 72 232.5 100 25"), // (grazing sun on the sand)
+        new Scene("village-sunset-back", 12300, "clear", "tp @a -330.5 65 256.5 -90 4"), // (sun behind the camera: faces away from it)
         new Scene("village-shore-sunset", 12300, "clear", "tp @a -330.5 67 240.5 135 6"),
         new Scene("vista-noon", 6000, "clear", "tp @a 40.5 210 40.5 135 12"),
         new Scene("vista-sunset", 12300, "clear", "tp @a 40.5 210 40.5 135 12"),
