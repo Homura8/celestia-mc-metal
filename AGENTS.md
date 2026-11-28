@@ -26,6 +26,7 @@ Practical guidance for AI agents and contributors working on **Celestia Metal** 
 - **Mixins (`src/main/java/dev/celestia/metal/mixin/`)**: Entry points into MC 26.3 (`PreferredGraphicsApiMixin`, `GameRendererMixin`, `GuiMixin`, `HudMixin`, `KeyboardHandlerMixin`, `MinecraftMixin`, `DebugScreenEntriesMixin`, `DebugScreenEntryListMixin`) and world render scale (`dev.celestia.metal.render.WorldRenderScale`).
 - **Shader Packs (`src/main/java/dev/celestia/metal/shader/` & `src/main/resources/assets/celestiametal/`)**: Native MSL packs. World packs (`"kind": "world"`) replace the world renderer's MSL: Celestia Native's sources are `shaderpacks/celestia-native/shaders/`, the engine-owned ABI and kernels `shaders/engine/` (`shade_api.metal`, `shade_slots.metal`, light/TAA kernels), resolved by `ShadeShaderPatcher.resource`. Pass packs use `celestia_common.metal`. The Iris/OptiFine parser/bridge (`IrisPackParser`, `IrisGlslBridge`) is hidden unless `-Dcelestiametal.irisPacks=true`. Spec: `SHADER_PACK_SPEC.md` (§5 world packs); example: `examples/shaderpacks/celestia-example-world`.
 - **CelestiaGlow UI (`src/main/java/dev/celestia/metal/ui/`) & Perf (`dev.celestia.metal.perf`)**: Tabbed video settings, shader pack/option screens, performance engine, and HUD pill.
+- **QA**: `tools/qa/` (in-game probe and runner, `docs/QA.md`) and `tools/qa/analyze/` (image measurements).
 - **Tests & Benchmarks**: `src/test/java/dev/celestia/metal/` (JUnit 5 + FFM) and `tools/test_metal_backend.m` (live Metal 4 & Metal 3 GPU verification + 3024 × 1752 synthetic benchmark).
 
 ---
@@ -56,7 +57,10 @@ ls "$(xcrun --show-sdk-path)/System/Library/Frameworks/Metal.framework/Headers/"
 
 ## QA harness
 
-- Run `tools/qa/run.sh shots,frames` for scripted screenshots and a frame-by-frame pond descent. Use `profile` for Metal 4 pass breakdowns, `perf` for A/B/A GPU timing, `lights` for the colour and dynamic light rooms, and `packs` for live world-pack switching. See [docs/QA.md](docs/QA.md) for mode filters, output locations and Iris reference runs.
+- **Judge looks and frame rate in the village suite**, the default for `shots`, `perf` and `profile`. It is a real plains village on the coast of the QA seed: houses, foliage, docks, shallow water, rain. The floating test pond is a water-only worst case; use it (`pond-*`, `underwater*`, the `frames` descent) only for water-specific work. `celestiaqa.scenes=all` runs every scene.
+- Measure on the owner's settings unless told otherwise: `-PqaJvm=celestiaqa.preset=Quality,celestiaqa.renderScale=100`, which is native 3024 × 1744 on the M1 Pro, 12 chunks, Metal 4. Add `celestiaqa.measureFrames=300,celestiaqa.timedPanYaw=0.14` for FPS under a slow pan.
+- Modes: `shots` for screenshots, `profile` for Metal 4 pass breakdowns (`-PqaProfile=120`), `perf` for A/B/A GPU timing, `lights` for the light rooms, `packs` for world-pack switching, `scales` for upscaler switching, and `frames` for the pond descent. See [docs/QA.md](docs/QA.md) for options, output locations and Iris reference runs.
+- For animated effects (waves, caustics, shafts), capture a burst (`celestiaqa.repeat=40,celestiaqa.repeatTicks=1`). Then measure it, or turn it into a GIF for the owner with `tools/qa/analyze/` (`motion`, `gif`, `stats`, `sharp`, `crop`, `montage`). Stills hide motion direction.
 - Read `summary.txt` first and open `review.jpg` when images are needed. Open individual captures only for specific follow-up.
 - Keep QA in `build/qa/` so the runner can reuse the compiled Metal pipeline cache and QA world template. Use the Gradle daemon for repeated runs.
 - Keep every `/fill` below 32,000 blocks. Compare changed screenshot settles against the 240-tick baseline and preserve the light propagation and performance sampling windows.

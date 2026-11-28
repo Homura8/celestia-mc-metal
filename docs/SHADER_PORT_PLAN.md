@@ -2,35 +2,59 @@
 
 Audience: the next agent picking this up. Read `AGENTS.md` first (build/test commands, invariants), then this file.
 
-## Start here (state on 2026-11-28)
+## Start here (state on 2026-11-28, after PR #32)
 
 Sections 1–9 below are the original port plan and history; their "current state" notes are dated. This block is current.
 
-- **Latest release:** `0.1.0-alpha.25` (`mod_version` in `gradle.properties`). Work since then is under `## Unreleased` in `CHANGELOG.md`.
-- **Merged work:** `main` includes native world-pack switching, the chunk-edge fix, and labPBR terrain materials through PR #30.
-- **What multi-pack added:**
-  - Celestia Native's MSL lives in `src/main/resources/assets/celestiametal/shaderpacks/celestia-native/shaders/`.
-  - The engine-owned ABI lives in `shaders/engine/`: `shade_api.metal` (structs), slots, vanilla uniforms, light/TAA kernels.
-  - **Load world MSL only via `ShadeShaderPatcher.resource(name)`.**
-  - The spec is `SHADER_PACK_SPEC.md` §5; AGENTS.md invariant 10 has the rules.
-- **Owner priorities:** the ordered list in §10 is complete. See §11 for the renderer audit findings.
+- **Releases and PRs:**
+  - The latest release is `0.1.0-alpha.25`. Everything since is under `## Unreleased` in `CHANGELOG.md`.
+  - `main` includes, through PR #32:
+    - multi-pack world packs;
+    - the chunk-edge fix and labPBR;
+    - the renderer audit, with working MetalFX Temporal (PR #31);
+    - the look-polish pass: the Balanced look and a gentler swell (PR #32).
+- **The owner, their machine and how they play:**
+  - An M1 Pro MacBook Pro with a 3024 × 1964 Retina screen; the game window is 3024 × 1744.
+  - Prism Launcher instance `26.3 Celestia Metal`: Quality preset, 100% render scale (native), 12 chunks, Metal 4, VSync off.
+    Read it only, never modify it.
+  - A 4K 144 Hz external monitor, where they plan to use MetalFX Temporal.
+  - Their own install keeps the Pastel look and swell 1.3. They like Pastel's softer pastel; Balanced is the default for
+    everyone else.
+- **Goals:**
+  1. **60 FPS in usual play at native resolution** on the Mac screen, including built-up areas on servers.
+  2. **Better looks at the same or lower cost.** Ask the owner before any big visual change, and show them A/B images
+     or a GIF.
+- **Where things stand** (village suite, Quality, native; numbers in §11):
+  - Land views run at 63–73 FPS. Waterfront views and rain run at 43–52 FPS.
+  - The water pass costs 9–10 ms whenever water is in view. It is register-bound, and its cost is spread across features
+    (§11 prices).
+  - MetalFX Temporal costs ~5.5 ms at Retina output on the M1 Pro, so on this screen it is slower than native.
+- **Open directions, each waiting on the owner's go-ahead:**
+  - **Tile-memory shading:** shade each pixel once in tile memory, using imageblocks or tile shaders. Cutout foliage defeats
+    Apple's hidden-surface removal, so overlapping leaves and grass are shaded several times over. This is the big
+    Apple-GPU-specific win, and the owner supports optimising for Apple GPUs.
+  - **Shore-aware waves:** see "Future features" in §10.
+  - **16-bit maths in water:** looked at and found low-yield. Wave patterns run on world positions up to 2048 blocks, and
+    pre-exposure night radiance would band in 16-bit.
 - **Standing decisions:**
   - Native MSL packs only; Iris stays hidden.
-  - The pink-lavender haze stays (Pastel look).
-  - Physically correct options default on: Snell's window is on.
+  - The pink-lavender haze stays.
+  - Physically correct options default on (Snell's window is on).
   - Port Photon code only from MIT commit `26c2906e`; v1.4 is a visual reference only.
 - **Workflow:**
-  - Ask before committing or pushing.
-  - After a merge, look at what is next and confirm with the owner.
-  - Never modify the owner's PrismLauncher instances. Only copy from them, read-only.
+  - Ask before committing, pushing or opening a PR.
+  - After a merge, look at what's next and confirm with the owner before starting.
+  - The owner often works over Remote Control: send images and GIFs with the file tool, and end with a clear question.
 - **Verify:**
-  - Run `JAVA_HOME=/opt/homebrew/opt/openjdk@25 ./gradlew clean build check runNativeTests`. `clean` wipes `build/qa`, including `build/qa/reference-photon`; restage it from the owner's Photon instance as `docs/QA.md` describes.
-  - Then use the QA harness (`docs/QA.md`): `tools/qa/run.sh shots`; `packs` for pack switching; `perf` and `profile` for cost. Keep `/fill` under 32k blocks.
+  - Run `JAVA_HOME=/opt/homebrew/opt/openjdk@25 ./gradlew build check runNativeTests`.
+  - Then run the QA harness in the village (`tools/qa/run.sh shots`, `perf`, `profile`; see `docs/QA.md` "Default scenes").
+  - `clean` wipes `build/qa`, including the Photon reference, so restage it as `docs/QA.md` describes.
+  - Keep each `/fill` under 32k blocks.
 - **Known open items:**
   - The first compile of a new world pack pauses the game ~7 s.
   - Packs can't change engine-side passes yet.
-  - A glass-specific underwater flash outside the waterline transition still needs a reproducer.
-  - The cost of the per-pixel `shadeLdrToHdr` fallback in the Nether and End still needs an isolated measurement.
+  - A glass-specific underwater flash still needs a reproducer.
+  - The Nether and End `shadeLdrToHdr` fallback cost hasn't been measured.
 
 ## 0. Goal and constraints
 
