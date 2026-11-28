@@ -51,9 +51,17 @@ final class Shots {
 
     private Shots() {}
 
+    /**
+     * The default suite (celestiaqa.scenes unset): the real plains village, which is what the owner plays in (houses, foliage,
+     * water, docks). The floating test pond and the vistas are worst cases and special views: name them, or "all" for every scene.
+     */
+    static final List<String> DEFAULT_SCENES = List.of("village-noon", "village-sunset", "village-night", "village-high",
+        "village-shore", "village-shore-sunset", "beach", "village-rain");
+
     static List<Scene> selected() {
         String f = System.getProperty("celestiaqa.scenes", "");
-        if (f.isEmpty()) return SCENES;
+        if (f.isEmpty()) return SCENES.stream().filter(sc -> DEFAULT_SCENES.contains(sc.name())).toList();
+        if (f.equals("all")) return SCENES;
         Set<String> want = Arrays.stream(f.split(",", -1)).map(String::trim).collect(Collectors.toSet());
         List<Scene> selected = SCENES.stream().filter(sc -> want.contains(sc.name())).toList();
         if (selected.size() != want.size()) throw new IllegalArgumentException("Unknown QA scene in " + f);
@@ -78,7 +86,9 @@ final class Shots {
     static Qa.Step settle(Scene sc) {
         boolean overworld = sc.dimension() == Level.OVERWORLD;
         boolean rain = overworld && "rain".equals(sc.weather());
-        return Qa.settle(rain ? 240 : (overworld ? 40 : 80), 600, mc -> {
+        // (the village and the beach are ~435 blocks from spawn: their chunks generate and load after the teleport)
+        boolean far = sc.name().startsWith("village") || sc.name().equals("beach");
+        return Qa.settle(rain ? 240 : (far ? 160 : overworld ? 40 : 80), 600, mc -> {
             if (mc.level == null || mc.level.dimension() != sc.dimension()) return false;
             if (!overworld) return true;
             float r = mc.level.getRainLevel(1f);

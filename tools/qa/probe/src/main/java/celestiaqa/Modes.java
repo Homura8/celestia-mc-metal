@@ -31,7 +31,8 @@ final class Modes {
 
     private static List<Shots.Scene> timingScenes() {
         return System.getProperty("celestiaqa.scenes", "").isBlank()
-            ? List.of(Shots.byName("pond-morning"), Shots.byName("underwater"), Shots.byName("vista-sunset"))
+            // (real play: the village on land, its waterfront and rain; the pond is a water-only worst case)
+            ? List.of(Shots.byName("village-noon"), Shots.byName("village-shore"), Shots.byName("village-rain"))
             : Shots.selected();
     }
 

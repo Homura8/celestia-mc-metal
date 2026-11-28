@@ -12,6 +12,22 @@ The first launch creates the `CelestiaQA` world with seed `20261128` and builds 
 
 Set `QA_LABEL` to name the output directory under `build/qa/`. The default label includes the modes and a timestamp. Each output directory contains `client.log` and any PNGs resized to a maximum of 1100 pixels on the long edge. The game directory retains its capture PNGs until the next launch. On Retina displays, descent frames can be downsampled before PNG encoding while still meeting the exported resolution. The runner waits for screenshot writes and checks the number of files before exporting. Keep the game window visible for rendering and frame capture.
 
+## Default scenes: the village suite
+
+Judge the look and the frame rate in the village first. It is what the owner plays: a natural plains village on the coast at
+(-352, 256), 435 blocks from spawn, with houses, foliage, docks and shallow water. The floating test pond, at y 141–147
+near spawn, is a water-only worst case. Use it for water-specific work (`pond-*`, `underwater*`, the `frames` descent), not
+for verdicts about real play. The vistas show distance haze and the sky. `shots`, `perf` and `profile` default to village
+scenes. Village and beach settles wait at least 160 ticks, so their chunks generate and load after the teleport.
+
+Measure on the owner's settings unless a change targets another preset: Quality, 100% render scale (native 3024 × 1744
+on the M1 Pro), 12 chunks and Metal 4. For example:
+
+```sh
+QA_LABEL=village tools/qa/run.sh shots -PqaJvm=celestiaqa.preset=Quality,celestiaqa.renderScale=100,celestiaqa.measureFrames=300,celestiaqa.timedPanYaw=0.14
+QA_LABEL=village-prof tools/qa/run.sh profile -PqaProfile=120 -PqaJvm=celestiaqa.preset=Quality,celestiaqa.renderScale=100
+```
+
 ## Reviewing results with agents
 
 The runner prints a compact summary and saves it to `summary.txt`. Set `QA_VERBOSE=1` when you need the live client log. When visual inspection is needed, open the single `review.jpg` contact sheet. Use its labels to open individual PNGs for specific findings. The full capture sequence, pass breakdowns and client log are available for targeted follow-up.
@@ -20,7 +36,7 @@ The runner prints a compact summary and saves it to `summary.txt`. Set `QA_VERBO
 
 | Mode | Coverage | Output |
 | --- | --- | --- |
-| `shots` | Twenty-three fixed views: the test pond, landscape, underwater, a real plains village on the coast (houses, paths, grass, trees, docks and the bay), Nether and End. Rain runs last in the Overworld. | One PNG per scene, with the wait and GPU time in the log. |
+| `shots` | By default, the eight **village suite** views: the real plains village on the coast (houses, paths, grass, trees, docks and the bay) at noon, sunset and night, from above, at the waterfront (noon and sunset), on the beach sandbar, and in rain. `celestiaqa.scenes=all` runs all twenty-three views, including the test pond, landscape vistas, underwater, Nether and End. Rain runs last in the Overworld. | One PNG per scene, with the wait and GPU time in the log. |
 | `profile` | Metal 4 per-encoder timing for each scene and debug token. The runner disables pass merging for these measurements. | `profile.tsv` with the last full `[GPU]` report from each marker window. |
 | `perf` | Ultra versus 12 feature overrides, the other three presets and pack off. Each option change settles for 70 ticks, followed by 100 GPU samples. | `perf.txt` with the comparison median, the average of the surrounding Ultra medians and the signed delta, plus an Ultra PNG per scene. |
 | `lights` | Six coloured block emitters, a held torch, blaze and dropped glowstone, light toggles, debug views and preset comparisons in sealed rooms. | `lights-*.png` and FPS, average GPU time and active light counts in the log. |
@@ -28,7 +44,7 @@ The runner prints a compact summary and saves it to `summary.txt`. Set `QA_VERBO
 | `scales` | On the same sunset camera, switch from native to TAAU, MetalFX Spatial, MetalFX Temporal and back to native. Verify the active upscale path and the sky gradient after each switch. | Five `scales-*.png` captures and sky gradient measurements in the log. |
 | `frames` | Spectator descent from above the pond surface, lowering the camera 0.012 blocks per rendered frame. | 180 sequential PNGs by default. |
 
-`profile` defaults to pond morning, underwater and vista sunset, as does `perf`. Profiling waits `2 * every + 5` rendered frames per token. The first report can include submits from before the switch, so the table uses the last report before the next marker. Run `perf` separately for production timing with normal encoder settings. Adjacent A/B/A comparisons share the intervening Ultra window. Both sides of every comparison still use locally measured Ultra medians.
+`profile` and `perf` default to `village-noon`, `village-shore` and `village-rain`. Profiling waits `2 * every + 5` rendered frames per token. The first report can include submits from before the switch, so the table uses the last report before the next marker. Run `perf` separately for production timing with normal encoder settings. Adjacent A/B/A comparisons share the intervening Ultra window. Both sides of every comparison still use locally measured Ultra medians.
 
 ```sh
 QA_LABEL=fast tools/qa/run.sh shots
@@ -45,7 +61,7 @@ Use `QA_RESOURCE_PACK` to stage and enable a resource-pack directory containing 
 with a compatible resource pack and repeat with `-PqaOptions=LAB_PBR=false`. Include `profile` in both runs to compare GPU
 pass timings with the same pack and camera.
 
-Use `celestiaqa.repeat=N` (and `celestiaqa.repeatTicks`, default 10) for a burst of N shots per scene, for animated effects such as waves, caustics and underwater shafts. Use `celestiaqa.scenes` to select comma-separated scene names in their declared order. The twenty-three names are `pond-morning`, `pond-noon`, `pond-sunset`, `pond-night`, `underwater`, `underwater-noon`, `underwater-up`, `ground-noon`, `village-noon`, `village-sunset`, `village-night`, `village-high`, `village-shore`, `village-shore-sunset`, `beach`, `vista-noon`, `vista-sunset`, `vista-up`, `vista-night`, `vista-rain`, `village-rain`, `nether` and `end`. Other JVM properties include `celestiaqa.preset` (default Ultra), `celestiaqa.pack=off`, `celestiaqa.debug=<view>` and `celestiaqa.prefix=<name>`. Pass shader overrides with a dedicated Gradle property, for example `-PqaOptions=GOD_RAYS=false,BLOOM_ENABLED=false`.
+Use `celestiaqa.repeat=N` (and `celestiaqa.repeatTicks`, default 10) for a burst of N shots per scene, for animated effects such as waves, caustics and underwater shafts. Use `celestiaqa.scenes` to select comma-separated scene names in their declared order. `all` selects every scene. The twenty-three names are `pond-morning`, `pond-noon`, `pond-sunset`, `pond-night`, `underwater`, `underwater-noon`, `underwater-up`, `ground-noon`, `village-noon`, `village-sunset`, `village-night`, `village-high`, `village-shore`, `village-shore-sunset`, `beach`, `vista-noon`, `vista-sunset`, `vista-up`, `vista-night`, `vista-rain`, `village-rain`, `nether` and `end`. Other JVM properties include `celestiaqa.preset` (default Ultra), `celestiaqa.pack=off`, `celestiaqa.debug=<view>` and `celestiaqa.prefix=<name>`. Pass shader overrides with a dedicated Gradle property, for example `-PqaOptions=GOD_RAYS=false,BLOOM_ENABLED=false`.
 
 Set `celestiaqa.showHud=true` to capture the detailed Celestia performance HUD with FPS and GPU time. Add
 `celestiaqa.measureFrames=N` to time N frames at each settled camera. The log records mean FPS,
@@ -65,21 +81,35 @@ QA_LABEL=native-retina tools/qa/run.sh shots \
   -PqaJvm=celestiaqa.scenes=pond-noon,pond-sunset,vista-rain,celestiaqa.preset=Performance,celestiaqa.renderScale=100,celestiaqa.weatherRadius=4,celestiaqa.showHud=true,celestiaqa.measureFrames=300,celestiaqa.timedPanYaw=0.14
 ```
 
-**Real-play performance:** use the `village-*` scenes, not the bare test pond.
-- The pond is a worst case: half the screen is water with little else around it.
-- The village sits at (-352, 256), 435 blocks from spawn, so add `celestiaqa.fixedShots=true` to give its chunks 240 ticks to load.
-- `celestiaqa.commands="cmd1;cmd2"` runs server commands before the modes, 60 ticks apart, with their replies in `client.log`. Use it to find new scene locations in the seed, for example `locate structure minecraft:village_plains`, or `execute positioned X 0 Z positioned over motion_blocking_no_leaves run tp @a ~ ~ ~` after a teleport to read the ground height.
+**Finding new scenes:** `celestiaqa.commands="cmd1;cmd2"` runs server commands before the modes, 60 ticks apart, and their
+replies land in `client.log`. Use it to find locations in the seed, for example `locate structure minecraft:village_plains`, or
+`execute positioned X 0 Z positioned over motion_blocking_no_leaves run tp @a ~ ~ ~` after a teleport to read the ground height.
+Then give the scene fixed coordinates: a heightmap lookup inside the scene's own teleport runs before far chunks load.
 
-```sh
-QA_LABEL=village tools/qa/run.sh shots \
-  -PqaJvm=celestiaqa.preset=Quality,celestiaqa.renderScale=100,celestiaqa.fixedShots=true,celestiaqa.measureFrames=300,celestiaqa.timedPanYaw=0.14,celestiaqa.scenes=village-noon,village-sunset,village-night,village-high,village-shore,village-shore-sunset,village-rain
-```
 
 Repeat the underwater pan with `-PqaOptions=WATER_REFLECTIONS=SKY_ONLY` to compare against the sky-only reflection path.
 
 The profile tokens are `N` for `celestiametal.shade.water.devSsr`, `bN` for `celestiametal.shade.water.ssrBudget`, `sN` for `celestiametal.shade.dev`, and `cN` for `celestiametal.shade.cloudDev`. The default is `0`. Each token applies one override to the launch settings. Use `s32,s0` to compare the previous chunk-border fog with the directional fade.
 
 For underwater comparisons, `s64` restores the previous Snell window, `s128` disables underwater shafts, and `s192` applies both overrides. Profile `s128,s0,s128` in `underwater` to isolate shaft cost with Volumetric Light Shafts enabled.
+
+To price one water feature with its share of the register pressure, compile it out:
+`-PqaJvm=celestiametal.shade.water.devUndef=CAUSTICS` (or `FOAM`, `GLOSSY`, `WATER_DETAIL`, `WATER_GLITTER`, `WATER_SWELL`,
+`RIPPLES`; comma-separated). Turning a feature's option to 0 only skips a branch, which still costs on every water pixel.
+`-PqaJvm=celestiametal.look.pastel=<lift r,g,b>;<gain r,g,b>;<contrast>` overrides Pastel's grade for look experiments.
+
+## Measuring images
+
+`tools/qa/analyze/` holds small Swift scripts for numbers and views that screenshots alone don't give. Run them with
+`swift tools/qa/analyze/<script>.swift …`; each script's first line gives its arguments.
+- `stats`: luminance percentiles and saturation, for colour grading. A noon village on Balanced gives p1 ≈ 40 and p99 ≈ 195.
+- `sharp`: sharpness and mean difference to a reference, for upscaler or precision A/B tests against native.
+- `motion`: frame-to-frame change in a region of a `celestiaqa.repeat` burst, for how prominent animated water is.
+- `gif`: turns a burst into a short GIF. Send it to the owner when motion matters: stills hide which way waves travel.
+- `crop` and `montage`: crops and labelled contact sheets. Burst frames are saved at 1100 px wide, so crop in those
+  coordinates.
+
+In zsh, pass a list of frames as an array (`"${files[@]}"`), not a plain string variable.
 
 ## Adding scenes
 
