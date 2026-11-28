@@ -26,7 +26,7 @@ class ShadeP3aTest {
         ByteBuffer b = ByteBuffer.allocateDirect(ShadeWater.PARAMS_BYTES).order(ByteOrder.LITTLE_ENDIAN);
         ShadeWater.packParams(b, new float[] {0.1f, 0.2f, 0.3f, 0.4f}, new float[] {0.5f, 0.6f, 0.7f, 0.8f},
             true, 3.5f, 0.75f, true, true, new ShadeSettings.Water(
-                true, true, 1.2f, 0.9f, true, 0.8f, 16, 96, 0.4f, 1f, true));
+                true, true, 1.2f, 0.9f, true, false, 0.8f, 16, 96, 0.4f, 1f, true));
         assertEquals(1, b.getInt(164)); // quality.y: Snell's window
         assertEquals(0.1f, b.getFloat(0), 1e-6f);
         assertEquals(0.8f, b.getFloat(28), 1e-6f);
@@ -154,10 +154,26 @@ class ShadeP3aTest {
             vanillaVs, "main0", vanillaFs, "main0", emptyU, emptyB, ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE);
         var leanSod = ShadeShaderPatcher.patch("sodium:pipeline/translucent_terrain",
             sodiumVs, "main0", sodiumFs, "main0", emptyU, emptyB, ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE);
+        var skyVan = ShadeShaderPatcher.patch("minecraft:pipeline/translucent_terrain",
+            vanillaVs, "main0", vanillaFs, "main0", emptyU, emptyB, ShadeShaderPatcher.Variant.HDR_WORLD_WATER_SKY_ONLY);
+        var skySod = ShadeShaderPatcher.patch("sodium:pipeline/translucent_terrain",
+            sodiumVs, "main0", sodiumFs, "main0", emptyU, emptyB, ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE_SKY_ONLY);
+        var skyBuiltInPerformance = ShadeShaderPatcher.patch("minecraft:pipeline/translucent_terrain",
+            vanillaVs, "main0", vanillaFs, "main0", emptyU, emptyB,
+            ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE_FAST_SKY_NO_SWELL_CAUSTICS);
         assertTrue(leanVan.fsSource().contains("#define SHADE_LEAN_ABOVE 1"));
         assertTrue(leanSod.fsSource().contains("#define SHADE_LEAN_ABOVE 1"));
         assertFalse(patchedVan.fsSource().contains("#define SHADE_LEAN_ABOVE 1"));
         assertFalse(patchedSod.fsSource().contains("#define SHADE_LEAN_ABOVE 1"));
+        assertTrue(skyVan.patched());
+        assertTrue(skySod.patched());
+        assertFalse(skyVan.fsSource().contains("#define SHADE_SSR 1"));
+        assertFalse(skySod.fsSource().contains("#define SHADE_SSR 1"));
+        assertFalse(skyVan.fsSource().contains("#define SHADE_LEAN_ABOVE 1"));
+        assertTrue(skySod.fsSource().contains("#define SHADE_LEAN_ABOVE 1"));
+        assertTrue(skyBuiltInPerformance.patched());
+        assertTrue(skyBuiltInPerformance.fsSource().contains("#undef SHADE_WATER_SWELL\n#undef SHADE_CAUSTICS"));
+        assertTrue(skyBuiltInPerformance.fsSource().contains("#define SHADE_WOFF_FAST 1"));
 
         long ctx = MetalNative.deviceCreate(preferMetal4, false, "");
         assertNotEquals(0L, ctx);
@@ -188,8 +204,18 @@ class ShadeP3aTest {
             assertNotEquals(0L, leanVanFs, () -> err.toString());
             long leanSodFs = MetalNative.compileMslLibrary(ctx, leanSod.fsSource(), "p3a.sod.above", false, err);
             assertNotEquals(0L, leanSodFs, () -> err.toString());
+            long skyVanFs = MetalNative.compileMslLibrary(ctx, skyVan.fsSource(), "p3a.van.sky", false, err);
+            assertNotEquals(0L, skyVanFs, () -> err.toString());
+            long skySodFs = MetalNative.compileMslLibrary(ctx, skySod.fsSource(), "p3a.sod.above.sky", false, err);
+            assertNotEquals(0L, skySodFs, () -> err.toString());
+            long skyPerformanceFs = MetalNative.compileMslLibrary(ctx, skyBuiltInPerformance.fsSource(),
+                "p3a.van.above.sky.no-swell-caustics", false, err);
+            assertNotEquals(0L, skyPerformanceFs, () -> err.toString());
 
             MetalNative.waterGenerateMipmaps(ctx, 0L, 0L, 0L);
+            MetalNative.libraryDestroy(skyPerformanceFs);
+            MetalNative.libraryDestroy(skySodFs);
+            MetalNative.libraryDestroy(skyVanFs);
             MetalNative.libraryDestroy(leanSodFs);
             MetalNative.libraryDestroy(leanVanFs);
             MetalNative.libraryDestroy(libSodFs);

@@ -187,9 +187,17 @@ public final class CelestiaPipeline implements BackendRenderPipeline {
 
             CompiledStages compiled = tryCompileStages(patched.vsSource(), patched.vsEntry(),
                 patched.fsSource(), patched.fsEntry(), variant);
-            if (compiled == null && variant == ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE) {
-                // The unspecialized HDR variant is compatible with both camera states.
-                CompiledStages world = resolveStages(ShadeShaderPatcher.Variant.HDR_WORLD);
+            ShadeShaderPatcher.Variant fallbackVariant = switch (variant) {
+                case HDR_WORLD_WATER_ABOVE_FAST_SKY_NO_SWELL_CAUSTICS -> ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE_FAST_SKY;
+                case HDR_WORLD_WATER_ABOVE_FAST_SKY -> ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE_SKY_ONLY;
+                case HDR_WORLD_WATER_ABOVE_SKY_ONLY_NO_SWELL_CAUSTICS -> ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE_SKY_ONLY;
+                case HDR_WORLD_WATER_ABOVE_SKY_ONLY -> ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE;
+                case HDR_WORLD_WATER_ABOVE, HDR_WORLD_WATER_SKY_ONLY -> ShadeShaderPatcher.Variant.HDR_WORLD;
+                default -> null;
+            };
+            if (compiled == null && fallbackVariant != null) {
+                // The generic water shader still respects the frame's reflection settings.
+                CompiledStages world = resolveStages(fallbackVariant);
                 CompiledStages fallback = new CompiledStages(world.vsLib(), world.fsLib(), world.vsFn(), world.fsFn(), false);
                 variantStages.put(variant, fallback);
                 return fallback;

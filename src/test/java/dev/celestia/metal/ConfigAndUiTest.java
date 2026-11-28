@@ -8,6 +8,7 @@ import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
 import dev.celestia.metal.backend.MetalConst;
 import dev.celestia.metal.backend.StartupGuard;
 import dev.celestia.metal.perf.CelestiaConfig;
+import dev.celestia.metal.perf.PerformanceEngine;
 import dev.celestia.metal.shader.pack.ShaderOptionDef;
 import dev.celestia.metal.ui.CelestiaWidgets;
 import dev.celestia.metal.ui.OptionEntry;
@@ -19,6 +20,26 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ConfigAndUiTest {
+
+    @Test
+    void renderScaleRespectsTheConfiguredLimitBeforeTheFirstFrame() {
+        var cfg = CelestiaConfig.get().appleSilicon;
+        int previousScale = cfg.renderScalePercent;
+        boolean previousAutoScale = cfg.autoRenderScale;
+        try {
+            cfg.autoRenderScale = true;
+            cfg.renderScalePercent = 75;
+            assertEquals(75, PerformanceEngine.get().effectiveRenderScalePercent());
+            cfg.renderScalePercent = 55;
+            assertEquals(55, PerformanceEngine.get().effectiveRenderScalePercent());
+            cfg.autoRenderScale = false;
+            cfg.renderScalePercent = 80;
+            assertEquals(80, PerformanceEngine.get().effectiveRenderScalePercent());
+        } finally {
+            cfg.renderScalePercent = previousScale;
+            cfg.autoRenderScale = previousAutoScale;
+        }
+    }
 
     @Test
     void configRoundTripsAndClampsBounds(@TempDir Path tmpDir) {

@@ -73,4 +73,13 @@ public final class WaterFrame {
         }
         return (float) (top - y);
     }
+
+    /** Distance to the still surface in the eye's block when it can intersect the camera's near plane. */
+    public static float surfaceJustBelow(ClientLevel level, BlockPos eyeBlock, double eyeY) {
+        if (level == null) return 0f;
+        FluidState fluid = level.getFluidState(eyeBlock);
+        if (!fluid.isSource() || !fluid.getType().isSame(Fluids.WATER)) return 0f;
+        double distance = eyeY - ((double) eyeBlock.getY() + fluid.getHeight(level, eyeBlock));
+        return distance >= 0.0 && distance <= 0.125 ? Math.max((float) distance, 1e-5f) : 0f;
+    }
 }

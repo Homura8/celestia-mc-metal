@@ -372,13 +372,14 @@
     {
       "id": "WATER_REFLECTIONS",
       "label": "Water Reflections",
-      "description": "Chooses sky only, or adds screen-space reflections for nearby terrain.",
+      "description": "Fast Sky uses the atmosphere and cloud dome above water. Sky Only adds sky from the current view. SSR and Sky also reflects nearby terrain.",
       "category": "Water",
       "type": "ENUM",
       "default": "SSR_AND_SKY",
       "impact": "HIGH",
       "values": [
         "OFF",
+        "FAST_SKY",
         "SKY_ONLY",
         "SSR_AND_SKY"
       ]

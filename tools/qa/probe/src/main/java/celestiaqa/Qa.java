@@ -27,7 +27,7 @@ import net.minecraft.world.level.levelgen.presets.WorldPresets;
  * -Dcelestiaqa.modes, in order, in one game session, then quits. Scene waits use chunk and weather readiness with a
  * minimum history warm-up. Measurements and light captures retain fixed windows.
  *
- * <p>System properties: celestiaqa.modes (shots,profile,perf,lights,frames), celestiaqa.create (make the QA world when it is
+ * <p>System properties: celestiaqa.modes (shots,profile,perf,lights,frames,packs,scales), celestiaqa.create (make the QA world when it is
  * missing), celestiaqa.preset (Celestia preset, default Ultra), celestiaqa.options (KEY=V,...), celestiaqa.pack (off = pack off),
  * celestiaqa.scenes (comma filter), celestiaqa.prefix (screenshot prefix), celestiaqa.devs (profile: dev switches),
  * celestiaqa.profileEvery (profile: submits per [GPU] report), celestiaqa.frames (frames: count), celestiaqa.debug (debug view).
@@ -48,6 +48,10 @@ public final class Qa {
     private static final double[] SAMPLES = new double[240];
     private static int samples;
     private static boolean sampling;
+    private static double[] frameTimes;
+    private static int timedFrames;
+    private static long lastFrameTime;
+    private static float timedPanYaw;
     private static final AtomicInteger PENDING_SHOTS = new AtomicInteger();
     private static volatile String screenshotFailure;
     private static int captures;
@@ -60,6 +64,31 @@ public final class Qa {
     static double[] finishSampling() {
         sampling = false;
         return Arrays.copyOf(SAMPLES, samples);
+    }
+
+    static void addFrameTiming(List<Step> steps, String scene, int count) {
+        if (count == 0) return;
+        if (count < 100 || count > 10000) throw new IllegalArgumentException("Timing requires 100–10000 frames");
+        float pan = Float.parseFloat(System.getProperty("celestiaqa.timedPanYaw", "0"));
+        if (!Float.isFinite(pan)) throw new IllegalArgumentException("Invalid timed pan yaw");
+        steps.add(once(mc -> {
+            frameTimes = new double[count];
+            timedFrames = 0;
+            lastFrameTime = 0L;
+            timedPanYaw = pan;
+        }));
+        steps.add(mc -> timedFrames == count);
+        steps.add(once(mc -> {
+            double[] times = frameTimes;
+            frameTimes = null;
+            double mean = Arrays.stream(times).average().orElseThrow();
+            Arrays.sort(times);
+            double p99 = times[(int) Math.ceil(count * 0.99) - 1];
+            String scale = CELESTIA ? CelestiaHooks.renderScaleLabel() : "native";
+            log(fmt("timing %-16s %6.1f fps | p99 %5.2f ms | %d frames | %s | output %dx%d%s", scene, 1000.0 / mean,
+                p99, count, scale, mc.gameRenderer.mainRenderTarget().width, mc.gameRenderer.mainRenderTarget().height,
+                pan == 0f ? "" : fmt(" | pan %.2f°/frame", pan)));
+        }));
     }
 
     private Qa() {}
@@ -120,6 +149,15 @@ public final class Qa {
         capture(mc, name, 1);
     }
 
+    static boolean screenshotsReady(Minecraft mc) {
+        if (PENDING_SHOTS.get() > 0) {
+            if (elapsed() >= 1200) throw new IllegalStateException("Screenshot write timed out");
+            return false;
+        }
+        if (screenshotFailure != null) throw new IllegalStateException(screenshotFailure);
+        return true;
+    }
+
     static void captureFrame(Minecraft mc, String name) {
         var target = mc.gameRenderer.mainRenderTarget();
         // The exported frames top out at 1100 px. Downsample Retina sequences before encoding PNGs.
@@ -147,6 +185,8 @@ public final class Qa {
     /** The renderer's configuration for this run (Celestia only): preset, then options, or the pack off. */
     static void configure() {
         if (!CELESTIA) return;
+        Integer scale = Integer.getInteger("celestiaqa.renderScale");
+        if (scale != null) CelestiaHooks.setRenderScale(scale);
         if ("off".equals(System.getProperty("celestiaqa.pack"))) {
             CelestiaHooks.selectPack("off");
             return;
@@ -217,13 +257,23 @@ public final class Qa {
     private static List<Step> build() {
         List<Step> s = new ArrayList<>();
         buildScene(s);
+        // celestiaqa.commands="locate structure #minecraft:village;..." runs server commands before the modes; their replies
+        // land in client.log as "System chat" lines (for finding new scene locations in the QA seed)
+        String extra = System.getProperty("celestiaqa.commands", "");
+        if (!extra.isBlank()) {
+            for (String c : extra.split(";")) {
+                if (c.isBlank()) continue;
+                s.add(once(mc -> cmd(mc, c.trim())));
+                s.add(ticks(60)); // (lets a teleport's chunks load before a command that reads them)
+            }
+        }
         s.add(once(mc -> configure()));
         s.add(settle(30, 600, null));
         var modes = new HashSet<String>();
         for (String token : System.getProperty("celestiaqa.modes", "shots").split(",", -1)) {
             String mode = token.trim();
             if (!modes.add(mode)) throw new IllegalArgumentException("Repeated mode " + mode);
-            if (!CELESTIA && List.of("profile", "perf", "lights", "packs").contains(mode)) {
+            if (!CELESTIA && List.of("profile", "perf", "lights", "packs", "scales").contains(mode)) {
                 throw new IllegalArgumentException(mode + " requires Celestia Metal");
             }
             s.add(once(mc -> log("mode " + mode)));
@@ -233,22 +283,18 @@ public final class Qa {
                 case "perf" -> Modes.perf(s);
                 case "lights" -> Modes.lights(s);
                 case "packs" -> Modes.packs(s);
+                case "scales" -> Modes.scales(s);
                 case "frames" -> Modes.frames(s);
                 default -> throw new IllegalArgumentException("Unknown mode " + mode);
             }
             s.add(once(mc -> log("finished " + mode)));
         }
-        s.add(mc -> {
-            if (PENDING_SHOTS.get() > 0) {
-                if (elapsed() >= 1200) throw new IllegalStateException("Screenshot write timed out");
-                return false;
-            }
-            if (screenshotFailure != null) throw new IllegalStateException(screenshotFailure);
+        s.add(Qa::screenshotsReady);
+        s.add(once(mc -> {
             log("saved " + captures + " screenshots");
             log("done");
             mc.stop();
-            return true;
-        });
+        }));
         return s;
     }
 
@@ -261,9 +307,16 @@ public final class Qa {
         t++;
         if (!built) {
             built = true;
-            if (!mc.gui.hud.isHidden()) mc.gui.hud.toggle();
-            if (CELESTIA) CelestiaHooks.hidePerformanceHud();
+            boolean showHud = Boolean.getBoolean("celestiaqa.showHud");
+            if (mc.gui.hud.isHidden() == showHud) mc.gui.hud.toggle();
+            if (CELESTIA) CelestiaHooks.configurePerformanceHud(showHud);
             try {
+                Integer frameLimit = Integer.getInteger("celestiaqa.frameLimit");
+                if (frameLimit != null) mc.options.framerateLimit().set(frameLimit);
+                Integer weatherRadius = Integer.getInteger("celestiaqa.weatherRadius");
+                if (weatherRadius != null) mc.options.weatherRadius().set(weatherRadius);
+                Integer renderDistance = Integer.getInteger("celestiaqa.renderDistance");
+                if (renderDistance != null) mc.options.renderDistance().set(renderDistance);
                 STEPS.addAll(build());
             } catch (RuntimeException e) {
                 fail(mc, e);
@@ -301,6 +354,15 @@ public final class Qa {
 
     public static void frame(Minecraft mc) {
         frames++;
+        if (frameTimes != null && timedFrames < frameTimes.length) {
+            long now = System.nanoTime();
+            if (lastFrameTime != 0L) frameTimes[timedFrames++] = (now - lastFrameTime) * 1e-6;
+            lastFrameTime = now;
+            if (timedPanYaw != 0f) {
+                mc.player.setYRot(mc.player.getYRot() + timedPanYaw);
+                mc.player.setOldPosAndRot();
+            }
+        }
         Modes.onFrame(mc);
     }
 

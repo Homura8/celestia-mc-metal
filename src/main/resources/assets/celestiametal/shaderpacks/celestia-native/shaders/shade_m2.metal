@@ -334,6 +334,19 @@ static inline float3 shadeUnderwaterFog(float3 radiance, float3 p, constant Shad
 	return radiance * T + scatter;
 }
 
+// A surface crossing before the reversed-Z near plane is clipped out of the water pass. Apply the
+// remaining water path to the geometry seen through that hole, within the still-water block we sampled.
+static inline float shadeClippedWaterPath(float3 p, constant ShadeFrame &f) {
+	float below = f.wxLine.x;
+	if (below <= 0.0 || p.y >= -below || shadeDev(f, SHADE_DEV_NO_WATER)) return 0.0;
+	float t = -below / p.y;
+	float3 hit = p * t;
+	float2 local = f.cameraFract.xz + hit.xz;
+	float nearW = f.proj[3][2] / (1.0 + f.proj[2][2]);
+	float w = -(f.view * float4(hit, 0.0)).z;
+	return w > 0.0 && w < nearW && all(local >= 0.0) && all(local < 1.0) ? 1.0 - t : 0.0;
+}
+
 // FogRenderer gives a horizontal render range in blocks. Finish up to one chunk inside it
 // so the fade is complete when culling steps across the camera or a diagonal.
 static inline bool shadeChunkEdgeEnabled(constant ShadeFrame &f, constant ShadeLook &L) {
@@ -365,6 +378,8 @@ static float3 shadeFogAir2(float3 radiance, float3 p, float vanillaFog, float ch
                            constant ShadeFrame &f, constant ShadeLook &L, constant ShadeResources &R, float chunkEdge) {
 #ifdef MCOPT_HDR
 	if (f.flags.x == SHADE_DIM_OVERWORLD && SHADE_CAMERA_UNDERWATER(f)) return shadeUnderwaterFog(radiance, p, f, L);
+	float waterPath = shadeClippedWaterPath(p, f);
+	if (waterPath > 0.0) return shadeUnderwaterFog(radiance, p * waterPath, f, L);
 #endif
 	bool border = shadeChunkEdgeEnabled(f, L);
 	float fade = chunkEdge;

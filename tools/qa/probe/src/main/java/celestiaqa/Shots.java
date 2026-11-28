@@ -26,11 +26,24 @@ final class Shots {
         new Scene("pond-night", 18000, "clear", "tp @a 0.5 149.3 -14.5 0 -10"),
         new Scene("underwater", 1500, "clear", "tp @a 0.5 144.0 -14.5 0 -4"),
         new Scene("underwater-noon", 6000, "clear", "tp @a 0.5 143.0 -14.5 0 0"), // (sun overhead: the shafts come down)
+        new Scene("underwater-up", 6000, "clear", "tp @a 0.5 143.0 -14.5 0 -45"),
+        new Scene("ground-noon", 6000, "clear", "execute in minecraft:overworld positioned 128.5 0 -32.5"
+            + " positioned over motion_blocking_no_leaves run tp @a ~ ~1 ~ 135 4"),
+        // The plains village on the coast at (-352, 256) in the QA seed: houses, paths, grass, docks and the bay. Real-play
+        // views for performance: the floating pond above is a worst case with nothing else on screen. (Fixed heights: the ground
+        // there is y 65 and 64; a heightmap lookup in the tp itself runs before the far-off chunks load.)
+        new Scene("village-noon", 6000, "clear", "tp @a -330.5 65 256.5 90 4"),
+        new Scene("village-sunset", 12300, "clear", "tp @a -330.5 65 256.5 90 4"),
+        new Scene("village-night", 18000, "clear", "tp @a -330.5 65 256.5 90 4"),
+        new Scene("village-high", 6000, "clear", "tp @a -318.5 78 256.5 90 18"),
+        new Scene("village-shore", 6000, "clear", "tp @a -330.5 67 240.5 135 6"),
+        new Scene("village-shore-sunset", 12300, "clear", "tp @a -330.5 67 240.5 135 6"),
         new Scene("vista-noon", 6000, "clear", "tp @a 40.5 210 40.5 135 12"),
         new Scene("vista-sunset", 12300, "clear", "tp @a 40.5 210 40.5 135 12"),
         new Scene("vista-up", 6000, "clear", "tp @a 40.5 210 40.5 135 -35"),
         new Scene("vista-night", 18000, "clear", "tp @a 40.5 210 40.5 135 -10"),
-        new Scene("vista-rain", 6000, "rain", "tp @a 40.5 210 40.5 135 12"), // (last Overworld: rain and wetness take long to clear)
+        new Scene("vista-rain", 6000, "rain", "tp @a 40.5 210 40.5 135 12"),
+        new Scene("village-rain", 6000, "rain", "tp @a -330.5 65 256.5 90 4"), // (last Overworld: rain and wetness take long to clear)
         new Scene("nether", 6000, "clear", Level.NETHER, "execute in minecraft:the_nether run tp @a 0.5 52 0.5 45 8"),
         new Scene("end", 6000, "clear", Level.END, "execute in minecraft:the_end run tp @a 0.5 76 -48.5 0 8"));
 
@@ -87,6 +100,7 @@ final class Shots {
                 }));
                 s.add(Qa.ticks(k + 1 < repeat ? every : 2));
             }
+            Qa.addFrameTiming(s, sc.name(), Integer.getInteger("celestiaqa.measureFrames", 0));
         }
         if (selected().stream().anyMatch(sc -> "rain".equals(sc.weather()))) {
             s.add(Qa.once(mc -> Qa.cmd(mc, "execute in minecraft:overworld run weather clear")));

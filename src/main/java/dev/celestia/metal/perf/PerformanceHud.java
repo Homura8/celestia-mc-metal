@@ -25,10 +25,10 @@ public final class PerformanceHud {
         PerformanceEngine perf = PerformanceEngine.get();
         CelestiaMetalDevice dev = CelestiaMetalDevice.current;
         String api = dev != null && dev.isMetal4() ? "Metal 4" : (dev != null ? "Metal 3" : "OpenGL");
-        int fps = mc.getFps();
+        double fps = perf.averageFps();
         String packName = ShaderPipelineManager.get().activeDisplayName();
 
-        String line1 = String.format("✦ %d FPS  ·  %.2f ms GPU  ·  %s", fps, perf.ewmaGpuMs(), api);
+        String line1 = String.format("✦ %.0f FPS  ·  %.2f ms GPU  ·  %s", fps, perf.ewmaGpuMs(), api);
         if (cfg.performanceHud == CelestiaConfig.HudMode.COMPACT) {
             String full = packName.equals("Off") ? line1 : (line1 + "  ·  " + packName);
             int w = font.width(full) + 14;

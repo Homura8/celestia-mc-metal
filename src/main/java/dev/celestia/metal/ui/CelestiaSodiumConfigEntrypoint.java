@@ -92,7 +92,7 @@ public final class CelestiaSodiumConfigEntrypoint implements ConfigEntryPoint {
                 CelestiaSodiumConfigEntrypoint::formatUpscaler))
             .addOption(boolOpt(builder, "auto_render_scale",
                 "Auto Render Scale",
-                "Dynamically adjust internal resolution between 65% and max scale to protect frame time targets.",
+                "Adjusts internal resolution to meet the display refresh rate or your lower FPS cap.",
                 false,
                 OptionImpact.MEDIUM,
                 saveHandler,

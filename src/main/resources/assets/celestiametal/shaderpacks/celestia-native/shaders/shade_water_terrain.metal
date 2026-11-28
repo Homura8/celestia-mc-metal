@@ -60,8 +60,15 @@ static float4 shadeWaterTerrainShade(float4 vanillaColor, float4 texel, float4 r
 	float2 du = dfdx(uv), dv = dfdy(uv);
 	float waterFootprint = max(length(dpx), length(dpy));
 
+#ifdef SHADE_LEAN_ABOVE
+	// This variant is only bound to the Overworld's above-water terrain.
+	constexpr bool dimsLit = false;
+	constexpr bool unsupportedDimension = false;
+#else
 	bool dimsLit = f.flags.x != SHADE_DIM_OVERWORLD && shadeDimsLit(f);
-	if ((f.flags.x != SHADE_DIM_OVERWORLD && !dimsLit) || shadeDev(f, SHADE_DEV_FLAT_LIGHT)) {
+	bool unsupportedDimension = f.flags.x != SHADE_DIM_OVERWORLD && !dimsLit;
+#endif
+	if (unsupportedDimension || shadeDev(f, SHADE_DEV_FLAT_LIGHT)) {
 		return float4(shadeVanillaOut(vanillaColor.rgb, L), vanillaColor.a);
 	}
 
