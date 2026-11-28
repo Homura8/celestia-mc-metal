@@ -497,7 +497,8 @@ public final class ShadeShaderPatcher {
         int pRet = texelCaptured.lastIndexOf("return out;");
 
         String chunkVis = inFs.contains("chunkVisibility") ? "in.chunkVisibility"
-            : (inFs.contains("v_fadeFactor") ? "in.v_fadeFactor" : "1.0");
+            : (inFs.contains("v_fadeFactor") ? "in.v_fadeFactor"
+            : (inFs.contains("fadeFactor") ? "in.fadeFactor" : "1.0"));
         boolean isCutout = pipelineNameLower.contains("cutout") || fsMsl.contains("discard_fragment()");
 
         String fogExpr = "float4(1e6, 1e6, 1e6, 1e6)";

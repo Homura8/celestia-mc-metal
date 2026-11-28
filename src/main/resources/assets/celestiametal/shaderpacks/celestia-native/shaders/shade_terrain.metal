@@ -59,7 +59,7 @@ static float4 shadeTerrainShade(float4 vanillaColor, float4 texel, float4 rawCol
 	if (pbr) material = shadeMaterial(n, float3(albedo), uv, dpx, dpy, dfdx(uv), dfdy(uv), L, sr);
 	half3 lightNormal = pbr ? half3(material.normal) : hn;
 
-	half shadow = (!dimsLit || f.flags.x == SHADE_DIM_END) ? shadeShadow(shadowMap, shadowCmp, f, p, hn, thin) : half(1.0);
+	half shadow = (!dimsLit || f.flags.x == SHADE_DIM_END) ? shadeShadow(shadowMap, shadowCmp, f, p, hn, thin, foliage) : half(1.0);
 	float ex = shadeExposure(f, g);
 	float nearW = shadeLook2Near(p, L);
 	float2 wet = 0.0;

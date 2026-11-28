@@ -36,7 +36,7 @@ public final class SodiumShadowCasters implements ShadowCasterSource {
     private static final Logger LOGGER = LogUtils.getLogger();
 
     private static final int CHUNK_QUADS = 32;
-    private static final int RING_SLOTS = 4;
+    public static final int RING_SLOTS = 16;
     private static final int DRAW_STRIDE = 24;
     private static final int CHUNK_STRIDE = 8;
     private static final int REGION_STRIDE = 16;
@@ -202,7 +202,7 @@ public final class SodiumShadowCasters implements ShadowCasterSource {
             solidRuns.clear();
             cutoutRuns.clear();
             int faceMask = faceMask(lightDir);
-            int slot = ringCursor++ % RING_SLOTS;
+            int slot = (ringCursor++) & (RING_SLOTS - 1);
             ensureRegionCap(ctx, slot, regions.size());
             MemorySegment rSeg = regionSegs[slot];
             int regionSlotCount = 0;

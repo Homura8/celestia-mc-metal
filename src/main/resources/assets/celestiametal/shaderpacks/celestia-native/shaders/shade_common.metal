@@ -220,7 +220,7 @@ static inline float shadeNoise(float2 pixel, int frame) {
 
 static float3 shadeLit(half3 albedo, half3 n, half sky, half block, half shadow, bool thin, bool foliage, constant ShadeFrame &f) {
 	half nl = half(dot(float3(n), f.lightDirWorld.xyz));
-	half ndl = thin ? half(0.3) + half(0.5) * abs(nl) : foliage ? half(0.25) + half(0.75) * saturate(nl) + half(0.5) * saturate(-nl) : saturate(nl);
+	half ndl = thin ? half(0.3) + half(0.5) * abs(nl) : foliage ? half(0.20) + half(0.80) * saturate(nl) + half(0.15) * saturate(-nl) : saturate(nl);
 	half gate = f.flags.z != 0 ? smoothstep(half(0.3), half(0.8), sky) : sky * sky * sky * sky;
 	half3 direct = half3(f.sunColor.xyz) * (ndl * shadow * gate);
 	float2 axis = shadeSkyAxis(f);
@@ -257,7 +257,9 @@ static inline float3 shadeSkyLookup(float3 dir, texture2d<half> lut, sampler s, 
 	float2 axis = shadeSkyAxis(f);
 	float2 hz = dir.xz;
 	float hl2 = dot(hz, hz);
-	float c = hl2 > 1e-8 ? dot(hz, axis) * rsqrt(hl2) : 1.0;
+	float c = dir.y > 0.0
+		? (hl2 > 1e-8 ? dot(hz, axis) * rsqrt(hl2) : 0.0)
+		: dot(hz, axis) * rsqrt(max(hl2, 1.0));
 	float u = max(sqrt(saturate(0.5 - 0.5 * c)), uMin);
 	float v = sqrt(saturate(dir.y));
 	float2 uv = (float2(u, v) * float2(SHADE_LUT_W - 1, SHADE_LUT_H - 1) + 0.5) / float2(SHADE_LUT_W, SHADE_LUT_H);
@@ -296,19 +298,20 @@ static inline float shadeShadowCascade(depth2d_array<float> map, sampler cmp, ui
 	return s * 0.25;
 }
 
-static half shadeShadow(depth2d_array<float> map, sampler cmp, constant ShadeFrame &f, float3 p, half3 n, bool thin) {
+static half shadeShadow(depth2d_array<float> map, sampler cmp, constant ShadeFrame &f, float3 p, half3 n, bool thin, bool foliage = false) {
 	if (f.flags.z == 0 || shadeDev(f, SHADE_DEV_NO_SHADOW)) return half(1.0);
 	float3 L = f.lightDirWorld.xyz;
 	float nl = thin ? 1.0 : dot(float3(n), L);
-	if (nl <= 0.0) return half(1.0);
+	if (nl <= 0.0 && !foliage) return half(1.0);
+	bool backFoliage = foliage && nl <= 0.0;
 #ifndef SHADE_SHADOW_TAN_MAX
 #define SHADE_SHADOW_TAN_MAX 30.0
 #endif
-	float tanT = clamp(sqrt(max(1.0 - nl * nl, 0.0)) / max(nl, 0.02), 0.0, SHADE_SHADOW_TAN_MAX);
+	float tanT = backFoliage ? 0.0 : clamp(sqrt(max(1.0 - nl * nl, 0.0)) / max(nl, 0.02), 0.0, SHADE_SHADOW_TAN_MAX);
 #ifndef SHADE_SHADOW_NORMAL_K
 #define SHADE_SHADOW_NORMAL_K 2.0
 #endif
-	float3 dir = thin ? L * 1.5 : float3(n) * SHADE_SHADOW_NORMAL_K + L * (0.5 + 0.75 * tanT);
+	float3 dir = (thin || backFoliage) ? L * 1.5 : float3(n) * SHADE_SHADOW_NORMAL_K + L * (0.5 + 0.75 * tanT);
 	float texelUv = f.shadowParams.x;
 	float softness = f.shadowParams.w > 0.0 ? f.shadowParams.w : 1.0;
 	float m0, m1;

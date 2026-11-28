@@ -345,15 +345,15 @@ static inline float2 shadeWaterXZ(float2 rel, constant ShadeFrame &f) {
 // (slope xz, height, Laplacian) by shade_water_bake_fs and sampled once per pixel with hardware mips + anisotropy instead
 // of evaluating 7 waves per pixel (the mips replace the footprint LOD: no shimmer far away).
 #define SHADE_WAVE_TILE 64.0
-constant int2 SHADE_WAVE_LATTICE[SHADE_WAVE_COUNT] = { // wave vector = 2 pi / tile * lattice (wavelengths 8.40 ... 0.62)
-	int2(7, 3), int2(7, 9), int2(17, -2), int2(8, 25), int2(33, -24), int2(-12, 63), int2(73, 73),
-};
-constant int2 SHADE_WAVE_CREST_LATTICE[3] = { int2(-1, 1), int2(-2, 1), int2(0, 4) }; // the crest modulation, on the lattice too
-// The bake can afford more waves than the per-pixel path: 7 more, off the main directions and between the main
-// wavelengths, so the long crossing trains don't read as a regular diamond lattice in the glitter road.
-#define SHADE_WAVE_EXTRA 7
-constant int3 SHADE_WAVE_EXTRA_LATTICE[SHADE_WAVE_EXTRA] = { // lattice x, z, amplitude in 1/10000 blocks
-	int3(5, -1, 330), int3(-3, 8, 260), int3(10, -10, 180), int3(4, 13, 150), int3(19, 11, 110), int3(-20, 25, 75), int3(45, 20, 50),
+#define SHADE_TILED_WAVE_COUNT 22
+constant int3 SHADE_TILED_WAVES[SHADE_TILED_WAVE_COUNT] = {
+	// lattice x, z on 64-block tile, amplitude in 1/10000 blocks
+	int3(  4,   2, 420), int3(  5,  -2, 360), int3(  3,   6, 300), int3(  7,   2, 270),
+	int3(  6,  -5, 250), int3( -2,   9, 210), int3(  9,   5, 190), int3( 11,  -3, 170),
+	int3(  5,  12, 150), int3( 13,   6, 135), int3( 10, -11, 125), int3( -5,  16, 110),
+	int3( 19,   3,  95), int3( 14,  17,  80), int3( 23,  -9,  70), int3(-11,  25,  60),
+	int3( 31,  14,  46), int3( 27, -29,  38), int3(-19,  41,  31), int3( 49,  17,  25),
+	int3( 38, -47,  20), int3(-33,  61,  16),
 };
 
 // speed: the time scale of the whole set (1 for the long waves; the detail layer runs faster, see
@@ -363,42 +363,21 @@ static float2 shadeWavesTiled(float2 x, float t, float speed, float phase, threa
 	float2 g = 0.0;
 	height = 0.0;
 	const float base = 6.2831853 / SHADE_WAVE_TILE;
-#ifdef SHADE_WATER_SMOOTH
-	// FT1.3 (style photon): bend the crests with a slow phase warp that still tiles (wave vectors on the lattice; as Photon
-	// perturbs its waves' phase with noise, our own code): long straight crests crossing each other read as a regular diamond
-	// lattice once the surface is calm enough to mirror (sunset_water, wp2)
-	float2 warp = float2(sin(dot(float2(2.0, 1.0) * base, x) + t * shadeWaterOmega(0.05 * speed) + phase),
-	                     sin(dot(float2(-1.0, 3.0) * base, x) - t * shadeWaterOmega(0.04 * speed) + 1.3 + phase)) * 1.7
-	             + float2(sin(dot(float2(5.0, -3.0) * base, x) + t * shadeWaterOmega(0.09 * speed) + 2.1),
-	                      sin(dot(float2(4.0, 6.0) * base, x) - t * shadeWaterOmega(0.07 * speed) + 0.4)) * 0.6;
-	x += warp;
-#endif
-	for (int i = 0; i < SHADE_WAVE_COUNT; i++) {
-		float2 kv = float2(SHADE_WAVE_LATTICE[i]) * base;
-		float k = length(kv);
-		float2 dir = kv / k;
-		float a = SHADE_WAVES[i].w * (i == 0 ? 0.75 : i == 1 ? 0.8 : 1.0); // the two longest trains share their energy with the extras
-		if (i < 3) a *= 0.55 + 0.45 * sin(dot(float2(SHADE_WAVE_CREST_LATTICE[i]) * base, x) + SHADE_WAVE_PHASE[i] * 2.3 + phase + t * shadeWaterOmega(0.13 * speed));
-		float omega = shadeWaterOmega(sqrt(9.81 * k) * 0.62 * speed);
-		float th = dot(kv, x) + omega * t + SHADE_WAVE_PHASE[i] + phase;
-		float c;
-		float s = sincos(th, c);
-		float e = float(exp2(half(s - 1.0) * 1.442695h));
-		g += dir * (a * k * c * e);
-		height += a * e;
-		x -= dir * (c * e * a * 1.6);
-	}
-	for (int i = 0; i < (extras ? SHADE_WAVE_EXTRA : 0); i++) {
-		int3 l = SHADE_WAVE_EXTRA_LATTICE[i];
+	int count = extras ? SHADE_TILED_WAVE_COUNT : 14;
+	for (int i = 0; i < count; i++) {
+		int3 l = SHADE_TILED_WAVES[i];
 		float2 kv = float2(l.xy) * base;
 		float k = length(kv);
+		float2 dir = kv / k;
 		float a = float(l.z) * 1e-4;
-		float th = dot(kv, x) + shadeWaterOmega(sqrt(9.81 * k) * 0.62 * speed) * t + float(i) * 2.17 + phase;
+		float omega = shadeWaterOmega(sqrt(9.81 * k) * 0.62 * speed);
+		float th = dot(kv, x) + omega * t + float(i) * 2.3999632 + phase;
 		float c;
 		float s = sincos(th, c);
-		float e = float(exp2(half(s - 1.0) * 1.442695h));
-		g += kv * (a * c * e);
+		float e = float(exp2(half(0.65 * (s - 1.0)) * 1.442695h));
+		g += dir * (a * k * 0.65 * c * e);
 		height += a * e;
+		x -= dir * (c * e * a * 0.55);
 	}
 	return g;
 }
@@ -430,7 +409,7 @@ fragment half4 shade_water_bake_detail_fs(float4 pos [[position]], constant Shad
 #ifdef SHADE_WATER_DETAIL_EXTRAS
 	float2 g = shadeWavesTiled(x, shadeWaterTime(f), SHADE_WATER_DETAIL_SPEED, 2.4, height, true);
 #else
-	float2 g = shadeWavesTiled(x, shadeWaterTime(f), SHADE_WATER_DETAIL_SPEED, 2.4, height, false);
+	float2 g = shadeWavesTiled(x, shadeWaterTime(f), SHADE_WATER_DETAIL_SPEED, 2.4, height, true);
 #endif
 	return half4(half2(g), half(height), 0.0h);
 }
@@ -2207,7 +2186,7 @@ static inline float3 shadeWaterViewPoint(depth2d<float> depth, uint2 q, float2 s
 
 #ifdef SHADE_WATER_DETAIL
 #define SHADE_WATER_DETAIL_SCALE 3.3  // the fine ripples: the baked field this many times smaller
-#define SHADE_WATER_DETAIL_AMP 0.10   // their height scale (slopes: x SHADE_WATER_DETAIL_SCALE; alpha.25: 0.30 -> 0.10, Photon-calm)
+#define SHADE_WATER_DETAIL_AMP 0.075  // their height scale (slopes: x SHADE_WATER_DETAIL_SCALE)
 #define SHADE_WATER_LONG 1.0          // the long waves' scale (alpha.25: 0.6 -> 1.0, Photon's gentle visible swells)
 #define SHADE_WATER_PIXEL 0.7         // how far the near ripples' sample point is pulled to its 1/16-block cell's centre
 // The detail sample's rotation R (53 degrees) and its transpose; the detail field's coordinates for absolute xz x.
@@ -2910,7 +2889,7 @@ float3 shadeWaterAbove(ShadeWaterIn w, constant ShadeFrame &f, constant ShadeWat
 		// (candidate 5, Gael's Photon references: the sun's road there is a narrow column of separate bright dashes) the base roughness
 		// x wp.swell3.z (mcopt.shade.water.glintSharp): the resolved ripples already spread the road; 0.035 drew each facet's sun ~4x the
 		// sun disk, a broad smooth ribbon
-		float alpha = 0.035 * wp.swell3.z + 0.10 * far + 0.06 * wp.state.z;
+		float alpha = 0.055 * wp.swell3.z + 0.10 * far + 0.06 * wp.state.z;
 #ifdef SHADE_WATER_SWELL
 		alpha = sqrt(alpha * alpha + w.swell.w); // (2026-11-02) the swell a pixel averages over widens the glitter road
 #endif
@@ -2918,34 +2897,6 @@ float3 shadeWaterAbove(ShadeWaterIn w, constant ShadeFrame &f, constant ShadeWat
 		alpha = sqrt(alpha * alpha + rippleVar); // (2026-11-06) and so do the ripples a pixel can't resolve
 #endif
 		float spec = shadeGgxSpec(n, v, f.lightDirWorld.xyz, alpha);
-#if defined(SHADE_WATER_GLITTER) && defined(SHADE_WATER_DETAIL)
-		// (2026-11-02; STUDY.md "what we could do: water" item 3, after Complementary's sparkle term: technique only, our own code;
-		// mcopt.shade.water.glitter, 0 = none) glitter: the glint times a facet contrast ((n_r.l) / (n.l))^4 from a rougher normal n_r:
-		// facets tilted toward the sun light up, those tilted away go dark, so near the camera the road breaks into sparkles. n_r is n
-		// plus the fine ripples' slope turned 90 degrees, at 1.5x the waves' strength: the same ripple features, but a tilt uncorrelated
-		// with n's (a rougher normal made of n's own ripples would light exactly the facets the glint already picks, n ~ h, and only
-		// reshape the road). Divided by its mean for that spread (E(1 + d)^4 = 1 + 6 s2 + 3 s2^2; s2 = the extra tilt's variance along
-		// the sun, RMS ripple slope 0.077 per axis x 1.5 x the waves' strength, less what the mips average away at this footprint and
-		// the ripples' own fade with distance, over (n.l)^2), so the road keeps ~0.8-0.95 of its energy (a Monte Carlo of the formula, sun
-		// elevation sine 0.05-0.8; ~6-8 % of the road's pixels over 3x at golden hour). With a grazing sun the extra tilt is capped so
-		// that spread stays <= 0.3 (else a few clamped sparkles and a dark road). It fades back to the plain glint by 0.6 blocks per pixel
-		// (no sub-pixel sparkles to flicker under TAAU): far away the road stays smooth.
-		if (top && wp.swell3.y > 0.0 && spec > 0.0) {
-			float near = (1.0 - smoothstep(0.08, 0.6, w.footprint)) * wp.swell3.y;
-			if (near > 0.0) {
-				float3 l = f.lightDirWorld.xyz;
-				float nl = max(dot(n, l), 0.02);
-				float k = min(1.5 * wp.tune.x, 7.1 * nl * rsqrt(max(1.0 - nl * nl, 1e-4))); // (the cap: 0.0059 k^2 (1 - nl^2) / nl^2 <= 0.3)
-				float3 nr = normalize(n * (1.0 / max(n.y, 0.1)) + float3(w.detail.y * k, 0.0, -w.detail.x * k)); // + the ripples' slope turned 90 degrees
-				float r = max(dot(nr, l), 0.0) / nl;
-				float dfar = 1.0 - smoothstep(0.6 * SHADE_WATER_DETAIL_FAR, SHADE_WATER_DETAIL_FAR, length(w.p));
-				float keep = saturate(log2(1.9 / max(w.footprint, 1e-3)) * (1.0 / 4.3)); // the ripple octaves the mips keep
-				float s2 = 0.0059 * k * k * dfar * dfar * keep * saturate(1.0 - nl * nl) / (nl * nl);
-				float contrast = (r * r) * (r * r) / (1.0 + 6.0 * s2 + 3.0 * s2 * s2);
-				spec *= clamp(1.0 + (contrast - 1.0) * near, 0.0, 16.0);
-			}
-		}
-#endif
 		glint = f.sunColor.rgb * min(spec, 60.0) * glintMask;
 	}
 #endif
