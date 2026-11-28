@@ -24,8 +24,24 @@ final class CelestiaHooks {
         if (s != null) s.requestSnap();
     }
 
-    static void hidePerformanceHud() {
-        CelestiaConfig.get().appleSilicon.performanceHud = CelestiaConfig.HudMode.OFF;
+    static void configurePerformanceHud(boolean visible) {
+        CelestiaConfig.get().appleSilicon.performanceHud = visible ? CelestiaConfig.HudMode.DETAILED : CelestiaConfig.HudMode.OFF;
+    }
+
+    static void setRenderScale(int percent) {
+        setRenderScale(percent, System.getProperty("celestiaqa.upscaler", "TAAU"));
+    }
+
+    static void setRenderScale(int percent, String upscaler) {
+        if (percent < 50 || percent > 100) throw new IllegalArgumentException("Render scale must be 50–100 percent");
+        var config = CelestiaConfig.get().appleSilicon;
+        config.autoRenderScale = false;
+        config.renderScalePercent = percent;
+        config.upscaler = CelestiaConfig.UpscalerMode.valueOf(upscaler);
+    }
+
+    static String renderScaleLabel() {
+        return dev.celestia.metal.render.WorldRenderScale.statusLabel();
     }
 
     static boolean isMetal4() {

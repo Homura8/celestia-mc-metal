@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **MetalFX Temporal upscaling now works.** Before, choosing it silently used MetalFX Spatial ("Spatial for now").
+  - **How:** world render scale feeds MetalFX Temporal the same Halton jitter Celestia's TAAU uses, the world's reversed-Z depth, and camera motion vectors from a new `taa_motion` pass. The hand gets zero motion.
+  - **Quality:** at 75% on a 3024 × 1744 screen, the result is within 1.5/255 of native on average, and sharper than MetalFX Spatial or wrong-sign jitter.
+  - **Cost:** about 5.5 ms on an M1 Pro at that output size. On a Retina laptop screen, TAAU or native is faster. Temporal is aimed at large external displays at lower input scales.
+  - **Fallback:** if MetalFX Temporal is unavailable, Celestia uses its own TAAU.
+
+- Alternate HDR world targets to retain reflection history without a full-resolution copy each frame. Reset reflection
+  and motion-blur history at camera cuts and medium changes.
+- Keep Auto Render Scale at or below the configured internal render-scale limit, including before the first frame, and use the
+  game's frame rate limit when it is below the display target.
+- Apply underwater fog to geometry seen through still water clipped by the camera's near plane. The pond floor keeps its
+  underwater colour as the camera descends through the surface.
+- Reject isolated depth samples and geometry above the water in reflections viewed from underwater, removing bright streaks.
+- Add a **Fast Sky** choice to Water Reflections. It reflects only the atmosphere and the cloud dome above water, and is cheaper
+  than Sky Only. It is opt-in: no preset uses it, and Performance keeps Sky Only.
+- Compile water shaders without the screen-space reflection march when using Sky Only reflections. When swell and caustics
+  are both disabled, compile them out of the above-water shader too.
+- Reduce the cost of HDR rain and snow shading by using Metal's fast positive power operation for the display conversion.
+  Expose Minecraft's Weather Radius in Celestia's Quality settings.
+- Draw the sky, sun, moon and stars into the active world target after a live render-scale change. This restores the sky
+  behind the chunk-edge haze when upscaling.
+- Measure average FPS and 1% lows over the same rolling frame intervals in the performance HUD and settings. Both include frame pacing.
 - **labPBR 1.3 materials** for vanilla and Sodium terrain. Celestia Native reads normal, ambient occlusion, smoothness,
   reflectance, metalness, emission, porosity and subsurface data from resource-pack textures. Toggle **labPBR Materials** in
   **Materials**. The option is on by default and companion atlases are allocated only when matching maps are available.

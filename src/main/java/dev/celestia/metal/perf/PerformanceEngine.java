@@ -11,11 +11,10 @@ public final class PerformanceEngine {
     private static final PerformanceEngine INSTANCE = new PerformanceEngine();
 
     private final boolean sodiumPresent = FabricLoader.getInstance().isModLoaded("sodium");
-    private final float[] frameTimeHistoryMs = new float[120];
-    private int historyCursor;
-    private int historyCount;
+    private final FrameTiming frameTiming = new FrameTiming();
     private double ewmaGpuMs = 0.0;
     private double ewmaFrameMs = 8.33;
+    private static final int MIN_AUTO_SCALE_PERCENT = 65;
     private int effectiveScalePercent = 100;
     // Auto Render Scale trial: a step down is kept only if it measurably shortens the frame (the upscaler has a fixed
     // GPU cost, ~2 ms for MetalFX Spatial at 3024x1752, so a lower scale can be slower on light scenes).
@@ -44,12 +43,9 @@ public final class PerformanceEngine {
         return sodiumPresent;
     }
 
-    public void onFrameEnd(double frameDurationMs) {
-        frameTimeHistoryMs[historyCursor] = (float) frameDurationMs;
-        historyCursor = (historyCursor + 1) % frameTimeHistoryMs.length;
-        if (historyCount < frameTimeHistoryMs.length) historyCount++;
-
-        ewmaFrameMs = ewmaFrameMs * 0.92 + frameDurationMs * 0.08;
+    public void onFrameEnd(long frameStartNs, int frameRateLimit) {
+        double frameIntervalMs = frameTiming.recordStart(frameStartNs);
+        if (frameIntervalMs > 0.0) ewmaFrameMs = ewmaFrameMs * 0.92 + frameIntervalMs * 0.08;
 
         CelestiaMetalDevice dev = CelestiaMetalDevice.current;
         if (dev != null) {
@@ -72,16 +68,20 @@ public final class PerformanceEngine {
             }
         }
 
-        updateEffectiveScale();
+        updateEffectiveScale(frameRateLimit);
     }
 
-    private void updateEffectiveScale() {
+    private void updateEffectiveScale(int frameRateLimit) {
         CelestiaConfig.AppleSiliconSection cfg = CelestiaConfig.get().appleSilicon;
-        if (!cfg.autoRenderScale) {
-            effectiveScalePercent = cfg.renderScalePercent;
+        int maxPercent = cfg.renderScalePercent;
+        if (!cfg.autoRenderScale || maxPercent <= MIN_AUTO_SCALE_PERCENT) {
+            effectiveScalePercent = maxPercent;
             trialFromPercent = -1;
             return;
         }
+        effectiveScalePercent = Math.clamp(effectiveScalePercent, MIN_AUTO_SCALE_PERCENT, maxPercent);
+        // A change to the configured maximum can invalidate the scale we would restore after a trial.
+        if (trialFromPercent > maxPercent) trialFromPercent = -1;
         if (trialFromPercent >= 0) {
             if (--trialFramesLeft > 0) return;
             boolean helped = ewmaFrameMs < trialBaselineFrameMs * (1.0 - TRIAL_MIN_GAIN);
@@ -99,17 +99,14 @@ public final class PerformanceEngine {
             autoScaleCooldownFrames--;
             return;
         }
-        double targetBudgetMs = 1000.0 / Math.max(60, Math.min(120, displayRefreshHz));
-        if (lowPowerMode || cfg.thermalMode == CelestiaConfig.ThermalMode.BATTERY_SAVER) {
-            targetBudgetMs = 1000.0 / 60.0;
-        }
-        int maxPercent = cfg.renderScalePercent;
+        double targetBudgetMs = targetFrameBudgetMs(displayRefreshHz, frameRateLimit,
+            lowPowerMode || cfg.thermalMode == CelestiaConfig.ThermalMode.BATTERY_SAVER);
         boolean backoff = System.currentTimeMillis() < noStepBelowUntilMs && effectiveScalePercent <= noStepBelowPercent;
-        if (ewmaGpuMs > targetBudgetMs * 0.92 && effectiveScalePercent > 65 && !backoff) {
+        if (ewmaGpuMs > targetBudgetMs * 0.92 && effectiveScalePercent > MIN_AUTO_SCALE_PERCENT && !backoff) {
             trialFromPercent = effectiveScalePercent;
             trialBaselineFrameMs = ewmaFrameMs;
             trialFramesLeft = TRIAL_FRAMES;
-            effectiveScalePercent = Math.max(65, effectiveScalePercent - 5);
+            effectiveScalePercent = Math.max(MIN_AUTO_SCALE_PERCENT, effectiveScalePercent - 5);
         } else if (ewmaGpuMs > 0.0 && ewmaGpuMs < targetBudgetMs * 0.65 && effectiveScalePercent < maxPercent) {
             effectiveScalePercent = Math.min(maxPercent, effectiveScalePercent + 5);
             autoScaleCooldownFrames = 90;
@@ -119,8 +116,17 @@ public final class PerformanceEngine {
         }
     }
 
+    static double targetFrameBudgetMs(int refreshHz, int frameRateLimit, boolean batterySaving) {
+        int targetFps = batterySaving ? 60 : Math.clamp(refreshHz, 60, 120);
+        if (frameRateLimit > 0) targetFps = Math.min(targetFps, frameRateLimit);
+        return 1000.0 / targetFps;
+    }
+
     public int effectiveRenderScalePercent() {
-        return effectiveScalePercent;
+        CelestiaConfig.AppleSiliconSection cfg = CelestiaConfig.get().appleSilicon;
+        int maxPercent = cfg.renderScalePercent;
+        if (!cfg.autoRenderScale || maxPercent <= MIN_AUTO_SCALE_PERCENT) return maxPercent;
+        return Math.clamp(effectiveScalePercent, MIN_AUTO_SCALE_PERCENT, maxPercent);
     }
 
     public double ewmaGpuMs() {
@@ -131,18 +137,12 @@ public final class PerformanceEngine {
         return ewmaFrameMs;
     }
 
-    public double estimatedFps() {
-        return ewmaFrameMs > 0.01 ? 1000.0 / ewmaFrameMs : 0.0;
+    public double averageFps() {
+        return frameTiming.averageFps();
     }
 
     public double onePercentLowFps() {
-        if (historyCount == 0) return 0.0;
-        float[] copy = new float[historyCount];
-        System.arraycopy(frameTimeHistoryMs, 0, copy, 0, historyCount);
-        java.util.Arrays.sort(copy);
-        int idx = Math.min(historyCount - 1, (int) Math.floor(historyCount * 0.99));
-        float p99Ms = copy[idx];
-        return p99Ms > 0.01f ? 1000.0 / p99Ms : 0.0;
+        return frameTiming.onePercentLowFps();
     }
 
     public int thermalState() {

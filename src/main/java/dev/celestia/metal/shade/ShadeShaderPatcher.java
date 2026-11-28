@@ -37,6 +37,11 @@ public final class ShadeShaderPatcher {
         BASE,
         HDR_WORLD,
         HDR_WORLD_WATER_ABOVE,
+        HDR_WORLD_WATER_SKY_ONLY,
+        HDR_WORLD_WATER_ABOVE_SKY_ONLY,
+        HDR_WORLD_WATER_ABOVE_SKY_ONLY_NO_SWELL_CAUSTICS,
+        HDR_WORLD_WATER_ABOVE_FAST_SKY,
+        HDR_WORLD_WATER_ABOVE_FAST_SKY_NO_SWELL_CAUSTICS,
         HDR_HAND
     }
 
@@ -213,11 +218,15 @@ public final class ShadeShaderPatcher {
     }
 
     public static String waterDefines() {
+        return waterDefines(true);
+    }
+
+    private static String waterDefines(boolean screenReflections) {
         String quad = !"false".equalsIgnoreCase(System.getProperty("celestiametal.shade.water.ssrQuad"))
             ? "#define SHADE_SSR_QUAD 1\n#define SHADE_SSRH_OWN 1\n" : "";
-        return quad + """
+        String reflections = screenReflections ? "#define SHADE_SSR 1\n" : "";
+        return quad + reflections + """
             #define SHADE_WATER 1
-            #define SHADE_SSR 1
             #define SHADE_SSR_HIER 1
             #define SHADE_SSRH_THICK 2.0
             #define SHADE_SSRH_THIN 1
@@ -327,8 +336,7 @@ public final class ShadeShaderPatcher {
             if (terrain != null) return terrain;
         }
         if (baseFs != null && isTranslucentTerrain(lower, baseVs)) {
-            PatchedStages waterTerrain = patchTerrainCommon(lower, baseVs, baseVsEntry, baseFs, baseFsEntry,
-                true, variant == Variant.HDR_WORLD_WATER_ABOVE);
+            PatchedStages waterTerrain = patchTerrainCommon(lower, baseVs, baseVsEntry, baseFs, baseFsEntry, variant);
             if (waterTerrain != null) return waterTerrain;
         }
 
@@ -339,7 +347,8 @@ public final class ShadeShaderPatcher {
         }
 
         // 4. Generic world fallback: convert display-referred color(0) to scene-linear pre-exposed HDR
-        String patchedFs = baseFs != null ? patchHdrFragment(baseFs) : null;
+        boolean fastWeather = "minecraft:pipeline/weather".equals(lower);
+        String patchedFs = baseFs != null ? patchHdrFragment(baseFs, fastWeather) : null;
         return new PatchedStages(baseVs, baseVsEntry, patchedFs, baseFsEntry, patchedFs != null && !patchedFs.equals(baseFs));
     }
 
@@ -388,6 +397,10 @@ public final class ShadeShaderPatcher {
      * radiance via {@code shadeLdrToHdr}.
      */
     public static String patchHdrFragment(String msl) {
+        return patchHdrFragment(msl, false);
+    }
+
+    private static String patchHdrFragment(String msl, boolean fastWeather) {
         if (msl == null) return null;
         int sig = msl.indexOf(FRAGMENT_ENTRY);
         if (sig < 0) return msl;
@@ -400,7 +413,7 @@ public final class ShadeShaderPatcher {
             + ", constant ShadeLook& celestiaShadeLook [[buffer(" + MetalConst.SHADE_BUF_LOOK + ")]]";
         String body = msl.substring(close).replace("return out;",
             "{ out." + member + " = shadeLdrToHdr(out." + member + ", celestiaShadeLook); return out; }");
-        return lookOnlyPrelude() + head + body;
+        return (fastWeather ? "#define CELESTIA_WEATHER_FAST_HDR 1\n" : "") + lookOnlyPrelude() + head + body;
     }
 
     private static final String TERRAIN_OUT_MEMBERS =
@@ -416,14 +429,15 @@ public final class ShadeShaderPatcher {
     static PatchedStages patchTerrain(String pipelineNameLower,
                                       String vsMsl, String vsEntry,
                                       String fsMsl, String fsEntry) {
-        return patchTerrainCommon(pipelineNameLower, vsMsl, vsEntry, fsMsl, fsEntry, false, false);
+        return patchTerrainCommon(pipelineNameLower, vsMsl, vsEntry, fsMsl, fsEntry, null);
     }
 
     private static PatchedStages patchTerrainCommon(String pipelineNameLower,
                                                     String vsMsl, String vsEntry,
                                                     String fsMsl, String fsEntry,
-                                                    boolean translucentWater, boolean aboveWater) {
+                                                    Variant waterVariant) {
         if (vsMsl == null || fsMsl == null) return null;
+        boolean translucentWater = waterVariant != null;
         boolean sodium = isSodiumTerrainVs(vsMsl);
         String inVs = structBody(vsMsl, "main0_in");
         String outVs = structBody(vsMsl, "main0_out");
@@ -529,8 +543,22 @@ public final class ShadeShaderPatcher {
                 + ", celLut, celLutSmplr, celShadow, celShadowCmp, celSF, celSL, celSG, celSR"
                 + ", celSceneCopy, celDepthCopy, celWP, celWaterWaves, celWaterCoarse, celWaterDetail CEL_DL_ARGS CEL_CL_ARGS);\n";
 
-            String defines = waterDefines() + "#define SHADE_WEATHER 1\n#define SHADE_RIPPLES 1\n#define SHADE_RIPPLE_LAYERS 1\n";
-            if (aboveWater) defines += "#define SHADE_LEAN_ABOVE 1\n";
+            boolean withoutSwellOrCaustics = waterVariant == Variant.HDR_WORLD_WATER_ABOVE_SKY_ONLY_NO_SWELL_CAUSTICS
+                || waterVariant == Variant.HDR_WORLD_WATER_ABOVE_FAST_SKY_NO_SWELL_CAUSTICS;
+            boolean fastSky = waterVariant == Variant.HDR_WORLD_WATER_ABOVE_FAST_SKY
+                || waterVariant == Variant.HDR_WORLD_WATER_ABOVE_FAST_SKY_NO_SWELL_CAUSTICS;
+            boolean screenReflections = waterVariant == Variant.HDR_WORLD || waterVariant == Variant.HDR_WORLD_WATER_ABOVE;
+            String defines = waterDefines(screenReflections) + "#define SHADE_WEATHER 1\n#define SHADE_RIPPLES 1\n#define SHADE_RIPPLE_LAYERS 1\n";
+            if (withoutSwellOrCaustics) defines += "#undef SHADE_WATER_SWELL\n#undef SHADE_CAUSTICS\n";
+            // (pricing, dev only) -Dcelestiametal.shade.water.devUndef=WATER_PANO,CAUSTICS,...: compile those SHADE_* features out
+            // of the water shader, to price each one with its share of the register pressure (a branch skipping it doesn't)
+            for (String f : System.getProperty("celestiametal.shade.water.devUndef", "").split(",")) {
+                if (f.matches("[A-Z0-9_]+")) defines += "#undef SHADE_" + f + "\n";
+            }
+            if (fastSky) defines += "#define SHADE_OWN_TRANSLUCENT 1\n#define SHADE_WOFF_FAST 1\n";
+            if (waterVariant != Variant.HDR_WORLD && waterVariant != Variant.HDR_WORLD_WATER_SKY_ONLY) {
+                defines += "#define SHADE_LEAN_ABOVE 1\n";
+            }
             fs.append(prelude(true, false, defines, false));
             fs.append(resource("shade_material.metal")).append('\n');
             fs.append(resource("weather_surface.metal")).append('\n');

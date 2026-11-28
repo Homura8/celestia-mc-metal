@@ -17,6 +17,9 @@ done
 for path in lights-colour-on.png lights-colour-off.png lights-dyn-blaze-glowstone.png lights-dyn-blaze-glowstone-off.png; do
     if [[ -f $path ]]; then selected+=("$path"); fi
 done
+for path in scales-native.png scales-taau.png scales-spatial.png scales-native-again.png; do
+    if [[ -f $path ]]; then selected+=("$path"); fi
+done
 if (( ${#frames[@]} > 0 )); then
     selected+=("${frames[0]}")
     if (( ${#frames[@]} > 2 )); then selected+=("${frames[${#frames[@]} / 2]}"); fi
@@ -38,6 +41,14 @@ fi
             if (!firstFluid) firstFluid = $NF
             lastFluid = $NF
         }
+        /\[QA\] timing / {
+            sub(/.*\[QA\] timing /, "")
+            timings = timings "\n  " $0
+        }
+        /\[QA\] scales-.* sky gradient / {
+            sub(/.*\[QA\] /, "")
+            scales = scales "\n  " $0
+        }
         /\[QA\] lights colour-on / { colourOn = $NF }
         /\[QA\] lights colour-off / { colourOff = $NF }
         /\[QA\] lights dyn-hand-on / { torch = $(NF - 3) }
@@ -46,13 +57,15 @@ fi
         END {
             print "Completed: " modes
             if (scenes) print "Scenes: " scenes
-            if (firstFluid) print "Descent camera fluid: " firstFluid " to " lastFluid
+            if (firstFluid) print "Camera fluid: " firstFluid " to " lastFluid
             if (colourOn != "") print "Colour slots: " colourOn " on, " colourOff " off"
             if (torch != "") print "Dynamic lights: " torch " held torch, " emitters " blaze and glowstone, " dynOff " off"
+            if (timings) print "Frame timing:" timings
+            if (scales) print "Sky after scale changes:" scales
         }
     ' client.log
     if (( ${#selected[@]} > 0 )); then
-        printf 'Images: %d PNGs, including %d descent frames. Start with review.jpg (%d selected).\n' \
+        printf 'Images: %d PNGs, including %d sequential frames. Start with review.jpg (%d selected).\n' \
             "${#images[@]}" "${#frames[@]}" "${#selected[@]}"
     fi
     if [[ -s profile.tsv ]]; then

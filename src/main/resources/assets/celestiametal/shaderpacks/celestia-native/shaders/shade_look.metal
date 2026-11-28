@@ -34,17 +34,27 @@ static inline float3 shadeLottes(float3 x, float4 t) {
 	return xa / (xad * t.z + t.w);
 }
 
+static inline float3 shadeHdrPow(float3 x, float3 y) {
+#ifdef CELESTIA_WEATHER_FAST_HDR
+	// Inverted filmic and sRGB curves use nonnegative inputs and positive exponents.
+	// Classic precipitation may execute this many times at the same screen pixel.
+	return fast::powr(x, y);
+#else
+	return pow(x, y);
+#endif
+}
+
 static inline float3 shadeLottesInverse(float3 y, float4 t) {
 	float a = t.x, d = t.y, b = t.z, beta = t.w;
 	y = clamp(y, 0.0, 0.95 / (b * d));
 	float3 u = (y * b * (1.0 - d) + y * beta) / (1.0 - y * b * d);
 	for (int i = 0; i < 3; i++) {
-		float3 ud = pow(max(u, 1e-9), float3(d));
+		float3 ud = shadeHdrPow(max(u, 1e-9), float3(d));
 		float3 g = u - y * (b * ud + beta);
 		float3 dg = 1.0 - y * b * d * ud / max(u, 1e-9);
 		u = max(u - g / max(dg, 0.05), 0.0);
 	}
-	return pow(u, float3(1.0 / a));
+	return shadeHdrPow(u, float3(1.0 / a));
 }
 
 static inline float3 shadeDisplay(float3 x, constant ShadeLook &L) {
@@ -55,7 +65,7 @@ static inline float3 shadeDisplay(float3 x, constant ShadeLook &L) {
 }
 
 static inline float3 shadeSrgbToLinearExact(float3 c) {
-	return select(pow((c + 0.055) / 1.055, 2.4), c / 12.92, c <= 0.04045);
+	return select(shadeHdrPow((c + 0.055) / 1.055, float3(2.4)), c / 12.92, c <= 0.04045);
 }
 static inline float3 shadeLinearToSrgbExact(float3 c) {
 	return select(1.055 * pow(max(c, 0.0), 1.0 / 2.4) - 0.055, c * 12.92, c <= 0.0031308);

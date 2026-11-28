@@ -83,8 +83,9 @@ public final class WorldRenderScale {
             RenderSystem.getDevice().createCommandEncoder().clearColorAndDepthTextures(
                 worldTarget.getColorTexture(), clearColor, worldTarget.getDepthTexture(), clearDepth);
         }
-        if (CelestiaConfig.get().appleSilicon.upscaler == CelestiaConfig.UpscalerMode.TAAU) {
-            device.temporalUpscaler().begin(worldTarget, main, mc.level);
+        var upscaler = CelestiaConfig.get().appleSilicon.upscaler;
+        if (upscaler == CelestiaConfig.UpscalerMode.TAAU || upscaler == CelestiaConfig.UpscalerMode.METALFX_TEMPORAL) {
+            device.temporalUpscaler().begin(worldTarget, main, mc.level, upscaler == CelestiaConfig.UpscalerMode.METALFX_TEMPORAL);
         } else {
             device.temporalUpscaler().disable();
         }
@@ -103,7 +104,7 @@ public final class WorldRenderScale {
         GpuTexture dst = main.getColorTexture();
         if (dev == null || !(src instanceof CelestiaTexture s) || !(dst instanceof CelestiaTexture d)) return;
         if (dev.temporalUpscaler().resolve(s, d)) {
-            lastPathUsed = 2;
+            lastPathUsed = dev.temporalUpscaler().usingMetalFx() ? 3 : 2;
             return;
         }
         int mode = CelestiaConfig.get().appleSilicon.upscaler == CelestiaConfig.UpscalerMode.BILINEAR ? 0 : 1;
@@ -132,6 +133,7 @@ public final class WorldRenderScale {
     /** F3 label for the upscale path of the last frame. */
     public static String statusLabel() {
         return switch (lastPathUsed) {
+            case 3 -> "MetalFX Temporal " + lastWidth + "x" + lastHeight;
             case 2 -> "TAAU " + lastWidth + "x" + lastHeight;
             case 1 -> "MetalFX Spatial " + lastWidth + "x" + lastHeight;
             case 0 -> "Bilinear " + lastWidth + "x" + lastHeight;

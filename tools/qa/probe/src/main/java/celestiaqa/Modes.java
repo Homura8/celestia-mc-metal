@@ -2,10 +2,13 @@ package celestiaqa;
 
 import static celestiaqa.Qa.*;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.DoubleConsumer;
+import javax.imageio.ImageIO;
 import net.minecraft.client.Minecraft;
 
 final class Modes {
@@ -176,12 +179,65 @@ final class Modes {
         Lights.add(steps);
     }
 
+    static void scales(List<Step> steps) {
+        var scene = Shots.byName("vista-sunset");
+        steps.add(Shots.enter(scene));
+        steps.add(Shots.settle(scene));
+        int[] nativeContrast = {0};
+        scaleStep(steps, "native", 100, "TAAU", "native", nativeContrast);
+        scaleStep(steps, "taau", 65, "TAAU", "TAAU ", nativeContrast);
+        scaleStep(steps, "spatial", 75, "METALFX_SPATIAL", "MetalFX Spatial ", nativeContrast);
+        scaleStep(steps, "temporal", 75, "METALFX_TEMPORAL", "MetalFX Temporal ", nativeContrast);
+        scaleStep(steps, "native-again", 100, "TAAU", "native", nativeContrast);
+        steps.add(once(mc -> CelestiaHooks.setRenderScale(Integer.getInteger("celestiaqa.renderScale", 100))));
+    }
+
+    private static void scaleStep(List<Step> steps, String name, int scale, String upscaler, String expected, int[] nativeContrast) {
+        String capture = "scales-" + name;
+        steps.add(once(mc -> CelestiaHooks.setRenderScale(scale, upscaler)));
+        steps.add(Qa.frames(120));
+        steps.add(once(mc -> {
+            CelestiaHooks.requireWorldReady(capture);
+            String actual = CelestiaHooks.renderScaleLabel();
+            if (!actual.startsWith(expected)) throw new IllegalStateException(capture + " used " + actual);
+            screenshot(mc, capture);
+        }));
+        steps.add(Qa::screenshotsReady);
+        steps.add(once(mc -> {
+            // The upper sunset sky has an obvious gradient when the sky pass targets this frame's world.
+            // A missed pass leaves the nearly uniform fog clear color. The region avoids the HUD and terrain.
+            try {
+                var png = mc.gameDirectory.toPath().resolve("screenshots").resolve(capture + ".png");
+                var image = ImageIO.read(png.toFile());
+                int width = image.getWidth(), height = image.getHeight();
+                int darkest = 765, brightest = 0;
+                for (int row = 10; row <= 40; row += 2) {
+                    for (int column = 8; column <= 88; column += 2) {
+                        int rgb = image.getRGB(width * column / 100, height * row / 100);
+                        int brightness = ((rgb >> 16) & 255) + ((rgb >> 8) & 255) + (rgb & 255);
+                        darkest = Math.min(darkest, brightness);
+                        brightest = Math.max(brightest, brightness);
+                    }
+                }
+                int contrast = brightest - darkest;
+                int minimum = Math.max(36, nativeContrast[0] * 2 / 3);
+                if (contrast < minimum) {
+                    throw new IllegalStateException(capture + " has no sunset sky gradient (" + contrast + " vs " + minimum + ")");
+                }
+                if (nativeContrast[0] == 0) nativeContrast[0] = contrast;
+                log(capture + " sky gradient " + contrast + " | " + CelestiaHooks.renderScaleLabel());
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }));
+    }
+
     static void frames(List<Step> steps) {
         int count = Integer.getInteger("celestiaqa.frames", 180);
         if (count < 1) throw new IllegalArgumentException("celestiaqa.frames must be positive");
         panYaw = Float.parseFloat(System.getProperty("celestiaqa.panYaw", "0"));
         var scene = panYaw != 0f
-            ? new Shots.Scene("pan", 6000, "clear", "tp @a 0.5 149.3 -14.5 0 -8")
+            ? Shots.byName(System.getProperty("celestiaqa.panScene", "pond-noon"))
             : new Shots.Scene("descent", 1500, "clear", fmt("tp @a %.1f %.1f %.1f 0 -4", FRAME_X, START_Y, FRAME_Z));
         steps.add(Shots.enter(scene));
         steps.add(Shots.settle(scene));

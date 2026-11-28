@@ -705,6 +705,47 @@ static void verify_backend_ops(int32_t preferMetal4) {
                 printf("[Backend %s] Test 2k upscale %s OK (path used: %s)\n", preferMetal4 ? "Metal 4" : "Metal 3",
                        mode ? "MetalFX Spatial" : "bilinear", used ? "MetalFX Spatial" : "bilinear");
             }
+            // 2k (temporal). MetalFX Temporal (cm_upscale_temporal): a still image with zero motion and no jitter converges to
+            // the same layout; it must flush the soft-ended source pass first (Test 2g's rule) and leave no GPU errors.
+            {
+                int64_t depthT = cm_texture_create(ctx, CM_FMT_D32_FLOAT, SW, SH, 1, 1, 0, 1, 1, 0, "UpscaleDepth");
+                int64_t motionT = cm_texture_create(ctx, CM_FMT_RG16_FLOAT, SW, SH, 1, 1, 0, 1, 1, 0, "UpscaleMotion");
+                assert(depthT && motionT);
+                int32_t usedT = 0;
+                for (int frame = 0; frame < 4; frame++) {
+                    cm_cmd_begin(ctx);
+                    cm_blit_clear_depth(ctx, depthT, 0.5);
+                    cm_blit_clear_color(ctx, motionT, 0.0f, 0.0f, 0.0f, 0.0f);
+                    assert(cm_pass_begin(ctx, &srcV, &clearFlag, clearCol, 1, 0, 0, 0.0, 0, 0, SW, SH, "UpscaleSrcPass") == 1);
+                    cm_pass_set_pipeline(ctx, psoH);
+                    cm_pass_draw(ctx, CM_TOPO_TRIANGLES, 3, 1, 0, 0);
+                    cm_pass_finish(ctx);
+                    usedT = cm_upscale_temporal(ctx, srcT, depthT, motionT, dstT, 0.0f, 0.0f, frame == 0);
+                    cm_blit_copy_texture_to_buffer(ctx, dstT, 0, 0, 0, 0, DW, DH, upRead, 0, DW * 4);
+                    uint64_t sT = cm_cmd_submit(ctx, 2);
+                    assert(cm_wait_submit(ctx, sT, 5000000000ULL) == 1);
+                }
+                char drainedT[1024] = {0};
+                if (cm_device_drain_errors(ctx, drainedT, sizeof(drainedT)) > 0) {
+                    fprintf(stderr, "FAIL 2k temporal: GPU errors: %s\n", drainedT);
+                    exit(1);
+                }
+                if (usedT) {
+                    const uint8_t *u = (const uint8_t *)(uintptr_t)cm_buffer_contents(upRead);
+                    const uint8_t *top = &u[((size_t)4 * DW + 48) * 4];
+                    const uint8_t *left = &u[((size_t)40 * DW + 16) * 4];
+                    const uint8_t *right = &u[((size_t)40 * DW + 80) * 4];
+                    if (!(top[2] > 200 && top[0] < 60 && left[0] > 200 && left[1] < 60 && right[1] > 200 && right[0] < 60)) {
+                        fprintf(stderr, "FAIL 2k temporal: top=%d,%d,%d left=%d,%d,%d right=%d,%d,%d\n",
+                                top[0], top[1], top[2], left[0], left[1], left[2], right[0], right[1], right[2]);
+                        exit(1);
+                    }
+                }
+                printf("[Backend %s] Test 2k upscale MetalFX Temporal %s\n", preferMetal4 ? "Metal 4" : "Metal 3",
+                       usedT ? "OK" : "unavailable (caller falls back)");
+                cm_texture_destroy(ctx, motionT);
+                cm_texture_destroy(ctx, depthT);
+            }
             cm_pipeline_destroy(ctx, psoH);
             cm_function_destroy(fsH); cm_function_destroy(vsH); cm_library_destroy(libH);
             cm_buffer_destroy(ctx, upRead);
@@ -1012,6 +1053,10 @@ static void verify_backend_ops(int32_t preferMetal4) {
              "    out[4] = shadeChunkEdgeDepthFade(out[1]);\n"
              "    out[5] = shadeChunkEdgeDepthFade(shadeChunkEdgeFade(float3(46.0, 0.0, 0.0), f, l));\n"
              "    out[6] = shadeChunkEdgeDepthFade(out[3]);\n"
+             "    out[7] = shadeClippedWaterPath(float3(0.0, -1.0, -1.0), f);\n"
+             "    out[8] = shadeClippedWaterPath(float3(0.0, -1.0, -8.0), f);\n"
+             "    out[9] = shadeClippedWaterPath(float3(80.0, -1.0, -1.0), f);\n"
+             "    out[10] = shadeClippedWaterPath(float3(0.0, 1.0, -1.0), f);\n"
              "}\n"
              "kernel void labpbr_probe(device float *out [[buffer(0)]]) {\n"
              "    float3 n(0, 0, 1), dx(1, 0, 0), dy(0, 1, 0), albedo(0.75, 0.5, 0.25);\n"
@@ -1036,24 +1081,31 @@ static void verify_backend_ops(int32_t preferMetal4) {
         int64_t edgeOffsets[3] = {0};
         float *edgeLook = (float *)(void *)cm_buffer_contents(lBuf);
         int32_t *edgeFrame = (int32_t *)(void *)cm_buffer_contents(fBuf);
+        float *edgeFrameFloats = (float *)edgeFrame;
         edgeLook[118] = 56.0f; // 4-chunk render distance, minus the existing 8-block inset
+        edgeFrameFloats[10] = 1.0f; // view z
+        edgeFrameFloats[26] = 0.0f; edgeFrameFloats[30] = 0.05f; // reversed-Z projection and near plane
+        edgeFrameFloats[116] = 0.5f; edgeFrameFloats[118] = 0.5f; // eye centered in the water block
         for (int test = 0; test < 3; test++) {
             edgeFrame[241] = test == 1 ? 1 : 0; // underwater
-            ((float *)edgeFrame)[250] = test == 2 ? 32.0f : 0.0f; // legacy A/B switch
+            edgeFrameFloats[250] = test == 2 ? 32.0f : 0.0f; // legacy A/B switch
+            edgeFrameFloats[252] = test == 0 ? 0.01f : 0.0f; // still water one centimetre below the eye
             cm_cmd_begin(ctx);
             cm_compute_dispatch(ctx, edgePso, edgeBuffers, edgeOffsets, 3, NULL, 0, NULL, 0, 1, 1, 1, 1, 1, 1);
             assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
             const float *out = (const float *)(void *)cm_buffer_contents(edgeRead);
             assert(out[0] == 0.0f && out[4] == 0.0f);
+            assert(out[8] == 0.0f && out[9] == 0.0f && out[10] == 0.0f);
             if (test == 0) {
                 assert(out[1] > 0.0f && out[1] < 1.0f && fabsf(out[1] - out[2]) < 1e-5f);
                 assert(out[3] == 1.0f && out[5] > 0.0f && out[5] < 1.0f && out[6] == 1.0f);
+                assert(fabsf(out[7] - 0.99f) < 1e-5f);
             } else {
-                assert(out[1] == 0.0f && out[3] == 0.0f && out[6] == 0.0f);
+                assert(out[1] == 0.0f && out[3] == 0.0f && out[6] == 0.0f && out[7] == 0.0f);
             }
         }
         assert(cm_device_drain_errors(ctx, serr, sizeof(serr)) == 0);
-        printf("[Backend %s] Chunk edge radial fade, reflection weight, and fog bypass OK\n",
+        printf("[Backend %s] Chunk edge fade, reflection weight, fog bypass and near-plane water path OK\n",
                preferMetal4 ? "Metal 4" : "Metal 3");
 
         int64_t pbrFn = cm_compile_function(edgeLib, "labpbr_probe", 0, 0, 0, serr, sizeof(serr));
@@ -2066,7 +2118,7 @@ static void verify_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
          "    return o;\n"
          "}\n"
          "fragment float4 p_opq_fs(POut in [[stage_in]]) {\n"
-         "    if (in.uv.x > 0.5) discard_fragment();\n"
+         "    if (in.uv.x > 0.5 && any(uint2(in.pos.xy) != uint2(112, 64))) discard_fragment();\n"
          "    return float4(0.25, 0.85, 0.35, 1.0);\n"
          "}\n"
          "fragment float4 p_wtr_fs(POut in [[stage_in]],\n"
@@ -2076,9 +2128,21 @@ static void verify_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
          "                         texture2d<float> pyr [[texture(%d)]],\n"
          "                         texture2d<half> det [[texture(%d)]],\n"
          "                         constant float4 *wp [[buffer(%d)]],\n"
+         "                         constant ShadeFrame &frame [[buffer(CM_SHADE_BUF_FRAME)]],\n"
          "                         constant ShadeResources &res [[buffer(CM_SHADE_BUF_RESOURCES)]]) {\n"
          "    if (in.uv.x <= 0.5) discard_fragment();\n"
          "    constexpr sampler ls(filter::linear, mip_filter::linear, address::repeat);\n"
+         "    if (uint(in.pos.x) >= 112u) {\n"
+         "        float2 solid = float2(32.5, 64.5) / 128.0;\n"
+         "        float2 point = float2(112.5, 64.5) / 128.0;\n"
+         "        float2 sky = float2(120.5, 64.5) / 128.0;\n"
+         "        float submerged, above, isolated, empty;\n"
+         "        shadeWaterHitColorCore(solid, float3(0.0, 0.25, 0.0), 1.0, 0.0, frame, nullptr, sc, submerged, dc, sc, true);\n"
+         "        shadeWaterHitColorCore(solid, float3(0.0, -0.25, 0.0), 1.0, 0.0, frame, nullptr, sc, above, dc, sc, true);\n"
+         "        shadeWaterHitColorCore(point, float3(0.0, 0.25, 0.0), 1.0, 0.0, frame, nullptr, sc, isolated, dc, sc, true);\n"
+         "        shadeWaterHitColorCore(sky, float3(0.0, 0.25, 0.0), 1.0, 0.0, frame, nullptr, sc, empty, dc, sc, true);\n"
+         "        return float4(submerged, above, isolated, empty);\n"
+         "    }\n"
          "    float3 opq = float3(sc.read(uint2(32, 64)).rgb);\n"
          "    float dep = dc.read(uint2(32, 64));\n"
          "    float2 p16 = pyr.read(uint2(2, 4)).xy;\n"
@@ -2106,9 +2170,12 @@ static void verify_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
     int64_t pWtrPso = cm_render_pipeline_create(ctx, pVs, pWtrFs, NULL, 0, NULL, 0, &f16Desc, 1, CM_FMT_D32_FLOAT, CM_TOPO_TRIANGLES, 0, 0, 1, CM_CMP_GREATER_EQUAL, 1, 0, 0, "2n_wtr", err, sizeof(err));
     assert(pOpqPso && pWtrPso);
 
-    uint8_t zeroFrame[1024] = {0};
-    float *ff = (float *)zeroFrame;
-    ff[0]=1; ff[5]=1; ff[10]=1; ff[15]=1;
+    float ff[256] = {0};
+    set_identity(ff);
+    ff[21] = 1.0f; // proj[1][1]
+    ff[30] = 1.0f; // proj[3][2]
+    set_identity(ff + 48); // invViewProj
+    ff[212] = ff[213] = 128.0f; // screen.xy
     ff[248] = 1.25f; // sunPath.w = waterTime = 1.25s so wave height/slopes are non-zero
     uint8_t zeroLook[1136] = {0};
     uint8_t zeroGpu[512] = {0};
@@ -2117,7 +2184,7 @@ static void verify_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
     waterParams[11] = 1.0f; // state.w = baked waves ready
     waterParams[12] = 1.0f; // tune.x
 
-    int64_t fBuf = cm_buffer_create(ctx, sizeof(zeroFrame), zeroFrame, "2n_frame");
+    int64_t fBuf = cm_buffer_create(ctx, sizeof(ff), ff, "2n_frame");
     int64_t lBuf = cm_buffer_create(ctx, sizeof(zeroLook), zeroLook, "2n_look");
     int64_t gBuf = cm_buffer_create(ctx, sizeof(zeroGpu), zeroGpu, "2n_gpu");
     int64_t rBuf = cm_buffer_create(ctx, 256, NULL, "2n_res");
@@ -2187,6 +2254,9 @@ static void verify_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
                 api, leftH[0], leftH[1], leftH[2], leftH[3], rightH[0], rightH[1], rightH[2], rightH[3]);
         exit(1);
     }
+    // Reflection resolve keeps the broad submerged hit and rejects above-water, isolated and empty samples.
+    const uint16_t *reflection = px + (64 * W + 120) * 4;
+    assert(reflection[0] == 0x3C00 && reflection[1] == 0 && reflection[2] == 0 && reflection[3] == 0);
     printf("[Backend %s] Test 2n P3a Water (scene+depth capture, 3-pass RG16F pyramid, wave/detail/swell bake+mips, reopened pass) OK\n", api);
 
     cm_shade_set_globals(ctx, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -2291,10 +2361,52 @@ static void benchmark_p3a_water(NSString *assetsDir, int32_t preferMetal4) {
     cm_device_destroy(ctx);
 }
 
+static void verify_weather_hdr(int64_t ctx, NSString *ported) {
+    NSString *source = [NSString stringWithFormat:
+        @"%@\n%@\n"
+         "kernel void weather_hdr(constant ShadeLook &look [[buffer(0)]], device float4 *out [[buffer(1)]], uint i [[thread_position_in_grid]]) {\n"
+         "    float x = float(i) / 63.0;\n"
+         "    out[i] = shadeLdrToHdr(float4(x, fract(x * 3.0), fract(x * 7.0), 0.375), look);\n"
+         "}\n", read_file_str(shade_path(ported, @"shade_api.metal")), read_file_str(shade_path(ported, @"shade_look.metal"))];
+    float look[284] = {0};
+    look[92] = look[93] = look[94] = 1.0f; // grade3 gain
+    look[96] = 1.4f; look[97] = 0.92f; look[98] = 0.86f; look[99] = 0.2f;
+    look[103] = 0.8f; // inverse tone curve maximum
+    for (int i = 0; i < 3; i++) look[228 + i * 5] = look[240 + i * 5] = 1.0f; // inverse grade matrices
+    int64_t lookBuf = cm_buffer_create(ctx, sizeof(look), look, "Weather look fixture");
+    int64_t result[2];
+    for (int fast = 0; fast <= 1; fast++) {
+        NSString *msl = fast ? [@"#define CELESTIA_WEATHER_FAST_HDR 1\n" stringByAppendingString:source] : source;
+        char error[4096] = {0};
+        int64_t lib = cm_compile_msl_library(ctx, msl.UTF8String, "Weather HDR fixture", 0, error, sizeof(error));
+        if (!lib) fprintf(stderr, "FAIL compiling weather HDR fixture: %s\n", error);
+        assert(lib);
+        int64_t fn = cm_compile_function(lib, "weather_hdr", 0, 0, 0, error, sizeof(error));
+        int64_t pso = cm_compute_pipeline_create(ctx, fn, "Weather HDR fixture", error, sizeof(error));
+        assert(pso);
+        result[fast] = cm_buffer_create(ctx, 64 * 4 * sizeof(float), NULL, "Weather HDR results");
+        int64_t buffers[2] = { lookBuf, result[fast] };
+        int64_t offsets[2] = { 0, 0 };
+        cm_cmd_begin(ctx);
+        cm_compute_dispatch(ctx, pso, buffers, offsets, 2, NULL, 0, NULL, 0, 1, 1, 1, 64, 1, 1);
+        assert(cm_wait_submit(ctx, cm_cmd_submit(ctx, 2), 5000000000ULL) == 1);
+        cm_pipeline_destroy(ctx, pso);
+        cm_function_destroy(fn);
+        cm_library_destroy(lib);
+    }
+    const float *exact = (const float *)cm_buffer_contents(result[0]);
+    const float *fast = (const float *)cm_buffer_contents(result[1]);
+    for (int i = 0; i < 64 * 4; i++) {
+        assert(isfinite(fast[i]) && fabsf(fast[i] - exact[i]) <= 2e-4f * fmaxf(1.0f, exact[i]));
+    }
+    cm_buffer_destroy(ctx, result[1]); cm_buffer_destroy(ctx, result[0]); cm_buffer_destroy(ctx, lookBuf);
+}
+
 static void verify_p3b_atmosphere(NSString *assetsDir, int32_t preferMetal4) {
     int64_t ctx = cm_device_create(preferMetal4, 0, "");
     assert(ctx);
     NSString *ported = [assetsDir stringByAppendingPathComponent:@"shaders/ported"];
+    verify_weather_hdr(ctx, ported);
     NSMutableString *source = [NSMutableString stringWithString:
         @"#define MCOPT_SHADE 1\n#define MCOPT_HDR 1\n#define SHADE_WX_NOISE_BAKE 1\n"
          "#define CELESTIA_VL_MARCH 1\n#define CELESTIA_VL_COMPOSITE 1\n#define CELESTIA_SSAO 1\n"];

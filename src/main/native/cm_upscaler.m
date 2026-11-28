@@ -171,6 +171,12 @@ fragment float4 cm_upscale_fs(BlitOut in [[stage_in]], texture2d<float> src [[te
 @property (nonatomic) NSUInteger inW, inH, outW, outH;
 @property (nonatomic) MTLPixelFormat inFmt, outFmt;
 @property (nonatomic, strong) id<MTLTexture> spatialOut;
+@property (nonatomic, strong) id temporal;           // MTLFXTemporalScaler or MTL4FXTemporalScaler
+@property (nonatomic) BOOL temporalM4;
+@property (nonatomic) BOOL temporalUnavailable;
+@property (nonatomic) NSUInteger tInW, tInH, tOutW, tOutH;
+@property (nonatomic) MTLPixelFormat tInFmt, tOutFmt;
+@property (nonatomic, strong) id<MTLTexture> temporalOut;
 @end
 @implementation CMUpscalePath
 @end
@@ -350,5 +356,113 @@ int32_t cm_upscale_to(int64_t ctxPtr, int64_t srcTexPtr, int64_t dstTexPtr, int3
         CMUpscalePath *p = upscale_path(ctx);
         if (mode == 1 && encode_spatial(ctx, p, src, dst)) return 1;
         return encode_bilinear(ctx, p, src, dst) ? 0 : -1;
+    }
+}
+
+// ---- World render scale: MetalFX Temporal (TemporalUpscaler.java in METALFX_TEMPORAL mode) ----
+static BOOL ensure_temporal(CMContext *ctx, CMUpscalePath *p, id<MTLTexture> src, id<MTLTexture> dst) {
+    if (p.temporalUnavailable) return NO;
+    if (p.temporal && p.tInW == src.width && p.tInH == src.height && p.tOutW == dst.width && p.tOutH == dst.height
+        && p.tInFmt == src.pixelFormat && p.tOutFmt == dst.pixelFormat) {
+        return YES;
+    }
+    if (![MTLFXTemporalScalerDescriptor supportsDevice:ctx.device]) { p.temporalUnavailable = YES; return NO; }
+    MTLFXTemporalScalerDescriptor *td = [MTLFXTemporalScalerDescriptor new];
+    td.colorTextureFormat = src.pixelFormat;
+    td.depthTextureFormat = MTLPixelFormatDepth32Float;
+    td.motionTextureFormat = MTLPixelFormatRG16Float;
+    td.outputTextureFormat = dst.pixelFormat;
+    td.inputWidth = src.width;
+    td.inputHeight = src.height;
+    td.outputWidth = dst.width;
+    td.outputHeight = dst.height;
+    td.autoExposureEnabled = NO;
+    td.reactiveMaskTextureEnabled = NO;
+    id scaler = nil;
+    BOOL m4 = NO;
+    if (ctx.metal4Active && ctx.m4Compiler && [MTLFXTemporalScalerDescriptor respondsToSelector:@selector(supportsMetal4FX:)]
+        && [MTLFXTemporalScalerDescriptor supportsMetal4FX:ctx.device]) {
+        if (@available(macOS 26.0, *)) {
+            scaler = [td newTemporalScalerWithDevice:ctx.device compiler:(id<MTL4Compiler>)ctx.m4Compiler];
+            m4 = scaler != nil;
+        }
+    }
+    if (!scaler && !ctx.metal4Active) scaler = [td newTemporalScalerWithDevice:ctx.device];
+    if (!scaler) { p.temporalUnavailable = YES; return NO; }
+    MTLTextureDescriptor *od = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:dst.pixelFormat
+                                                                                   width:dst.width height:dst.height mipmapped:NO];
+    od.storageMode = MTLStorageModePrivate;
+    od.usage = [(id<MTLFXTemporalScalerBase>)scaler outputTextureUsage] | MTLTextureUsageShaderRead;
+    id<MTLTexture> out = [ctx.device newTextureWithDescriptor:od];
+    if (!out) { p.temporalUnavailable = YES; return NO; }
+    if (ctx.debugLabels) out.label = @"CelestiaMetal.WorldTemporalOut";
+    if (p.temporalOut) {
+        cm_untrack_allocation(ctx, p.temporalOut);
+        cm_retire_object(ctx, p.temporalOut, atomic_load(&ctx->_nextSubmitSerial) + 1);
+    }
+    if (p.temporal) cm_retire_object(ctx, p.temporal, atomic_load(&ctx->_nextSubmitSerial) + 1);
+    cm_track_allocation(ctx, out);
+    p.temporal = scaler;
+    p.temporalM4 = m4;
+    p.temporalOut = out;
+    p.tInW = src.width; p.tInH = src.height; p.tOutW = dst.width; p.tOutH = dst.height;
+    p.tInFmt = src.pixelFormat; p.tOutFmt = dst.pixelFormat;
+    return YES;
+}
+
+int32_t cm_upscale_temporal(int64_t ctxPtr, int64_t srcTexPtr, int64_t depthTexPtr, int64_t motionTexPtr,
+                            int64_t dstTexPtr, float jitterX, float jitterY, int32_t reset) {
+    if (!ctxPtr || !srcTexPtr || !depthTexPtr || !motionTexPtr || !dstTexPtr) return 0;
+    @autoreleasepool {
+        CMContext *ctx = (__bridge CMContext *)(void *)ctxPtr;
+        id<MTLTexture> src = (__bridge id<MTLTexture>)(void *)srcTexPtr;
+        id<MTLTexture> dst = (__bridge id<MTLTexture>)(void *)dstTexPtr;
+        cm_cmd_begin(ctxPtr);
+        cm_flush_encoders(ctx);
+        CMUpscalePath *p = upscale_path(ctx);
+        if (!ensure_temporal(ctx, p, src, dst)) return 0;
+        id<MTLFXTemporalScalerBase> ts = (id<MTLFXTemporalScalerBase>)p.temporal;
+        ts.colorTexture = src;
+        ts.depthTexture = (__bridge id<MTLTexture>)(void *)depthTexPtr;
+        ts.motionTexture = (__bridge id<MTLTexture>)(void *)motionTexPtr;
+        ts.outputTexture = p.temporalOut;
+        ts.inputContentWidth = src.width;
+        ts.inputContentHeight = src.height;
+        // Jitter in input pixels and motion in UV (scaled to pixels here), both in texture space (+y down).
+        ts.jitterOffsetX = jitterX;
+        ts.jitterOffsetY = jitterY;
+        ts.motionVectorScaleX = (float)src.width;
+        ts.motionVectorScaleY = (float)src.height;
+        ts.depthReversed = YES;
+        ts.reset = reset != 0;
+        if (ctx.metal4Active) {
+            if (@available(macOS 26.0, *)) {
+                if (!p.temporalM4) return 0;
+                id<MTL4ComputeCommandEncoder> pre = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf computeCommandEncoder];
+                // MetalFX reads the motion pass's output and the depth copy (consumer barrier for its dispatches).
+                [pre barrierAfterQueueStages:MTLStageDispatch | MTLStageBlit | MTLStageFragment | MTLStageVertex
+                                beforeStages:MTLStageDispatch | MTLStageBlit
+                           visibilityOptions:MTL4VisibilityOptionDevice];
+                [pre endEncoding];
+                [(id<MTL4FXTemporalScaler>)ts encodeToCommandBuffer:(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf];
+                id<MTL4ComputeCommandEncoder> ce = [(id<MTL4CommandBuffer>)ctx.activeM4CmdBuf computeCommandEncoder];
+                [ce barrierAfterQueueStages:MTLStageDispatch | MTLStageBlit | MTLStageFragment | MTLStageVertex
+                               beforeStages:MTLStageBlit
+                          visibilityOptions:MTL4VisibilityOptionDevice];
+                [ce copyFromTexture:p.temporalOut toTexture:dst];
+                [ce barrierAfterStages:MTLStageBlit
+                     beforeQueueStages:MTLStageVertex | MTLStageFragment | MTLStageDispatch | MTLStageBlit
+                     visibilityOptions:MTL4VisibilityOptionDevice];
+                [ce endEncoding];
+                ctx->_stats[CM_STAT_BLIT_ENCODERS] += 2;
+            }
+        } else {
+            [(id<MTLFXTemporalScaler>)ts encodeToCommandBuffer:(id<MTLCommandBuffer>)ctx.activeM3CmdBuf];
+            id<MTLBlitCommandEncoder> be = [(id<MTLCommandBuffer>)ctx.activeM3CmdBuf blitCommandEncoder];
+            [be copyFromTexture:p.temporalOut toTexture:dst];
+            [be endEncoding];
+            ctx->_stats[CM_STAT_BLIT_ENCODERS]++;
+        }
+        return 1;
     }
 }

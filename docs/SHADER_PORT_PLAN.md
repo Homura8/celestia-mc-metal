@@ -7,18 +7,13 @@ Audience: the next agent picking this up. Read `AGENTS.md` first (build/test com
 Sections 1–9 below are the original port plan and history; their "current state" notes are dated. This block is current.
 
 - **Latest release:** `0.1.0-alpha.25` (`mod_version` in `gradle.properties`). Work since then is under `## Unreleased` in `CHANGELOG.md`.
-- **Open PR:** [#23](https://github.com/Homura8/celestia-mc-metal/pull/23), branch `feat/multi-pack`. It holds multi-pack support plus the roadmap-priorities commit. Check whether the owner merged it (`gh pr view 23`); if not, keep new work on a branch based on it.
+- **Merged work:** `main` includes native world-pack switching, the chunk-edge fix, and labPBR terrain materials through PR #30.
 - **What multi-pack added:**
   - Celestia Native's MSL lives in `src/main/resources/assets/celestiametal/shaderpacks/celestia-native/shaders/`.
   - The engine-owned ABI lives in `shaders/engine/`: `shade_api.metal` (structs), slots, vanilla uniforms, light/TAA kernels.
   - **Load world MSL only via `ShadeShaderPatcher.resource(name)`.**
   - The spec is `SHADER_PACK_SPEC.md` §5; AGENTS.md invariant 10 has the rules.
-- **Owner priorities, in order** (section 10):
-  1. Nether and End looks (next, **confirm with the owner before starting**).
-  2. Aurora.
-  3. Motion blur.
-  4. Cumulus congestus.
-  5. labPBR.
+- **Owner priorities:** the ordered list in §10 is complete. See §11 for the renderer audit findings.
 - **Standing decisions:**
   - Native MSL packs only; Iris stays hidden.
   - The pink-lavender haze stays (Pastel look).
@@ -34,8 +29,8 @@ Sections 1–9 below are the original port plan and history; their "current stat
 - **Known open items:**
   - The first compile of a new world pack pauses the game ~7 s.
   - Packs can't change engine-side passes yet.
-  - An old underwater glass-edge flash needs a recheck.
-  - The cost of the per-pixel `shadeLdrToHdr` in the Nether/End is unchecked; relevant to the next task.
+  - A glass-specific underwater flash outside the waterline transition still needs a reproducer.
+  - The cost of the per-pixel `shadeLdrToHdr` fallback in the Nether and End still needs an isolated measurement.
 
 ## 0. Goal and constraints
 
@@ -345,3 +340,79 @@ Owner priorities (2026-11-28), in order:
 - [x] labPBR 1.3 terrain materials from Minecraft resource packs (vanilla and Sodium), with a live `LAB_PBR` option.
 
 Settled: the pink-lavender distant haze stays, as part of the Pastel look (owner).
+
+## 11. Renderer audit (2026-11-28)
+
+- The renderer now alternates HDR world targets for previous-frame reflections. A same-process A/B/A on an M1 Pro compared
+  the full-frame copy with alternating targets over 90 Metal 4 submits per sample at 3024 × 1744. Savings were 0.50–1.20 ms
+  per submit across the pond, underwater, vista, Nether and End scenes. The reopened water pass was the largest cost in the pond.
+- The 180-frame QA descent reproduced a dry-looking pond floor when the near plane clipped the still-water surface. The water
+  path now contributes fog for rays that intersect that local surface before the near plane.
+- The underwater upward pan reproduced narrow reflection streaks with SSR enabled. The resolve now verifies that hits are on
+  submerged geometry and rejects nearby isolated depth samples.
+- A live render-scale change left the sky pass drawing into the previous target. The sky pass now uses the active target,
+  restoring the sun and the continuous haze around distant chunks with both TAAU and MetalFX Spatial.
+- The performance HUD and settings measure average FPS and 1% lows over the same 120-frame window, including frame pacing
+  and GPU waits between renders.
+- With the sky restored, Balanced and 65% TAAU averaged 61.4–178.5 FPS across ten scenes on the M1 Pro, at 1966 × 1134
+  internal resolution and 3024 × 1744 output. Heavy rain averaged 61.4 FPS with an 18.01 ms 99th-percentile frame time.
+  The noon and sunset pond views averaged 70.1 and 64.0 FPS respectively.
+- Under a 42-degree camera pan, nine of twelve scenes averaged at least 60 FPS at 65% TAAU. At 60% TAAU with the same
+  output resolution, the three slower scenes averaged 61.6 FPS at the sunset pond, 65.9 at the night pond and 63.3 in
+  heavy rain. Their 99th-percentile frame times were 18.06–19.09 ms.
+- World-pack switching and the coloured and dynamic light rooms passed in-game QA. The first compilation of the example pack
+  and its recompile option took 7.2–7.5 s. Warm switches drew three frames in 0.14–0.20 s.
+- **Native resolution (100% render scale, 3024 × 1744, M1 Pro, 300 frames under a 0.14°/frame pan):**
+
+  | Preset | Pond (noon / sunset / night) | Underwater noon | Heavy rain |
+  | --- | --- | --- | --- |
+  | Quality (the owner's preset) | 51.9 / 44.0 / 42.1 | 46.4 | 52.4 |
+  | Balanced | 47.3 / 41.4 / 45.3 | 44.8 | 52.1 |
+  | Performance | 80.5 / 64.6 / 64.0 | 94.9 | 61.8 |
+
+  On Quality, the land views ran at 68–92 FPS and the Nether and End at 138–162. Performance clears 60 FPS because Sky Only
+  reflections and zero swell and caustics compile those paths out of the water shader.
+- **Where Quality's water frame goes** (pond sunset, 22.4 ms per submit):
+  - The water pass (`CelestiaWater.ReopenedWorld`) takes 8.9 ms, the sky pass 3.8 ms and the final pass 1.3 ms.
+  - Switching off swell, caustics or foam alone saves almost nothing, because their code stays compiled in.
+  - Sky Only reflections save 3.5 ms in the water pass, although the SSR march itself is only ~1.25 ms (`devSsr=1`). The rest is
+    register pressure: the water shader is register-bound, so code behind a branch still costs on every water pixel.
+  - Procedural stars cost ~1.9 ms of the sky pass at sunset and night, and they are visible there.
+- **Next step towards 60 FPS at native Quality without visual loss:** move the SSR march out of the water fragment into its own
+  pass over water pixels, writing hits to a texture the water shader reads. This would cut the main water shader's register
+  pressure while keeping the same reflections. It is the largest image-preserving saving found (up to ~3 ms) but a sizeable
+  rewrite. The Fast Sky reflection choice exists for players who prefer frame rate, and no preset uses it.
+- **Real-play scenes** (plains village on the coast, Quality, native 3024 × 1744, 300 frames under a 0.14°/frame pan):
+
+  | Scene | FPS | p99 |
+  | --- | --- | --- |
+  | village-noon | 73.2 | 16.5 ms |
+  | village-sunset | 63.3 | 18.4 ms |
+  | village-night | 65.3 | 17.8 ms |
+  | village-high (over the bay) | 52.2 | 21.6 ms |
+  | village-shore | 48.2 | 23.5 ms |
+  | village-shore-sunset | 43.5 | 25.6 ms |
+  | village-rain | 51.5 | 22.5 ms |
+
+  On land the village clears 60 FPS. With the bay in view, the water pass takes 9–10 ms of a ~23 ms frame (village-shore
+  profile), the same as on the test pond. Rain spends ~4.1 ms in `Main` and ~2.9 ms unlabelled. This confirms water as the
+  native-Quality blocker in real play, and the SSR-split pass above as the next step.
+- **MetalFX Temporal** (`TemporalUpscaler` METALFX_TEMPORAL mode and `cm_upscale_temporal`; it used to fall back to Spatial):
+  - **Inputs:** TAAU's Halton jitter in input pixels (the `++` sign is verified: sharpest and closest to native), D32 depth, and
+    RG16F camera motion from `taa_motion` (previous − current UV, scaled to pixels natively).
+  - **Cost on the M1 Pro at 3024 × 1744 output:** MetalFX takes ~5.5 ms (pre 1.3, mid 2.3, post 1.8) plus 0.4 ms for motion.
+  - **Village timings, Quality:**
+
+    | Scale | Noon | Sunset | Night | Over the bay | Waterfront | Waterfront sunset | Rain |
+    | --- | --- | --- | --- | --- | --- | --- | --- |
+    | 75% | 62.8 | 58.2 | 59.6 | 51.2 | 50.2 | 46.5 | 49.0 |
+    | 85% | 50.9 | 48.7 | 51.4 | 44.0 | 42.7 | 39.5 | 43.9 |
+
+    Both are slower than native on this screen, because the upscaler's cost follows the output size.
+  - **When to use it:** on the laptop's Retina screen, native or TAAU gives more FPS. For a 4K output, use a lower input scale
+    (≤ 67%), where the saved world shading outweighs MetalFX's ~8 ms (extrapolated, not measured: QA can't drive a 4K window).
+  - **Water and rain are the frame-rate limit, not upscaling.** Real-play land views clear 60 FPS at native Quality.
+    Waterfront and rain need ~6 ms that no image-preserving change found here provides. Pricing the water features one at a time
+    by compiling each out (`-Dcelestiametal.shade.water.devUndef=…`) on `village-shore`: detail 1.25 ms, swell 1.2, foam 1.15,
+    caustics 1.07, glitter 0.77, glossy 0.38, rain ripples 0.13. The cost is spread across the shader's register pressure.
+

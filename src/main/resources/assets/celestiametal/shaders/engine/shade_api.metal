@@ -162,7 +162,7 @@ struct ShadeFrame {
 	int4 flags;                 // 960
 	int4 flags2;                // 976
 	float4 sunPath;             // 992
-	float4 wxLine;              // 1008
+	float4 wxLine;              // 1008 x distance to still water directly below the eye near the camera plane, yzw reserved
 };
 
 static_assert(sizeof(ShadeFrame) == 1024, "ShadeFrame size must be 1024 bytes");

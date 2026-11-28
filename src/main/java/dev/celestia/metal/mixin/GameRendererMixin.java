@@ -145,10 +145,7 @@ public final class GameRendererMixin {
         if (dev != null) {
             dev.shade().onFrameEnd();
         }
-        if (celestiametal$frameStartNs != 0L) {
-            double ms = (System.nanoTime() - celestiametal$frameStartNs) / 1_000_000.0;
-            PerformanceEngine.get().onFrameEnd(ms);
-        }
+        PerformanceEngine.get().onFrameEnd(celestiametal$frameStartNs, minecraft.options.framerateLimit().get());
     }
 
     @Unique

@@ -118,6 +118,7 @@ public final class CelestiaShade {
     private long hdrWorldTex;
     private long hdrWorldView;
     private long prevHdrWorldTex;
+    private long prevHdrWorldView;
     private long motionTex;
     private int motionWidth, motionHeight;
     private boolean hasPrevHdrWorld;
@@ -185,7 +186,7 @@ public final class CelestiaShade {
     }
 
     public boolean isWorldRedirectActive() {
-        return worldRedirectActive && isReady() && hdrWorldTex != 0L;
+        return worldRedirectActive && isReady() && hdrWorldView != 0L;
     }
 
     public boolean isHandPassActive() {
@@ -372,6 +373,11 @@ public final class CelestiaShade {
         int w = Math.max(1, color.getWidth(0));
         int h = Math.max(1, color.getHeight(0));
         ensureHdrTarget(w, h);
+        if (hdrWorldView == 0L) {
+            worldRedirectActive = false;
+            MetalNative.shadeSetEnabled(device.handle(), false);
+            return;
+        }
         ensureBloomTargets(w, h);
 
         ClientLevel level = mc.level;
@@ -392,7 +398,8 @@ public final class CelestiaShade {
 
         double x = camera.pos.x, y = camera.pos.y, z = camera.pos.z;
         boolean hadPrev = hasPrevious;
-        if (hasPrevious && Math.abs(x - prevCamX) + Math.abs(y - prevCamY) + Math.abs(z - prevCamZ) < 64.0) {
+        boolean cameraCut = !hadPrev || Math.abs(x - prevCamX) + Math.abs(y - prevCamY) + Math.abs(z - prevCamZ) >= 64.0;
+        if (!cameraCut) {
             previousViewProj.translate((float) (x - prevCamX), (float) (y - prevCamY), (float) (z - prevCamZ), frame.prevViewProj);
         } else {
             frame.prevViewProj.set(frame.viewProj);
@@ -431,12 +438,15 @@ public final class CelestiaShade {
 
         FogData fog = camera.fogData;
         FogType fogType = camera.fogType;
+        int previousFogType = frame.fogType;
         frame.fogType = fogType == FogType.WATER ? ShadeFrame.FOG_WATER
             : fogType == FogType.LAVA ? ShadeFrame.FOG_LAVA
             : fogType == FogType.POWDER_SNOW ? ShadeFrame.FOG_POWDER_SNOW : ShadeFrame.FOG_AIR;
         frame.underwater = fogType == FogType.WATER;
         frame.waterSurfaceAbove = frame.underwater && frame.dimension == ShadeFrame.DIM_OVERWORLD && applied.water().enabled()
             ? WaterFrame.surfaceAbove(level, x, y, z) : 0f;
+        frame.waterSurfaceBelow = frame.fogType == ShadeFrame.FOG_AIR && frame.dimension == ShadeFrame.DIM_OVERWORLD
+            && applied.water().enabled() ? WaterFrame.surfaceJustBelow(level, camera.blockPos, y) : 0f;
         Vector4f fogColor = fog.color;
         frame.fogColor[0] = fogColor.x;
         frame.fogColor[1] = fogColor.y;
@@ -460,10 +470,11 @@ public final class CelestiaShade {
         float dt = lastNanos == 0L ? 0f : (now - lastNanos) / 1e9f;
         lastNanos = now;
         boolean snap = lastDimension != frame.dimension || dt > 1f || !applied.equals(settings) || snapRequested;
+        boolean resetHistory = snap || cameraCut || frame.fogType != previousFogType;
         snapRequested = false;
         settings = applied;
         double clampedDt = Math.min(Math.max(dt, 0f), 0.25);
-        motionEligible = hadPrev && !snap && clampedDt > 0.0 && clampedDt <= 0.1
+        motionEligible = !resetHistory && clampedDt > 0.0 && clampedDt <= 0.1
             && !frame.viewProj.equals(frame.prevViewProj, 1e-5f);
         waterClock = (waterClock + clampedDt) % 4096.0;
         skyClock = (skyClock + clampedDt) % 65536.0;
@@ -473,10 +484,8 @@ public final class CelestiaShade {
 
         look.setOptions(settings);
         frame.updateAtmosphere((float) clampedDt, snap);
-        if (snap) {
-            hasPrevHdrWorld = false;
-            look.snapExposure();
-        }
+        if (resetHistory) hasPrevHdrWorld = false;
+        if (snap) look.snapExposure();
         look.setHasPrevScene(hasPrevHdrWorld && prevHdrWorldTex != 0L);
         look.update(frame, moonPhaseIndex, (float) clampedDt);
         look.setMaterialFeatures(materials.prepare(device.handle(), mc, applied.labPbr()));
@@ -553,6 +562,19 @@ public final class CelestiaShade {
     public ShadeShaderPatcher.Variant onTranslucentTerrainBind() {
         if (isWorldRedirectActive() && frame.dimension == ShadeFrame.DIM_OVERWORLD && settings.water().enabled()) {
             water.captureIfNeeded(device.handle());
+            ShadeSettings.Water options = settings.water();
+            if (!options.screenReflections()) {
+                if (frame.underwater) return ShadeShaderPatcher.Variant.HDR_WORLD_WATER_SKY_ONLY;
+                boolean swellOrCaustics = options.swell() > 0f || options.caustics() > 0f;
+                if (options.fastSkyReflections()) {
+                    return swellOrCaustics ? ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE_FAST_SKY
+                        : ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE_FAST_SKY_NO_SWELL_CAUSTICS;
+                }
+                if (!swellOrCaustics) {
+                    return ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE_SKY_ONLY_NO_SWELL_CAUSTICS;
+                }
+                return ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE_SKY_ONLY;
+            }
             if (!frame.underwater) return ShadeShaderPatcher.Variant.HDR_WORLD_WATER_ABOVE;
         }
         return ShadeShaderPatcher.Variant.HDR_WORLD;
@@ -574,11 +596,6 @@ public final class CelestiaShade {
         }
         GpuTexture depthGpu = worldDepth != null ? worldDepth : (main != null ? main.getDepthTexture() : null);
         long depthPtr = (depthGpu instanceof CelestiaTexture dt) ? dt.handle() : dummyShadowTex;
-
-        if (prevHdrWorldTex != 0L) {
-            MetalNative.blitCopyTextureFull(ctx, hdrWorldTex, prevHdrWorldTex);
-            hasPrevHdrWorld = true;
-        }
 
         long sceneTex = hdrWorldTex;
         if (motionEligible && psoMotion != 0L && settings.post().motionBlur()
@@ -697,6 +714,17 @@ public final class CelestiaShade {
                 gpuBuf, 0L, ringBuf, lookOff, gx, gy);
         }
 
+        // The world pass is finished. Keep its unblurred HDR target for reflections in the next frame.
+        // The next LevelRenderer clear initializes the other target before it is drawn into again.
+        if (prevHdrWorldView != 0L) {
+            long finishedTex = hdrWorldTex, finishedView = hdrWorldView;
+            hdrWorldTex = prevHdrWorldTex;
+            hdrWorldView = prevHdrWorldView;
+            prevHdrWorldTex = finishedTex;
+            prevHdrWorldView = finishedView;
+            hasPrevHdrWorld = true;
+        }
+
         // Disable shader globals for post/GUI passes unless hand pass re-enables them
         MetalNative.shadeSetEnabled(ctx, false);
     }
@@ -795,21 +823,34 @@ public final class CelestiaShade {
     }
 
     private void ensureHdrTarget(int w, int h) {
-        if (hdrWorldTex != 0L && prevHdrWorldTex != 0L && hdrWidth == w && hdrHeight == h) return;
+        if (hdrWorldView != 0L && hdrWidth == w && hdrHeight == h) return;
         long ctx = device.handle();
-        if (hdrWorldView != 0L) { MetalNative.textureViewDestroy(ctx, hdrWorldView); hdrWorldView = 0L; }
-        if (hdrWorldTex != 0L) { MetalNative.textureDestroy(ctx, hdrWorldTex); hdrWorldTex = 0L; }
-        if (prevHdrWorldTex != 0L) { MetalNative.textureDestroy(ctx, prevHdrWorldTex); prevHdrWorldTex = 0L; }
+        destroyHdrTargets(ctx);
         if (motionTex != 0L) { MetalNative.textureDestroy(ctx, motionTex); motionTex = 0L; motionWidth = motionHeight = 0; }
-        hasPrevHdrWorld = false;
         motionEligible = false;
         hdrWorldTex = MetalNative.textureCreate(ctx, MetalConst.FMT_RGBA16_FLOAT, w, h, 1, 1,
-            false, true, true, false, "CelestiaShade.HdrWorld");
+            false, true, true, false, "CelestiaShade.HdrWorld[0]");
         hdrWorldView = MetalNative.textureViewCreate(ctx, hdrWorldTex, 0, 1);
-        prevHdrWorldTex = MetalNative.textureCreate(ctx, MetalConst.FMT_RGBA16_FLOAT, w, h, 1, 1,
-            false, false, true, false, "CelestiaShade.PrevHdrWorld");
+        if (hdrWorldView != 0L) {
+            prevHdrWorldTex = MetalNative.textureCreate(ctx, MetalConst.FMT_RGBA16_FLOAT, w, h, 1, 1,
+                false, true, true, false, "CelestiaShade.HdrWorld[1]");
+            prevHdrWorldView = MetalNative.textureViewCreate(ctx, prevHdrWorldTex, 0, 1);
+            if (prevHdrWorldView == 0L && prevHdrWorldTex != 0L) {
+                MetalNative.textureDestroy(ctx, prevHdrWorldTex);
+                prevHdrWorldTex = 0L;
+            }
+        }
         hdrWidth = w;
         hdrHeight = h;
+    }
+
+    private void destroyHdrTargets(long ctx) {
+        if (hdrWorldView != 0L) MetalNative.textureViewDestroy(ctx, hdrWorldView);
+        if (prevHdrWorldView != 0L) MetalNative.textureViewDestroy(ctx, prevHdrWorldView);
+        if (hdrWorldTex != 0L) MetalNative.textureDestroy(ctx, hdrWorldTex);
+        if (prevHdrWorldTex != 0L) MetalNative.textureDestroy(ctx, prevHdrWorldTex);
+        hdrWorldView = prevHdrWorldView = hdrWorldTex = prevHdrWorldTex = 0L;
+        hasPrevHdrWorld = false;
     }
 
     private void ensureMotionTarget(int w, int h) {
@@ -889,11 +930,8 @@ public final class CelestiaShade {
             materials.close(ctx);
             MetalNative.shadeSetResource(ctx, 0, 0L);
             MetalNative.shadeSetResource(ctx, 1, 0L);
-            if (hdrWorldView != 0L) { MetalNative.textureViewDestroy(ctx, hdrWorldView); hdrWorldView = 0L; }
-            if (hdrWorldTex != 0L) { MetalNative.textureDestroy(ctx, hdrWorldTex); hdrWorldTex = 0L; }
-            if (prevHdrWorldTex != 0L) { MetalNative.textureDestroy(ctx, prevHdrWorldTex); prevHdrWorldTex = 0L; }
+            destroyHdrTargets(ctx);
             if (motionTex != 0L) { MetalNative.textureDestroy(ctx, motionTex); motionTex = 0L; }
-            hasPrevHdrWorld = false;
             motionEligible = false;
             motionWidth = motionHeight = 0;
             for (int i = 0; i < BLOOM_LEVELS; i++) {

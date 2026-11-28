@@ -1477,17 +1477,35 @@ static inline float3 shadeWaterPrevTaps(texture2d<half> prev, float2 uvp, float2
 // known: the hit's camera-relative point is given (pwKnown: the exact march's hit on its ray), not read back from the depth copy
 static inline float3 shadeWaterHitColorCore(float2 uv, float3 o, float exposure, float prevExposure, constant ShadeFrame &f, constant ShadeLook *L, texture2d<half> scene,
                                  thread float &coverage,
-                                 depth2d<float> depth, texture2d<half> prev, float2 fx = float2(0.0), float2 fy = float2(0.0), bool wide = false,
+                                 depth2d<float> depth, texture2d<half> prev, bool underside, float2 fx = float2(0.0), float2 fy = float2(0.0), bool wide = false,
                                  bool known = false, float3 pwKnown = float3(0.0), constant ShadeResources *R = nullptr) {
 	float2 tex = float2(depth.get_width(), depth.get_height());
 	float2 size = shadeWaterRenderSize(f, tex);
 	bool border = L != nullptr && shadeChunkEdgeEnabled(f, *L);
 	float z = 1.0;
 	float3 pw = pwKnown;
-	if (!known && (prevExposure > 0.0 || border)) {
-		z = depth.read(uint2(clamp(uv * size, float2(0.0), size - 1.0)));
-		float4 wp = f.invViewProj * float4(uv * 2.0 - 1.0, z, 1.0);
+	if (underside || (!known && (prevExposure > 0.0 || border))) {
+		uint2 px = uint2(clamp(uv * size, float2(0.0), size - 1.0));
+		z = depth.read(px);
+		float2 hitUv = underside ? (float2(px) + 0.5) / size : uv;
+		float4 wp = f.invViewProj * float4(hitUv * 2.0 - 1.0, z, 1.0);
 		pw = wp.xyz / wp.w;
+		if (underside) {
+			// A surface reflection from below can only hit submerged geometry. Nearby isolated
+			// depth samples (particles) would otherwise stretch into streaks at grazing angles.
+			bool valid = z > 0.0 && pw.y <= o.y + 0.08;
+#ifdef SHADE_SSR_HIER
+			float wh = shadeLinearW(z, f);
+			if (valid && wh < SHADE_SSRH_THIN_W) {
+				float pxB = 0.5 * size.y * abs(f.proj[1][1]);
+				valid = !shadeSsrhSmall(depth, float2(px) + 0.5, float2(1.0, 0.0), wh, pxB, size - 1.0, f.proj[2][2], f.proj[3][2]);
+			}
+#endif
+			if (!valid) {
+				coverage = 0.0;
+				return float3(0.0);
+			}
+		}
 	}
 	// The caller blends this hit over the sky sampled along the reflected ray.
 	coverage = border && z > 0.0 ? 1.0 - shadeChunkEdgeFade(pw, f, *L) : 1.0;
@@ -1527,9 +1545,9 @@ static inline float3 shadeWaterHitColorCore(float2 uv, float3 o, float exposure,
 }
 // (candidate 7's march and the glossy translucents) the same as a call: only pixels with a hit pay for it
 static SHADE_COLD float4 shadeWaterHitColor(float2 uv, float3 o, float exposure, float prevExposure, constant ShadeFrame &f, constant ShadeLook *L, texture2d<half> scene,
-                                 depth2d<float> depth, texture2d<half> prev, float weight) {
+                                 depth2d<float> depth, texture2d<half> prev, float weight, bool underside) {
 	float coverage;
-	float3 color = shadeWaterHitColorCore(uv, o, exposure, prevExposure, f, L, scene, coverage, depth, prev);
+	float3 color = shadeWaterHitColorCore(uv, o, exposure, prevExposure, f, L, scene, coverage, depth, prev, underside);
 	return float4(color, weight * coverage);
 }
 
@@ -1808,7 +1826,7 @@ static inline float2 shadeWaterPanoWanted(float3 p0, float3 r, constant ShadeFra
 // what the panorama holds there under it. rgb the mirrored radiance, a its weight over the sky's reflection.
 static SHADE_COLD float4 shadeSsrResolve(bool isHit, float hitW, float2 uv, float3 o, float3 r, float exposure, float prevExposure, constant ShadeFrame &f,
                                          constant ShadeLook *L, constant ShadeResources *R, texture2d<half> scene, depth2d<float> depth, texture2d<half> prev,
-                                         float2 fx, float2 fy, bool wide, bool known, float3 pwKnown, float panoW, float t0,
+                                         float2 fx, float2 fy, bool wide, bool known, float3 pwKnown, float panoW, float t0, bool underside,
                                          float4 raw = float4(0.0), float3 so = float3(0.0), float3 dso = float3(0.0), bool rawEnd = false, float yFloor = 0.0) {
 	float3 c = 0.0;
 	float wgt = 0.0;
@@ -1831,9 +1849,9 @@ static SHADE_COLD float4 shadeSsrResolve(bool isHit, float hitW, float2 uv, floa
 		}
 	}
 #endif
-	if (isHit) {
+	if (isHit && hitW > 0.0) {
 		float coverage;
-		c = shadeWaterHitColorCore(uv, o, exposure, prevExposure, f, L, scene, coverage, depth, prev, fx, fy, wide, known, pwKnown, R);
+		c = shadeWaterHitColorCore(uv, o, exposure, prevExposure, f, L, scene, coverage, depth, prev, underside, fx, fy, wide, known, pwKnown, R);
 		wgt = hitW * coverage;
 	}
 #ifdef SHADE_WATER_PANO
@@ -1878,7 +1896,7 @@ static inline float shadeSsrHitT(float2 uv, float3 p0, constant ShadeFrame &f, d
 static float4 shadeSsrT(float3 p0, float3 r, float2 pixel, float maxDist, float exposure, float prevExposure, constant ShadeFrame &f,
                        constant ShadeLook *L, texture2d<half> scene, depth2d<float> depth, texture2d<half> prev, texture2d<float> hz,
                        int requestedBudget, thread float &tHit, float footprint = 1.0, float panoShare = 0.0, constant ShadeResources *R = nullptr, int dev = 0,
-                       bool haveDc = false, float4 dcIn = float4(0.0)) {
+                       bool haveDc = false, float4 dcIn = float4(0.0), bool underside = false) {
 	tHit = -1.0;
 	float2 tex = float2(depth.get_width(), depth.get_height());
 	float2 size = shadeWaterRenderSize(f, tex);
@@ -2017,13 +2035,13 @@ static float4 shadeSsrT(float3 p0, float3 r, float2 pixel, float maxDist, float 
 	span = 0.0;
 #endif
 #ifdef SHADE_SSRH_ONRAY
-	return shadeSsrResolve(hit.w >= 0.0, hit.z, hit.xy, p0Own, rOwn, exposure, prevExposure, f, L, R, scene, depth, prev, fx, fy, span > 1.5 && hit.z > 0.15, onRay, hitP, want.x, want.y,
+	return shadeSsrResolve(hit.w >= 0.0, hit.z, hit.xy, p0Own, rOwn, exposure, prevExposure, f, L, R, scene, depth, prev, fx, fy, span > 1.5 && hit.z > 0.15, onRay, hitP, want.x, want.y, underside,
 	                       raw, so, dso, endOwn, yFloor);
 #undef SHADE_SSRH_ONRAY
 #elif defined(SHADE_SSR_QUAD)
-	return shadeSsrResolve(hit.w >= 0.0, hit.z, hit.xy, p0Own, rOwn, exposure, prevExposure, f, L, R, scene, depth, prev, fx, fy, span > 1.5, false, float3(0.0), want.x, want.y);
+	return shadeSsrResolve(hit.w >= 0.0, hit.z, hit.xy, p0Own, rOwn, exposure, prevExposure, f, L, R, scene, depth, prev, fx, fy, span > 1.5, false, float3(0.0), want.x, want.y, underside);
 #else
-	return shadeSsrResolve(hit.w >= 0.0, hit.z, hit.xy, p0, r, exposure, prevExposure, f, L, R, scene, depth, prev, fx, fy, span > 1.5, false, float3(0.0), want.x, want.y);
+	return shadeSsrResolve(hit.w >= 0.0, hit.z, hit.xy, p0, r, exposure, prevExposure, f, L, R, scene, depth, prev, fx, fy, span > 1.5, false, float3(0.0), want.x, want.y, underside);
 #endif
 #elif defined(SHADE_SSR_QUAD)
 #ifdef SHADE_SSR_LANE
@@ -2075,9 +2093,9 @@ static float4 shadeSsrT(float3 p0, float3 r, float2 pixel, float maxDist, float 
 #endif
 	tHit = shadeSsrHitT(h.xy, p0, f, depth);
 #ifdef SHADE_PRICE_NOHAZE
-	return shadeWaterHitColor(h.xy, p0, exposure, prevExposure, f, nullptr, scene, depth, prev, h.z);
+	return shadeWaterHitColor(h.xy, p0, exposure, prevExposure, f, nullptr, scene, depth, prev, h.z, underside);
 #endif
-	return shadeWaterHitColor(h.xy, p0, exposure, prevExposure, f, L, scene, depth, prev, h.z);
+	return shadeWaterHitColor(h.xy, p0, exposure, prevExposure, f, L, scene, depth, prev, h.z, underside);
 #else
 	if (!shadeSsrSegment(p0, r, maxDist, f, s0, ds, screenEnd)) return 0.0;
 	float4 hit = shadeSsrMarch(s0, ds, screenEnd, 0, 1, shadeNoise(pixel, SHADE_WATER_NOISE_FRAME(f)), f, depth, hz);
@@ -2086,13 +2104,13 @@ static float4 shadeSsrT(float3 p0, float3 r, float2 pixel, float maxDist, float 
 	if (shadeSsrBelowStart(hit.xy, p0, r, f, depth)) return 0.0;
 #endif
 	tHit = shadeSsrHitT(hit.xy, p0, f, depth);
-	return shadeWaterHitColor(hit.xy, p0, exposure, prevExposure, f, L, scene, depth, prev, hit.z);
+	return shadeWaterHitColor(hit.xy, p0, exposure, prevExposure, f, L, scene, depth, prev, hit.z, underside);
 #endif
 }
 static inline float4 shadeSsr(float3 p0, float3 r, float2 pixel, float maxDist, float exposure, float prevExposure, constant ShadeFrame &f,
-                              constant ShadeLook *L, texture2d<half> scene, depth2d<float> depth, texture2d<half> prev, texture2d<float> hz, int budget, int dev = 0) {
+                              constant ShadeLook *L, texture2d<half> scene, depth2d<float> depth, texture2d<half> prev, texture2d<float> hz, int budget, int dev = 0, bool underside = false) {
 	float t;
-	return shadeSsrT(p0, r, pixel, maxDist, exposure, prevExposure, f, L, scene, depth, prev, hz, budget, t, 1.0, 0.0, nullptr, dev);
+	return shadeSsrT(p0, r, pixel, maxDist, exposure, prevExposure, f, L, scene, depth, prev, hz, budget, t, 1.0, 0.0, nullptr, dev, false, float4(0.0), underside);
 }
 
 // ---- optics -------------------------------------------------------------------------------------------------------------------
@@ -3039,7 +3057,7 @@ static float3 shadeWaterBelow(ShadeWaterIn w, constant ShadeFrame &f, constant S
 		// (2.0.1 opt) calm the TIR reflection normal like above-water SSR (prevents 1.8x amplified ripples from diverging
 		// every 2x2 quad and triggering catastrophic L1/fine SSR reads in water_underwater_up!) and cap at underwater fog range
 		float3 nTir = normalize(mix(n, float3(0.0, -1.0, 0.0), 0.7));
-		float4 hit = shadeSsr(w.p + n * 0.02, reflect(v, nTir), w.pixel, min(wp.tune.y, 28.0), w.exposure, 0.0, f, w.look, scene, depth, prev, hz, wp.quality.x, int(wp.far.z));
+		float4 hit = shadeSsr(w.p + n * 0.02, reflect(v, nTir), w.pixel, min(wp.tune.y, 28.0), w.exposure, 0.0, f, w.look, scene, depth, prev, hz, wp.quality.x, int(wp.far.z), true);
 		below = mix(below, hit.rgb, hit.a);
 	}
 #endif

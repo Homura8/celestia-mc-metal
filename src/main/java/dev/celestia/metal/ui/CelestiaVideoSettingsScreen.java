@@ -171,6 +171,12 @@ public final class CelestiaVideoSettingsScreen extends Screen {
                     () -> mcOptions.cloudStatus().get(),
                     v -> { mcOptions.cloudStatus().set(v); dirty = true; },
                     CloudStatus::name));
+                list.add(new OptionEntry.IntSlider("Weather Radius",
+                    "Controls how far rain and snow are drawn from the camera. Lower values reduce GPU work during storms.",
+                    ShaderOptionDef.Impact.MEDIUM, 3, 10, 1,
+                    () -> mcOptions.weatherRadius().get(),
+                    v -> { mcOptions.weatherRadius().set(v); dirty = true; },
+                    v -> v + " blocks"));
                 list.add(new OptionEntry.Toggle("Cutout Leaves",
                     "Renders transparent gaps in leaf blocks.",
                     ShaderOptionDef.Impact.LOW,
@@ -254,7 +260,7 @@ public final class CelestiaVideoSettingsScreen extends Screen {
 
                 list.add(new OptionEntry.Header("MetalFX Upscaling & HDR"));
                 list.add(new OptionEntry.Toggle("Auto Render Scale",
-                    "Dynamically scales internal resolution between 65% and max scale to hold target frame rate.",
+                    "Adjusts internal resolution to meet the display refresh rate or your lower FPS cap.",
                     ShaderOptionDef.Impact.HIGH,
                     () -> workingConfig.appleSilicon.autoRenderScale,
                     v -> { workingConfig.appleSilicon.autoRenderScale = v; dirty = true; }));
@@ -272,7 +278,7 @@ public final class CelestiaVideoSettingsScreen extends Screen {
                     () -> workingConfig.appleSilicon.upscaler,
                     v -> { workingConfig.appleSilicon.upscaler = v; dirty = true; },
                     u -> switch (u) {
-                        case METALFX_TEMPORAL -> "MetalFX Temporal (Spatial for now)";
+                        case METALFX_TEMPORAL -> "MetalFX Temporal";
                         case METALFX_SPATIAL -> "MetalFX Spatial";
                         case BILINEAR -> "Bilinear";
                         case TAAU -> "TAAU";
@@ -503,7 +509,7 @@ public final class CelestiaVideoSettingsScreen extends Screen {
                         + ". Click the status pill above or set Graphics API Preference to Default (Metal) and restart."),
                         ix, iy, infoW - 24, CelestiaTheme.ORB_ROSE);
                 } else {
-                    gui.text(font, String.format("FPS: %.0f (1%% low: %.0f)", perf.estimatedFps(), perf.onePercentLowFps()),
+                    gui.text(font, String.format("FPS: %.0f (1%% low: %.0f)", perf.averageFps(), perf.onePercentLowFps()),
                         ix, iy, CelestiaTheme.TEXT_MUTED, false);
                     iy += 12;
                     gui.text(font, String.format("GPU Frame: %.2f ms", perf.ewmaGpuMs()), ix, iy, CelestiaTheme.TEXT_MUTED, false);

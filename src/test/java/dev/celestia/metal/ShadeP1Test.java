@@ -158,6 +158,12 @@ class ShadeP1Test {
         assertTrue(endSkyRes.vsSource().contains("EndSkyOut"));
         assertTrue(endSkyRes.fsSource().contains("shadeEndSky("));
 
+        var weatherRes = ShadeShaderPatcher.patch("minecraft:pipeline/weather", dummyVs, "main0", dummyFs, "main0",
+            uniforms, bindings, ShadeShaderPatcher.Variant.HDR_WORLD);
+        assertTrue(weatherRes.patched());
+        assertTrue(weatherRes.fsSource().startsWith("#define CELESTIA_WEATHER_FAST_HDR 1\n"));
+        assertFalse(ShadeShaderPatcher.patchHdrFragment(dummyFs).startsWith("#define CELESTIA_WEATHER_FAST_HDR"));
+
         // Vanilla terrain patching
         String vanillaTerrainVs = """
             #include <metal_stdlib>

@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat <<'USAGE'
-Usage: tools/qa/run.sh <shots,profile,perf,lights,frames,packs> [Gradle options]
+Usage: tools/qa/run.sh <shots,profile,perf,lights,frames,packs,scales> [Gradle options]
 Set QA_LABEL to name the output folder, QA_VERBOSE=1 to stream client logs,
 or QA_RESOURCE_PACK to stage a resource-pack directory for the run.
 See docs/QA.md for presets, filters, profiling and the Iris/Photon reference.
@@ -14,7 +14,7 @@ if [[ ${1:-} == --help || ${1:-} == -h ]]; then usage; exit 0; fi
 if [[ $# == 0 ]]; then usage >&2; exit 2; fi
 modes=$1
 shift
-if [[ ! $modes =~ ^(shots|profile|perf|lights|frames|packs)(,(shots|profile|perf|lights|frames|packs))*$ ]]; then
+if [[ ! $modes =~ ^(shots|profile|perf|lights|frames|packs|scales)(,(shots|profile|perf|lights|frames|packs|scales))*$ ]]; then
     usage >&2
     exit 2
 fi
@@ -92,6 +92,11 @@ fi
 if ! grep -q '\[QA\] done[[:space:]]*$' "$out/client.log"; then
     grep '\[QA\] failed' "$out/client.log" >&2 || true
     echo "Client exited before QA completed. See $out/client.log." >&2
+    exit 1
+fi
+if grep -Eq 'CelestiaWater initialization failed|Falling back to unpatched Metal shader stages' "$out/client.log"; then
+    grep -E 'CelestiaWater initialization failed|Falling back to unpatched Metal shader stages' "$out/client.log" >&2
+    echo "A shader pipeline fell back during QA. See $out/client.log." >&2
     exit 1
 fi
 
