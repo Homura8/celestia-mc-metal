@@ -807,6 +807,8 @@ fragment float4 shade_water_pyr2_fs(float4 pos [[position]], texture2d<float> b 
 // 128-pixel blocks' first row in the texture
 static inline float2 shadeSsrhRange16(texture2d<float> pyr, float2 px) { return pyr.read(uint2(px) >> 4u).xy; }
 static inline float2 shadeSsrhRange128(texture2d<float> pyr, float2 px, uint row) { return pyr.read((uint2(px) >> 7u) + uint2(0u, row)).xy; }
+// (Apple GPU pass) within 8 pixels of px: the dilated 8-pixel blocks below the 128-pixel ones (mcwater.m Pyr8Ring); row8: their first row
+static inline float2 shadeSsrhRange8(texture2d<float> pyr, float2 px, uint row8) { return pyr.read((uint2(px) >> 3u) + uint2(0u, row8)).xy; }
 
 // The camera-relative world y of the depth copy's value z at pixel position px of the rendered rect
 static inline float shadeSsrhY(float2 px, float z, float2 size, constant ShadeFrame &f) {
@@ -1217,6 +1219,9 @@ static float4 shadeSsrTraceQuadOwn(float3 s0, float3 ds, float3 so, float3 dso, 
 	float maxLen = shadeQuadMax(max(length(d), ownOk ? length(dox) : 0.0));
 	int n0 = clamp(int(ceil(maxLen * (1.0 / 128.0))), 1, SHADE_SSRH_N0);
 	uint org = uint((int(tex.y) + 15) / 16); // the 128-pixel blocks' first row
+#ifdef SHADE_SSRH_L2
+	uint row8 = org + uint((int(tex.y) + 127) / 128); // the dilated 8-pixel blocks' first row
+#endif
 	float inv0 = 1.0 / float(n0), inv1 = inv0 * 0.125, inv2 = inv1 * 0.125;
 	float wStart = B / max(so.z + A, 1e-7);
 	// (2.0.1 fix) foreground occluders strictly closer to the eye than the water (grass blades, wooden piers) cannot be hit by a
@@ -1327,18 +1332,44 @@ static float4 shadeSsrTraceQuadOwn(float3 s0, float3 ds, float3 so, float3 dso, 
 				// (2.0.1 opt) 8 midpoint samples in two parallel 4-read batches without a float[12] register array: bit k = behind scene
 				float dt0 = t1 + 0.5 * inv2;
 				float zr0 = so.z + dso.z * dt0, dzr = dso.z * inv2;
+#ifdef SHADE_SSRH_L2
+				// (Apple GPU pass, 2026-11-28) each half's 4 samples lie within 4 px of its middle (16-px interval: 2 px a step), so the
+				// dilated 8-px block there bounds them: where this lane's ray is in front of the nearest of them all (or there is only
+				// sky), none of the 4 can be "behind", and their reads are skipped. Exact: the same bits, the same hits.
+				float2 rA = shadeSsrhRange8(pyr, clamp(ao + dox * (dt0 + 1.5 * inv2), float2(0.0), top), row8);
+				float2 rB = shadeSsrhRange8(pyr, clamp(ao + dox * (dt0 + 5.5 * inv2), float2(0.0), top), row8);
+				bool skipA = rA.x <= 0.0 || min(zr0, zr0 + 3.0 * dzr) > rA.x;
+				bool skipB = rB.x <= 0.0 || min(zr0 + 4.0 * dzr, zr0 + 7.0 * dzr) > rB.x;
+				float z0 = 0.0, z1 = 0.0, z2 = 0.0, z3 = 0.0, z4 = 0.0, z5 = 0.0, z6 = 0.0, z7 = 0.0;
+				if (!skipA) {
+					z0 = depth.read(uint2(clamp(ao + dox * dt0, float2(0.0), top)));
+					z1 = depth.read(uint2(clamp(ao + dox * (dt0 + inv2), float2(0.0), top)));
+					z2 = depth.read(uint2(clamp(ao + dox * (dt0 + 2.0 * inv2), float2(0.0), top)));
+					z3 = depth.read(uint2(clamp(ao + dox * (dt0 + 3.0 * inv2), float2(0.0), top)));
+				}
+#else
 				float z0 = depth.read(uint2(clamp(ao + dox * dt0, float2(0.0), top)));
 				float z1 = depth.read(uint2(clamp(ao + dox * (dt0 + inv2), float2(0.0), top)));
 				float z2 = depth.read(uint2(clamp(ao + dox * (dt0 + 2.0 * inv2), float2(0.0), top)));
 				float z3 = depth.read(uint2(clamp(ao + dox * (dt0 + 3.0 * inv2), float2(0.0), top)));
+#endif
 				uint bh = uint(z0 > 0.0 && z0 <= zFg && zr0 <= z0)
 				        | (uint(z1 > 0.0 && z1 <= zFg && zr0 + dzr <= z1) << 1u)
 				        | (uint(z2 > 0.0 && z2 <= zFg && zr0 + 2.0 * dzr <= z2) << 2u)
 				        | (uint(z3 > 0.0 && z3 <= zFg && zr0 + 3.0 * dzr <= z3) << 3u);
+#ifdef SHADE_SSRH_L2
+				if (!skipB) {
+					z4 = depth.read(uint2(clamp(ao + dox * (dt0 + 4.0 * inv2), float2(0.0), top)));
+					z5 = depth.read(uint2(clamp(ao + dox * (dt0 + 5.0 * inv2), float2(0.0), top)));
+					z6 = depth.read(uint2(clamp(ao + dox * (dt0 + 6.0 * inv2), float2(0.0), top)));
+					z7 = depth.read(uint2(clamp(ao + dox * (dt0 + 7.0 * inv2), float2(0.0), top)));
+				}
+#else
 				float z4 = depth.read(uint2(clamp(ao + dox * (dt0 + 4.0 * inv2), float2(0.0), top)));
 				float z5 = depth.read(uint2(clamp(ao + dox * (dt0 + 5.0 * inv2), float2(0.0), top)));
 				float z6 = depth.read(uint2(clamp(ao + dox * (dt0 + 6.0 * inv2), float2(0.0), top)));
 				float z7 = depth.read(uint2(clamp(ao + dox * (dt0 + 7.0 * inv2), float2(0.0), top)));
+#endif
 				bh |= (uint(z4 > 0.0 && z4 <= zFg && zr0 + 4.0 * dzr <= z4) << 4u)
 				    | (uint(z5 > 0.0 && z5 <= zFg && zr0 + 5.0 * dzr <= z5) << 5u)
 				    | (uint(z6 > 0.0 && z6 <= zFg && zr0 + 6.0 * dzr <= z6) << 6u)
@@ -2622,6 +2653,9 @@ float3 shadeWaterAbove(ShadeWaterIn w, constant ShadeFrame &f, constant ShadeWat
 		}
 #endif
 	}
+#ifdef SHADE_DEV_NORMAL_ONLY
+	return n * 0.5 + 0.5; // (pricing, dev: the surface normal alone)
+#endif
 	float cosV = max(dot(-v, n), 0.02);
 #ifdef SHADE_WATER_SWELL
 	if (cosV0 > 0.0) {
@@ -2654,6 +2688,9 @@ float3 shadeWaterAbove(ShadeWaterIn w, constant ShadeFrame &f, constant ShadeWat
 		ssrHit = shadeSsrT(w.p + n * 0.02, rr, w.pixel, wp.tune.y, w.exposure, w.prevExposure, f, w.look, scene, depth, prev, hz, wp.quality.x, tHit, wp.mirror.y, top ? wp.mirror.z : 0.0, w.res, int(wp.far.z), true, dcRr);
 		ssrW = ssrHit.a * smoothstep(0.022, 0.03, fq) * farSsr;
 	}
+#ifdef SHADE_DEV_SSR_ONLY
+	return ssrHit.rgb * ssrW + float3(tHit * 1e-6); // (pricing, dev: what a separate SSR pass would run, normal + march)
+#endif
 #endif
 
 	// --- what is behind the surface: refraction, absorption, in-scattering, caustics

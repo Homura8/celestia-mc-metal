@@ -228,6 +228,7 @@ public final class ShadeShaderPatcher {
         return quad + reflections + """
             #define SHADE_WATER 1
             #define SHADE_SSR_HIER 1
+            #define SHADE_SSRH_L2 1
             #define SHADE_SSRH_THICK 2.0
             #define SHADE_SSRH_THIN 1
             #define SHADE_SSR_STEPS 24
@@ -554,6 +555,9 @@ public final class ShadeShaderPatcher {
             // of the water shader, to price each one with its share of the register pressure (a branch skipping it doesn't)
             for (String f : System.getProperty("celestiametal.shade.water.devUndef", "").split(",")) {
                 if (f.matches("[A-Z0-9_]+")) defines += "#undef SHADE_" + f + "\n";
+            }
+            for (String f : System.getProperty("celestiametal.shade.water.devDefine", "").split(",")) {
+                if (f.matches("[A-Z0-9_]+")) defines += "#define SHADE_" + f + " 1\n";
             }
             if (fastSky) defines += "#define SHADE_OWN_TRANSLUCENT 1\n#define SHADE_WOFF_FAST 1\n";
             if (waterVariant != Variant.HDR_WORLD && waterVariant != Variant.HDR_WORLD_WATER_SKY_ONLY) {

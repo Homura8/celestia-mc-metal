@@ -446,4 +446,16 @@ Future features (owner, look-polish pass):
     Waterfront and rain need ~6 ms that no image-preserving change found here provides. Pricing the water features one at a time
     by compiling each out (`-Dcelestiametal.shade.water.devUndef=…`) on `village-shore`: detail 1.25 ms, swell 1.2, foam 1.15,
     caustics 1.07, glitter 0.77, glossy 0.38, rain ripples 0.13. The cost is spread across the shader's register pressure.
+- **Splitting SSR into its own pass doesn't pay** (measured, Quality, native):
+  - **Measurement:** the "normal + march" stage a separate pass would run costs 5.0 ms on `village-shore`, against 5.3 ms for
+    the SSR-free shader and 9.5 ms for the full one. Split total: ~9.4 ms (no gain) on the waterfront, 6.1 vs 6.3 ms over the bay.
+  - **Where the cost is:** the march itself (~2.8 ms), mostly the full-resolution search (~2.2 ms), not register pressure.
+  - **Next lossless step:** a finer conservative Hi-Z level (4 or 8 px min/max; `Pyr8` is already built and thrown away), so the
+    full-resolution search skips empty stretches before reading depth.
+- **Done (perf/apple-gpu): `SHADE_SSRH_L2`.** A dilated 8-px level (`Pyr8Ring`, rows below the 128-px blocks) lets the fine
+  march skip a half 16-px interval's 4 depth reads when the lane's ray is in front of it. It is exact. Water pass −0.5 ms at the
+  waterfront and −0.25 ms over the bay; waterfront FPS +1.6 (noon) and +2.4 (sunset) A/B. The behind case can't be skipped
+  (foreground-occluder rule). Next in the march: the 128/16 levels' per-lane reads, and the crossing re-reads (`zk`, `zp`).
+- `celestiametal.shade.freezeTime=true` stops the water, sky and cloud clocks for image A/B comparisons. Two identical runs
+  still differ by ~0.2–0.8/255 (villagers, foliage), which is the noise floor.
 

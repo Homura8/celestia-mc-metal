@@ -20,6 +20,11 @@ near spawn, is a water-only worst case. Use it for water-specific work (`pond-*`
 for verdicts about real play. The vistas show distance haze and the sky. `shots`, `perf` and `profile` default to village
 scenes. Village and beach settles wait at least 160 ticks, so their chunks generate and load after the teleport.
 
+**Keep the game window in front while measuring.** macOS throttles windows that are behind others (occlusion, App Nap), so
+FPS and GPU times drift when a run starts in the background or is clicked into focus partway. The probe raises the window when
+it enters the world and before each timing or sampling window. A timing line marked `UNFOCUSED` lost focus during its frames:
+discard it. Compare A/B variants in back-to-back runs (A/B/A), not against numbers from another session.
+
 Measure on the owner's settings unless a change targets another preset: Quality, 100% render scale (native 3024 × 1744
 on the M1 Pro), 12 chunks and Metal 4. For example:
 
@@ -93,9 +98,18 @@ The profile tokens are `N` for `celestiametal.shade.water.devSsr`, `bN` for `cel
 
 For underwater comparisons, `s64` restores the previous Snell window, `s128` disables underwater shafts, and `s192` applies both overrides. Profile `s128,s0,s128` in `underwater` to isolate shaft cost with Volumetric Light Shafts enabled.
 
+`profile` turns render-pass merging off so each pass gets its own time. Add `-PqaProfileMerge` to keep merging, as in normal
+play. In that mode the sky and all opaque terrain run in one encoder (`Sky`), and there is no separate `Main`. Times blur,
+because tile-based passes overlap. Set `CELESTIA_GPU_PROFILE_ORDER=1` in the environment to also print one world frame's encoders
+in order with their times (`[GPU] order` in `client.log`).
+
 To price one water feature with its share of the register pressure, compile it out:
 `-PqaJvm=celestiametal.shade.water.devUndef=CAUSTICS` (or `FOAM`, `GLOSSY`, `WATER_DETAIL`, `WATER_GLITTER`, `WATER_SWELL`,
 `RIPPLES`; comma-separated). Turning a feature's option to 0 only skips a branch, which still costs on every water pixel.
+`celestiametal.shade.water.devDefine=DEV_SSR_ONLY` returns right after the screen-space reflection march (normal + march), and
+`DEV_NORMAL_ONLY` right after the surface normal. Use them with the `devSsr` tokens (`1` no march, `2` only the 128-pixel level,
+`3` no resolve) to price the stages. On `village-shore` (Quality, native): normal ~1 ms, march ~2.8 ms (the full-resolution search
+~2.2 of it), resolve ~0.45 ms, everything after ~4 ms. The march budget (`bN`) barely changes it.
 `-PqaJvm=celestiametal.look.pastel=<lift r,g,b>;<gain r,g,b>;<contrast>` overrides Pastel's grade for look experiments.
 
 ## Measuring images
