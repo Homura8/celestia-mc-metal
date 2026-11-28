@@ -50,7 +50,7 @@ final class Shots {
         new Scene("vista-night", 18000, "clear", "tp @a 40.5 210 40.5 135 -10"),
         new Scene("vista-rain", 6000, "rain", "tp @a 40.5 210 40.5 135 12"),
         new Scene("village-rain", 6000, "rain", "tp @a -330.5 65 256.5 90 4"), // (last Overworld: rain and wetness take long to clear)
-        new Scene("nether", 6000, "clear", Level.NETHER, "execute in minecraft:the_nether run tp @a 0.5 100 0.5 135 30"), // (open air above the nether wastes)
+        new Scene("nether", 6000, "clear", Level.NETHER, "execute in minecraft:the_nether run tp @a -45.5 42 20.5 90 8"), // (open air over the lava sea, checked with execute if block)
         new Scene("end", 6000, "clear", Level.END, "execute in minecraft:the_end run tp @a 0.5 76 -48.5 0 8"));
 
     private Shots() {}

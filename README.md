@@ -88,7 +88,7 @@ Measured with the in-game QA harness: 300 frames per scene under a slow camera p
 | Waterfront, sunset | 42.1 FPS | 67.4 FPS |
 | Beach (mostly water) | 35.5 FPS | — |
 | Village, rain | 51.5 FPS | 69.5 FPS |
-| Nether | 137.8 FPS | — |
+| Nether (lava sea) | 153.0 FPS | — |
 | The End | 168.6 FPS | — |
 
 Land views clear 60 FPS at native resolution on Quality. Water is the main cost, and Performance clears 60 FPS everywhere

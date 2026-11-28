@@ -37,7 +37,7 @@ Read `AGENTS.md` first, then this block, then `docs/QA.md`.
   | village-shore-sunset | 42.1 | 27.0 ms |
   | beach | 35.5 | 30.0 ms |
   | village-rain | 51.5 | 22.5 ms |
-  | nether | 137.8 | 13.1 ms |
+  | nether (lava sea) | 153.0 | 7.1 ms |
   | end | 168.6 | 6.8 ms |
 
   Land views clear 60 FPS. Water fills `beach` and `village-shore`, and that is where frames are lost: the water pass costs
