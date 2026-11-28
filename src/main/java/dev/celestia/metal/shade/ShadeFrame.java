@@ -65,6 +65,8 @@ public final class ShadeFrame {
     public int width = 1, height = 1;
     public float dayTime, gameTimeSeconds, exposure = 1f, partialTick;
     public float waterTime, waterSurfaceAbove, waterSurfaceBelow;
+    /** The grass block side overlay's atlas rect (u0, v0, du, dv; all 0 when unknown): a cutout quad on a solid block, not foliage. */
+    public final float[] solidCutoutRect = new float[4];
     public float skyTime;
     public float jitterX, jitterY, prevJitterX, prevJitterY;
     public float mipScale = 1f;
@@ -165,7 +167,9 @@ public final class ShadeFrame {
         b.putInt(FLAGS, this.dimension).putInt(FLAGS + 4, this.fogType).putInt(FLAGS + 8, this.shadowsEnabled ? 1 : 0).putInt(FLAGS + 12, this.debug);
         b.putInt(FLAGS2, this.frameIndex).putInt(FLAGS2 + 4, this.underwater ? 1 : 0).putInt(FLAGS2 + 8, this.cascades).putInt(FLAGS2 + 12, this.eyeSkyLight);
         put4(b, SUN_PATH, (float) Math.sin(Math.toRadians(ShadeSky.SUN_TILT)), (float) Math.cos(Math.toRadians(ShadeSky.SUN_TILT)), devBits(), this.waterTime);
-        put4(b, WX_LINE, this.waterSurfaceBelow, 0f, 0f, 0f);
+        put4(b, WX_LINE, this.waterSurfaceBelow, this.solidCutoutRect[0], this.solidCutoutRect[1],
+            Float.intBitsToFloat((Float.floatToFloat16(this.solidCutoutRect[2]) & 0xffff)
+                | ((Float.floatToFloat16(this.solidCutoutRect[3]) & 0xffff) << 16)));
     }
 
     public void setShadow(boolean enabled, int cascades, Matrix4fc cascade0, Matrix4fc cascade1, float split0, float split1, int resolution,
